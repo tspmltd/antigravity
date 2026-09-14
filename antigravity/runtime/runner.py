@@ -187,12 +187,16 @@ class AntigravityRunner:
             s_info["position_btc"] = 0.0
             s_info["entry_price"] = 0.0
             s_info["entry_time"] = None
+            sign = "+" if trade_pnl >= 0 else ""
+            print(f"[WS-ms] 🎯 【ミリ秒手仕舞い】[{name}] 損益: {sign}{trade_pnl:.1f} 円 | 理由: {reason}", flush=True)
         elif pos == 0:
             # 新規エントリー
             trade_size = self.order_size
             s_info["position_btc"] = trade_size if side == "BUY" else -trade_size
             s_info["entry_price"] = price
             s_info["entry_time"] = now
+            print(f"[WS-ms] 🚀 【ミリ秒ENTRY】[{name}] {side} {trade_size} BTC @ {price:,.0f} 円 | 理由: {reason}", flush=True)
+
 
     def check_and_send_regular_report(self):
         """定期レポート送信チェック"""
@@ -276,9 +280,39 @@ class AntigravityRunner:
             while self.is_running:
                 self.check_and_send_regular_report()
                 self.check_system_resources_and_remediate()
+
+                # コンソール・ログへのリアルタイム稼働状況表示
+                with self.state_lock:
+                    tot_realized = sum(s["realized_pnl"] for s in self.strategies_map.values())
+                    tot_unrealized = sum(
+                        (self.current_price - s["entry_price"]) * s["position_btc"]
+                        for s in self.strategies_map.values()
+                        if s["position_btc"] != 0 and s["entry_price"] > 0
+                    )
+                    tot_pnl = tot_realized + tot_unrealized
+                    strats_summary = " | ".join([
+                        f"{name}:{len(s['trades_history'])}回({s['position_btc']:+.3f})"
+                        for name, s in self.strategies_map.items()
+                    ])
+                    stats = self.stream.compute_flow_stats()
+                    d_ratio = stats.get("delta_ratio", 0.0)
+                    p_change = stats.get("price_change_bp", 0.0)
+                    flow_sign = "BUY優勢" if d_ratio > 0.2 else ("SELL優勢" if d_ratio < -0.2 else "拮抗")
+                    ws_indicator = "⚡WS" if self.stream.is_ws_connected else "REST"
+                    halt_tag = " [🚨HALTED]" if self.circuit_breaker.is_halted else ""
+
+                t_str = datetime.now().strftime("%H:%M:%S")
+                print(
+                    f" [{t_str}] [{ws_indicator}]{halt_tag} {self.current_price:10,.0f} 円 "
+                    f"(Δ{p_change:+4.1f}bp | {flow_sign} {d_ratio:+.2f}) | "
+                    f"損益: {tot_pnl:+6.1f} 円 | {strats_summary}",
+                    flush=True
+                )
+
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             print("\n[AntigravityRunner] KeyboardInterrupt 検知。終了処理中...")
         finally:
             self.stop()
+
 
