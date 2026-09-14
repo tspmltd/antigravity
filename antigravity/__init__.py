@@ -15,6 +15,7 @@ from .strategies.base import BaseTickStrategy
 from .strategies.micro_trend import MicroTrendTickStrategy
 from .strategies.inventory_mm import InventorySkewTickMMStrategy
 from .strategies.order_flow_scalp import OrderFlowScalpTickStrategy
+from .strategies.ema_trend import EmaTrendTickStrategy
 from .runtime.client import BitflyerClient
 from .runtime.runner import AntigravityRunner
 
@@ -29,6 +30,8 @@ __all__ = [
     "MicroTrendTickStrategy",
     "InventorySkewTickMMStrategy",
     "OrderFlowScalpTickStrategy",
+    "EmaTrendTickStrategy",
     "BitflyerClient",
     "AntigravityRunner",
 ]
+

@@ -4,6 +4,7 @@ from antigravity.config.settings import Settings
 from antigravity.strategies.micro_trend import MicroTrendTickStrategy
 from antigravity.strategies.inventory_mm import InventorySkewTickMMStrategy
 from antigravity.strategies.order_flow_scalp import OrderFlowScalpTickStrategy
+from antigravity.strategies.ema_trend import EmaTrendTickStrategy
 from antigravity.runtime.runner import AntigravityRunner
 
 
@@ -25,12 +26,14 @@ def main():
     print(f"  Report Interval: {args.report_interval:.0f} s")
     print("=" * 60)
 
-    # 3戦略を初期化
+    # 4大戦略を初期化 (マイクロトレンド + インベントリMM + オーダーフロースキャルプ + 大波EMAトレンド)
     strategies = [
         MicroTrendTickStrategy(),
         InventorySkewTickMMStrategy(),
         OrderFlowScalpTickStrategy(),
+        EmaTrendTickStrategy(),
     ]
+
 
     runner = AntigravityRunner(
         strategies=strategies,
