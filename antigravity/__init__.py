@@ -1,4 +1,4 @@
-﻿"""
+"""
 Antigravity - High-Frequency Trading (HFT) Engine for Cryptocurrency Derivative Markets.
 """
 

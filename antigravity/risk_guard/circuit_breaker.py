@@ -1,4 +1,4 @@
-﻿import time
+import time
 from typing import Optional, Callable, Dict, Any
 from datetime import datetime
 

@@ -1,4 +1,4 @@
-﻿import time
+import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 

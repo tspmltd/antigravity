@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import sys
 from antigravity.config.settings import Settings
 from antigravity.strategies.micro_trend import MicroTrendTickStrategy
