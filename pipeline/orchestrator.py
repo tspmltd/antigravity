@@ -12,6 +12,7 @@ from core.dataloader import DataLoader
 from core.engine import BacktestEngine
 from core.notifier import DiscordNotifier
 from pipeline.state_manager import PipelineStateManager, StrategyStatus
+from antigravity.risk_guard.git_sync import GitAutoSync
 
 
 class AutonomousPipeline:
@@ -50,6 +51,10 @@ class AutonomousPipeline:
 
         # 状態追跡マネージャ
         self.state_manager = PipelineStateManager()
+
+        # Git自動同期エンジン
+        self.git_sync = GitAutoSync(notifier=self.notifier)
+
 
     def _load_config(self, path: str) -> Dict[str, Any]:
         if os.path.exists(path):
@@ -139,7 +144,19 @@ class AutonomousPipeline:
                             f"承認レポート: `{decision['report_path']}`",
                     level="success"
                 )
+
+                # 新戦略を直ちにGitHubへ自動同期（プッシュ）
+                try:
+                    self.git_sync.sync_approved_strategies(
+                        strategy_name=current_strat_info["name"],
+                        approved_file=decision.get("approved_file"),
+                        report_file=decision.get("report_path"),
+                    )
+                except Exception as ex:
+                    print(f"[Pipeline] GitAutoSync 例外 (スキップ): {ex}", flush=True)
+
                 return {
+
                     "strategy_id": strat_id,
                     "final_status": "APPROVED",
                     "report_path": decision["report_path"],

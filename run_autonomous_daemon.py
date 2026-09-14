@@ -10,6 +10,8 @@ if sys.platform == "win32":
 
 from pipeline.orchestrator import AutonomousPipeline
 from core.notifier import DiscordNotifier
+from antigravity.risk_guard.git_sync import GitAutoSync
+
 
 
 CANDIDATE_THEMES = [
@@ -36,6 +38,7 @@ async def discovery_loop(
     """
     notifier = DiscordNotifier()
     pipeline = AutonomousPipeline(config_path=config_path, commission_rate=0.0, slippage_rate=0.0)
+    git_sync = GitAutoSync(notifier=notifier)
 
     print("\n" + "=" * 70)
     print("      GapcorePJ 常駐型自律戦略探索デーモン (Autonomous Discovery Daemon)      ")
@@ -93,7 +96,16 @@ async def discovery_loop(
                     level="success",
                     target="system"
                 )
+
+                # 未コミットの合格戦略を直ちにGitHubへ自動プッシュ
+                try:
+                    strat_names = ", ".join([r.get("name", "NewStrategy") for r in approved])
+                    git_sync.sync_approved_strategies(strategy_name=strat_names)
+                except Exception as ex:
+                    print(f"[DiscoveryDaemon] GitAutoSync 例外 (スキップ): {ex}", flush=True)
+
             else:
+
                 print(f"\n[DiscoveryDaemon] 今回のサイクルでは新規承認戦略はありませんでした (安全ブロック)。")
                 notifier.send_alert(
                     title=f"🔍 【探索サイクル完了】Cycle {cycle} 探索結果",
