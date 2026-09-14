@@ -1,0 +1,8 @@
+Strategy ID: strat_fc04ca21
+Timestamp: 2026-09-14T18:13:28.157670
+Failed Reasons:
+- Sharpe Ratio不足 (0.0 < 1.4)
+- 取引回数不足 (0 < 4回)
+- Profit Factor不足 (0.0 < 1.35)
+- 過剰適合: 未知データ(OOS)で損失発生 (0.0%)
+- 過剰適合: OOS Profit Factor低下 (0.0 < 1.05)

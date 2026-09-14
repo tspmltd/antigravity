@@ -20,6 +20,7 @@ from core.tick_strategy import (
     OrderFlowScalpTickStrategy,
 )
 from core.performance_aggregator import compute_performance_snapshots, get_jst_now
+from antigravity.risk_guard.system_monitor import SystemResourceMonitor
 
 
 class TickLiveTrader:
@@ -75,7 +76,13 @@ class TickLiveTrader:
         self.halt_start_time = None           # 停止開始時刻
         self.last_anomaly_alert_time = 0.0
 
+        # システムリソース監視・自動改善エンジン
+        self.sys_monitor = SystemResourceMonitor()
+        self.last_resource_check_time = time.time()
+        self.last_resource_alert_time = 0.0
+
         # 戦略一覧
+
         self.strategies_map: Dict[str, Dict[str, Any]] = {}
         strats = strategies or [
             MicroTrendTickStrategy(),
@@ -551,8 +558,30 @@ class TickLiveTrader:
                     )
                     self.last_report_time = now_epoch
 
+                # ----------------------------------------------------
+                # システムリソース監視 (DISK/MEMORY/CPU) ＆ 改善策自動実行 (1時間ごと / 高負荷時)
+                # ----------------------------------------------------
+                is_resource_interval = (now_epoch - self.last_resource_check_time >= self.report_interval_sec)
+                should_resource_early = (now_epoch - self.last_resource_alert_time >= 600.0)
+
+                if is_resource_interval or should_resource_early:
+                    metrics = self.sys_monitor.collect_all_metrics()
+                    is_anomaly = metrics.get("is_warning", False) or metrics.get("is_critical", False)
+
+                    if is_resource_interval or is_anomaly:
+                        actions = self.sys_monitor.execute_remediation(metrics)
+                        self.notifier.send_system_resource_report(
+                            metrics=metrics,
+                            remediation_actions=actions,
+                            server_name=f"Gapcore HFT ({self.product_code})"
+                        )
+                        self.last_resource_check_time = now_epoch
+                        if is_anomaly:
+                            self.last_resource_alert_time = now_epoch
+
                 if max_steps and step >= max_steps:
                     break
+
 
                 time.sleep(self.poll_interval_sec)
 

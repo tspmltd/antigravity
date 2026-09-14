@@ -1,4 +1,4 @@
-﻿import time
+import time
 import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -8,8 +8,10 @@ from ..ws_engine.stream import WebSocketTickStream
 from ..risk_guard.circuit_breaker import PeakDrawdownCircuitBreaker
 from ..risk_guard.performance import PerformanceTracker
 from ..risk_guard.notifier import DiscordNotifier
+from ..risk_guard.system_monitor import SystemResourceMonitor
 from ..strategies.base import BaseTickStrategy
 from .client import BitflyerClient
+
 
 
 class AntigravityRunner:
@@ -66,6 +68,12 @@ class AntigravityRunner:
         self.is_running = False
         self.last_report_time = time.time()
         self.current_price = 0.0
+
+        # システムリソース監視・自動改善エンジン
+        self.sys_monitor = SystemResourceMonitor()
+        self.last_resource_check_time = time.time()
+        self.last_resource_alert_time = 0.0
+
 
         # WebSocketストリーム初期化
         self.stream = WebSocketTickStream(
@@ -208,6 +216,32 @@ class AntigravityRunner:
             self.notifier.send_regular_report(snapshot, symbol=self.product_code)
             self.last_report_time = now
 
+    def check_system_resources_and_remediate(self, force: bool = False):
+        """
+        1時間に1回（またはCPU/MEM/DISK逼迫時）にサーバーリソースを診断し、
+        自動改善策（GC/ログ縮退/一時ファイル削除）を実行してDiscordのアラートチャンネルへ送信。
+        """
+        now = time.time()
+        is_interval = (now - self.last_resource_check_time >= self.report_interval_sec)
+
+        # 10分おきに高負荷クイックチェック（85%超えの早期検知）
+        should_check_early = (now - self.last_resource_alert_time >= 600.0)
+
+        if force or is_interval or should_check_early:
+            metrics = self.sys_monitor.collect_all_metrics()
+            is_anomaly = metrics.get("is_warning", False) or metrics.get("is_critical", False)
+
+            if force or is_interval or is_anomaly:
+                actions = self.sys_monitor.execute_remediation(metrics)
+                self.notifier.send_system_resource_report(
+                    metrics=metrics,
+                    remediation_actions=actions,
+                    server_name=f"Antigravity HFT ({self.product_code})",
+                )
+                self.last_resource_check_time = now
+                if is_anomaly:
+                    self.last_resource_alert_time = now
+
     def start(self):
         """取引実行を開始"""
         print(f"[AntigravityRunner] 🚀 起動中... 対象シンボル: {self.product_code}", flush=True)
@@ -223,6 +257,12 @@ class AntigravityRunner:
             description=f"**市場**: `{self.product_code}`\n**戦略数**: `{len(self.strategies_map)}`\nミリ秒常時接続が確立されました。",
         )
 
+        # 起動時初期リソース診断＆通知
+        try:
+            self.check_system_resources_and_remediate(force=True)
+        except Exception as ex:
+            print(f"[AntigravityRunner] 初期リソース診断通知失敗: {ex}", flush=True)
+
     def stop(self):
         """取引実行を停止"""
         print("[AntigravityRunner] 🛑 停止中...", flush=True)
@@ -235,8 +275,10 @@ class AntigravityRunner:
         try:
             while self.is_running:
                 self.check_and_send_regular_report()
+                self.check_system_resources_and_remediate()
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             print("\n[AntigravityRunner] KeyboardInterrupt 検知。終了処理中...")
         finally:
             self.stop()
+

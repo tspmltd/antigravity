@@ -486,6 +486,64 @@ class DiscordNotifier:
             target=target
         )
 
+    def send_system_resource_report(
+        self,
+        metrics: Dict[str, Any],
+        remediation_actions: Optional[List[str]] = None,
+        server_name: str = "Trading Server",
+    ) -> bool:
+        """
+        DISK / MEMORY / CPU の稼働状況と改善策をDiscordのアラートチャンネルへ送信。
+        """
+        disk = metrics.get("disk", {})
+        mem = metrics.get("memory", {})
+        cpu = metrics.get("cpu_pct", 0.0)
+        proc_mem = metrics.get("process_rss_mb", 0.0)
+        is_warn = metrics.get("is_warning", False)
+        is_crit = metrics.get("is_critical", False)
+
+        if is_crit:
+            title = f"🚨 【システムリソース緊急警告】{server_name} 負荷逼迫"
+            color = 0xE74C3C  # 赤
+        elif is_warn:
+            title = f"⚠️ 【システムリソース注意報】{server_name} 高負荷検知"
+            color = 0xF39C12  # オレンジ
+        else:
+            title = f"🖥️ 【システムリソース定時診断】{server_name} 健全性レポート"
+            color = 0x2ECC71  # 緑
+
+        disk_text = (
+            f"• **使用率**: `{disk.get('used_pct', 0.0):.1f}%`\n"
+            f"• **空き容量**: `{disk.get('free_gb', 0.0):.1f} GB` / `{disk.get('total_gb', 0.0):.1f} GB`"
+        )
+        mem_text = (
+            f"• **使用率**: `{mem.get('used_pct', 0.0):.1f}%`\n"
+            f"• **使用中**: `{mem.get('used_gb', 0.0):.1f} GB` (空き: `{mem.get('free_gb', 0.0):.1f} GB` / 総量: `{mem.get('total_gb', 0.0):.1f} GB`)"
+        )
+        cpu_text = (
+            f"• **CPU使用率**: `{cpu:.1f}%`\n"
+            f"• **プロセス消費**: `{proc_mem:.1f} MB`"
+        )
+
+        actions_text = "\n".join([f"• {a}" for a in (remediation_actions or ["自己修復・最適化処理実施済み"])])
+
+        fields = [
+            {"name": "💾 DISK ストレージ", "value": disk_text, "inline": True},
+            {"name": "🧠 MEMORY メモリ", "value": mem_text, "inline": True},
+            {"name": "⚡ CPU ＆ プロセス", "value": cpu_text, "inline": False},
+            {"name": "🛠️ 実行された改善策・自動修復アクション", "value": actions_text, "inline": False},
+        ]
+
+        return self.send_embed(
+            title=title,
+            description=f"**診断時刻**: `{metrics.get('iso_time', '')}` | 監視周期: **1時間ごと**",
+            fields=fields,
+            color=color,
+            footer_text="Antigravity System Resource Guard 🛡️",
+            target="alert",
+        )
+
+
     def _post_payload(self, payload: Dict[str, Any], webhook_url: Optional[str] = None) -> bool:
         """Webhook URLへJSONペイロードをPOST"""
         url = webhook_url or self.report_webhook_url

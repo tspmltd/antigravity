@@ -3,7 +3,7 @@
 - **戦略ID**: `test_golden_001`
 - **戦略名**: `GoldenStrategy`
 - **バージョン**: `v1.0`
-- **認定日時**: 2026-09-14 12:12:04
+- **認定日時**: 2026-09-14 21:28:55
 - **承認コード配置先**: `strategies/approved\test_golden_001_approved.py`
 - **適用プロファイル**: `N/A`
 
