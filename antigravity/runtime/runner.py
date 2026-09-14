@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from ..config.settings import Settings
 from ..ws_engine.stream import WebSocketTickStream
 from ..risk_guard.circuit_breaker import PeakDrawdownCircuitBreaker
-from ..risk_guard.performance import PerformanceTracker
+from ..risk_guard.performance import PerformanceTracker, get_jst_now
 from ..risk_guard.notifier import DiscordNotifier
 from ..risk_guard.system_monitor import SystemResourceMonitor
 from ..strategies.base import BaseTickStrategy
@@ -198,12 +198,16 @@ class AntigravityRunner:
             print(f"[WS-ms] 🚀 【ミリ秒ENTRY】[{name}] {side} {trade_size} BTC @ {price:,.0f} 円 | 理由: {reason}", flush=True)
 
 
-    def check_and_send_regular_report(self):
-        """定期レポート送信チェック"""
+    def check_and_send_regular_report(self, force: bool = False):
+        """定期レポート送信チェック (毎時00分正時、またはインターバル経過、または起動時force)"""
         now = time.time()
-        if now - self.last_report_time >= self.report_interval_sec:
+        now_jst = get_jst_now()
+        is_on_the_hour = (now_jst.minute == 0 and (now - self.last_report_time > 120.0))
+        is_interval_elapsed = (now - self.last_report_time >= self.report_interval_sec)
+
+        if force or is_on_the_hour or is_interval_elapsed:
             with self.state_lock:
-                trades_map = {name: s["trades_history"] for name, s in self.strategies_map.items()}
+                trades_map = {name: list(s["trades_history"]) for name, s in self.strategies_map.items()}
                 unrealized_map = {
                     name: (self.current_price - s["entry_price"]) * s["position_btc"]
                     if s["position_btc"] != 0 and s["entry_price"] > 0 else 0.0
@@ -217,25 +221,31 @@ class AntigravityRunner:
                 positions_map=positions_map,
                 now_ts=now,
             )
-            self.notifier.send_regular_report(snapshot, symbol=self.product_code)
+            success = self.notifier.send_regular_report(snapshot, symbol=self.product_code)
             self.last_report_time = now
+            t_str = now_jst.strftime("%Y-%m-%d %H:%M:%S JST")
+            status_str = "成功" if success else "送信失敗/Webhook未設定"
+            trigger_reason = "起動時" if force else ("正時(00分)" if is_on_the_hour else "インターバル経過")
+            print(f"[AntigravityRunner] 📊 定期運用レポート送信 ({trigger_reason}): {t_str} -> {status_str}", flush=True)
 
     def check_system_resources_and_remediate(self, force: bool = False):
         """
-        1時間に1回（またはCPU/MEM/DISK逼迫時）にサーバーリソースを診断し、
+        1時間に1回（毎時00分正時またはCPU/MEM/DISK逼迫時）にサーバーリソースを診断し、
         自動改善策（GC/ログ縮退/一時ファイル削除）を実行してDiscordのアラートチャンネルへ送信。
         """
         now = time.time()
+        now_jst = get_jst_now()
+        is_on_the_hour = (now_jst.minute == 0 and (now - self.last_resource_check_time > 120.0))
         is_interval = (now - self.last_resource_check_time >= self.report_interval_sec)
 
         # 10分おきに高負荷クイックチェック（85%超えの早期検知）
         should_check_early = (now - self.last_resource_alert_time >= 600.0)
 
-        if force or is_interval or should_check_early:
+        if force or is_on_the_hour or is_interval or should_check_early:
             metrics = self.sys_monitor.collect_all_metrics()
             is_anomaly = metrics.get("is_warning", False) or metrics.get("is_critical", False)
 
-            if force or is_interval or is_anomaly:
+            if force or is_on_the_hour or is_interval or is_anomaly:
                 actions = self.sys_monitor.execute_remediation(metrics)
                 self.notifier.send_system_resource_report(
                     metrics=metrics,
@@ -267,11 +277,18 @@ class AntigravityRunner:
         except Exception as ex:
             print(f"[AntigravityRunner] 初期リソース診断通知失敗: {ex}", flush=True)
 
+        # 起動時初回定期レポート送信
+        try:
+            self.check_and_send_regular_report(force=True)
+        except Exception as ex:
+            print(f"[AntigravityRunner] 初回定期レポート送信失敗: {ex}", flush=True)
+
     def stop(self):
         """取引実行を停止"""
         print("[AntigravityRunner] 🛑 停止中...", flush=True)
         self.is_running = False
         self.stream.stop()
+
 
     def run_forever(self, poll_interval: float = 1.0):
         """メインブロッキングループ"""
