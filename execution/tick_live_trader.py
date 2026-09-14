@@ -473,23 +473,30 @@ class TickLiveTrader:
                         self.resume_trading(reason=f"冷却待機期間 ({int(self.cooldown_seconds / 60)}分間) 完了 ＆ 相場フロー沈静化確認")
 
                 # ----------------------------------------------------
-                # 異常事態検知②: WebSocket約定プッシュ途絶監視 (スタック検知)
+                # 異常事態検知②: WebSocket約定プッシュ途絶監視 (二重ヘルスチェック型スタック検知)
                 # ----------------------------------------------------
                 now_ts = time.time()
                 if (
                     self.use_websocket
                     and self.stream.last_push_time > 0
-                    and (now_ts - self.stream.last_push_time > 60.0)
+                    and (now_ts - self.stream.last_push_time > 120.0)
                     and (now_ts - self.last_anomaly_alert_time > 300.0)
                 ):
                     stall_sec = int(now_ts - self.stream.last_push_time)
-                    self.notifier.send_emergency_alert(
-                        title="【システム異常警告】約定ストリーム途絶検知",
-                        message=f"bitFlyer FX約定プッシュが **{stall_sec}秒間** 途絶しています。\n"
-                                f"ネットワーク遅延または取引所メンテナンスの可能性があります。自動再接続を試行しています。",
-                        level="warning"
-                    )
-                    self.last_anomaly_alert_time = now_ts
+                    # 二重チェック: REST APIで疎通と最新約定を確認
+                    rest_added = self.stream.fetch_latest_ticks(count=10)
+                    if rest_added > 0 or self.stream.is_ws_connected:
+                        # 単なる市場の取引閑散であり、通信網・エンジンは健全
+                        self.stream.last_push_time = now_ts
+                    else:
+                        # RESTも無応答かつWS切断の真の障害時のみ緊急アラートを発報
+                        self.notifier.send_emergency_alert(
+                            title="【システム異常警告】約定ストリーム途絶検知",
+                            message=f"bitFlyer FX約定プッシュが **{stall_sec}秒間** 途絶しています。\n"
+                                    f"ネットワーク遅延または取引所メンテナンスの可能性があります。自動再接続を試行しています。",
+                            level="warning"
+                        )
+                        self.last_anomaly_alert_time = now_ts
 
                 # コンソールにTaker差分量と戦略ステータスを表示
                 d_ratio = flow.get("delta_ratio", 0.0)
