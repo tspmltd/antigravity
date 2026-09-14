@@ -1,0 +1,8 @@
+Strategy ID: strat_bd7b4184
+Timestamp: 2026-09-14T14:12:31.010765
+Failed Reasons:
+- 取引回数不足 (5 < 15回)
+- 勝率不足 (20.0% < 50.0%)
+- 過剰適合: 未知データ(OOS)で損失発生 (-0.07%)
+- 過剰適合: OOS Sharpe大幅低下 (162.5% > 35.0%)
+- 過剰適合: OOS Profit Factor低下 (0.0 < 1.05)

@@ -1,0 +1,6 @@
+Strategy ID: strat_76b379e8
+Timestamp: 2026-09-14T14:12:29.818940
+Failed Reasons:
+- 取引回数不足 (3 < 4回)
+- 勝率不足 (33.33% < 35.0%)
+- 過剰適合: OOS Sharpe大幅低下 (71.6% > 35.0%)
