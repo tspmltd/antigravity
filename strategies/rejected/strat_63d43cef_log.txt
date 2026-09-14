@@ -1,0 +1,5 @@
+Strategy ID: strat_63d43cef
+Timestamp: 2026-09-13T21:56:04.951297
+Failed Reasons:
+- MDD超過 (33.08% > 5.0%)
+- 取引回数不足 (26 < 30)

@@ -1,0 +1,35 @@
+pipeline:
+  # 並行実行数 (複数テーマ/仮説の同時検証数)
+  max_parallel_tasks: 6
+  # 1つの戦略に対する最大改善イテレーション回数
+  max_optimization_iterations: 3
+  # エラー発生時の最大自己修復試行回数
+  max_self_healing_attempts: 3
+  # タイムアウト秒数
+  task_timeout_seconds: 300
+
+llm:
+  # LLMプロバイダー設定 ('mock', 'gemini', 'openai' 等)
+  provider: "mock" # デフォルトはAPIキー不要で動作するモック・ルールベースモード
+  model: "gemini-1.5-pro"
+  temperature: 0.7
+
+backtest:
+  initial_capital: 1000000.0 # 初期資金 (100万円)
+  commission_rate: 0.0005     # 片道手数料 (0.05%)
+  slippage_rate: 0.0002       # スリッページ想定 (0.02%)
+  default_timeframe: "1h"
+
+# 実稼働中の自律成績監視 ＆ 自動再最適化・差し替え設定
+adaptive_tuning:
+  enable_adaptive_tuning: true
+  # 成績評価を行うトレード間隔 (3回決済ごとに評価)
+  evaluation_interval_trades: 3
+  # 許容最大ドローダウン率 (%) (これを超えると自動再最適化を発動)
+  max_allowed_drawdown_pct: 2.5
+  # 直近許容最低勝率 (%)
+  min_win_rate_pct: 35.0
+  # 合格した新戦略へ無停止で自動差し替え (ホットリロード) するか
+  auto_switch_strategy: true
+  # 再最適化時の対象時間足
+  retraining_timeframe: "1m"

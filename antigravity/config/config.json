@@ -1,0 +1,39 @@
+﻿{
+  "symbol": "FX_BTC_JPY",
+  "order_size_btc": 0.001,
+  "maker_fee_pct": 0.0,
+  "taker_fee_pct": 0.0,
+  "risk_guard": {
+    "max_drawdown_limit_jpy": 3000.0,
+    "circuit_breaker_cooldown_sec": 300.0,
+    "max_position_btc": 0.005
+  },
+  "monitoring": {
+    "poll_interval_sec": 1.0,
+    "report_interval_sec": 3600.0,
+    "reset_anchor_hour_utc": 15
+  },
+  "ws_engine": {
+    "endpoint": "wss://ws.lightstream.bitflyer.com/json-rpc",
+    "channel_prefix": "lightning_executions_",
+    "window_seconds": 15.0,
+    "max_buffer_size": 2000
+  },
+  "strategies": {
+    "micro_trend": {
+      "enabled": true,
+      "bp_threshold": 1.5,
+      "order_size": 0.001
+    },
+    "inventory_mm": {
+      "enabled": true,
+      "spread_threshold_bp": 0.5,
+      "order_size": 0.001
+    },
+    "order_flow_scalp": {
+      "enabled": true,
+      "imbalance_ratio": 0.35,
+      "order_size": 0.001
+    }
+  }
+}

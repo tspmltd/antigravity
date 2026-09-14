@@ -1,0 +1,6 @@
+Strategy ID: strat_46438b1c
+Timestamp: 2026-09-14T13:12:17.121978
+Failed Reasons:
+- Sharpe Ratio不足 (-30.28 < 1.4)
+- Profit Factor不足 (0.63 < 1.35)
+- 勝率不足 (28.57% < 35.0%)

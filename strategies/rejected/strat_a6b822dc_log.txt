@@ -1,0 +1,8 @@
+Strategy ID: strat_a6b822dc
+Timestamp: 2026-09-13T22:52:30.926122
+Failed Reasons:
+- Sharpe Ratio不足 (-17.17 < 1.5)
+- Profit Factor不足 (0.59 < 1.3)
+- 勝率不足 (28.57% < 40.0%)
+- 過剰適合: 未知データ(OOS)で損失発生 (-0.17%)
+- 過剰適合: OOS Profit Factor低下 (0.5 < 1.05)

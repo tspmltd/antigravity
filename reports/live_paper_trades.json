@@ -1,0 +1,11 @@
+[
+  {
+    "timestamp": "2026-09-13T22:42:03.648149",
+    "reason": "CLOSE_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11794340.0,
+    "exit_price": 11796210.0,
+    "size": 0.001,
+    "pnl": -1.9
+  }
+]

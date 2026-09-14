@@ -1,0 +1,47 @@
+import pandas as pd
+import numpy as np
+from core.base_strategy import BaseStrategy
+
+class CustomStrategy(BaseStrategy):
+    def __init__(self, name="MicroSpreadMM", version="v1.0", parameters=None):
+        default_params = {
+            "spread_multiplier": 0.5,
+            "atr_period": 10,
+            "vol_filter_threshold": 1.4
+        }
+        if parameters:
+            default_params.update(parameters)
+        super().__init__(name=name, version=version, parameters=default_params)
+        self.hypothesis = "微小スプレッド高頻度キャプチャ＋ボラ急増回避フィルター。"
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        atr_p = self.parameters["atr_period"]
+        spread_mult = self.parameters["spread_multiplier"]
+        vol_thresh = self.parameters["vol_filter_threshold"]
+
+        tr = np.maximum(df["high"] - df["low"], 
+                        np.maximum(abs(df["high"] - df["close"].shift(1)), 
+                                   abs(df["low"] - df["close"].shift(1))))
+        df["atr"] = tr.rolling(window=atr_p).mean()
+        df["atr_baseline"] = df["atr"].rolling(window=atr_p * 3).mean()
+
+        df["mid"] = df["close"].rolling(window=5).mean()
+        df["half_spread"] = df["atr"] * spread_mult
+        df["bid_limit"] = df["mid"] - df["half_spread"]
+        df["ask_limit"] = df["mid"] + df["half_spread"]
+
+        df["signal"] = np.nan
+        normal_vol = df["atr"] <= (df["atr_baseline"] * vol_thresh)
+
+        long_fill = (df["low"] <= df["bid_limit"]) & normal_vol
+        short_fill = (df["high"] >= df["ask_limit"]) & normal_vol
+
+        df.loc[long_fill, "signal"] = 1
+        df.loc[short_fill, "signal"] = -1
+
+        exit_cond = abs(df["close"] - df["mid"]) < (df["half_spread"] * 0.3)
+        df.loc[exit_cond, "signal"] = 0
+
+        df["signal"] = df["signal"].ffill().fillna(0).astype(int)
+        return df

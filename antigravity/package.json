@@ -1,0 +1,23 @@
+{
+  "name": "antigravity-hft-engine",
+  "version": "2.0.0",
+  "description": "Antigravity Ultra-Low Latency Millisecond Order Flow HFT Trading System for bitFlyer Lightning FX",
+  "main": "runtime/runner.py",
+  "scripts": {
+    "start": "python -m antigravity",
+    "start:tick": "python run_portfolio.py --symbol FX_BTC_JPY --mode tick --report-interval 3600",
+    "test": "python -m unittest discover tests",
+    "daemon": "python run_autonomous_daemon.py --symbol FX_BTC_JPY --timeframe 1m"
+  },
+  "keywords": [
+    "hft",
+    "trading",
+    "order-flow",
+    "websocket",
+    "bitflyer",
+    "cryptocurrency",
+    "antigravity"
+  ],
+  "author": "Antigravity Engine Team",
+  "license": "MIT"
+}

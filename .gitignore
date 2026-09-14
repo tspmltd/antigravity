@@ -1,0 +1,26 @@
+﻿# 環境変数・APIキー (絶対に公開リポジトリに含めない)
+.env
+.env.local
+*.key
+
+# Pythonキャッシュ
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Nodeキャッシュ
+node_modules/
+npm-debug.log*
+
+# データ・キャッシュ・実行状態
+data/cache/
+pipeline_state.json
+scratch/
+
+# エージェント・一時ディレクトリ
+.agents/
+
+# ログ・レポート一時ファイル
+*.log

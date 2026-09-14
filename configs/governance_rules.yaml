@@ -1,0 +1,103 @@
+# ============================================================
+# ガバナンス品質ゲート & 過剰適合（カーブフィッティング）防止基準
+# ============================================================
+
+# タイムフレーム別プロファイル
+profiles:
+  # 1分足〜5分足: 高頻度・スキャルピング向け
+  scalping_1m:
+    min_sharpe_ratio: 1.5           # 最低シャープレシオ (年率換算)
+    max_drawdown_pct: 3.5           # 最大許容ドローダウン率 (タイトな損切り)
+    min_total_trades: 8             # 直近データ(1〜2日)に対する最低取引数
+    min_profit_factor: 1.3          # 最低プロフィットファクター
+    min_win_rate_pct: 40.0          # 最低勝率 (%)
+    min_calmar_ratio: 1.5
+
+  # 15分足〜1時間足: デイトレード・スイング向け (標準)
+  intraday_1h:
+    min_sharpe_ratio: 1.8
+    max_drawdown_pct: 6.0
+    min_total_trades: 15
+    min_profit_factor: 1.5
+    min_win_rate_pct: 45.0
+    min_calmar_ratio: 2.0
+
+  # 4時間足〜日足: ポジショントレード向け
+  swing_1d:
+    min_sharpe_ratio: 1.2
+    max_drawdown_pct: 12.0
+    min_total_trades: 8
+    min_profit_factor: 1.4
+    min_win_rate_pct: 40.0
+    min_calmar_ratio: 1.2
+
+  # デフォルトフォールバック
+  default:
+    min_sharpe_ratio: 1.5
+    max_drawdown_pct: 5.0
+    min_total_trades: 10
+    min_profit_factor: 1.4
+    min_win_rate_pct: 40.0
+    min_calmar_ratio: 1.5
+
+# 戦略タイプ別プロファイル (ユーザー指摘: MM戦略は取引回数多く、トレンドフォローは少ない)
+strategy_types:
+  # マーケットメイク (MM) 戦略: 取引回数が多く、微小利幅と低ドローダウンを重視
+  market_making:
+    min_sharpe_ratio: 1.2
+    max_drawdown_pct: 2.0           # 低ドローダウン
+    min_total_trades: 15            # MMは取引回数が多い (15〜50回以上)
+    min_profit_factor: 1.2
+    min_win_rate_pct: 50.0          # 高勝率重視
+    min_calmar_ratio: 1.2
+
+  # マイクロトレンド戦略: 2bpの初動から10〜20bpの波を狙うOrder Flow順張り
+  micro_trend:
+    min_sharpe_ratio: 1.3
+    max_drawdown_pct: 2.5           # 低ドローダウン
+    min_total_trades: 10            # 2bp初動の積み重ねのため取引回数多め
+    min_profit_factor: 1.30
+    min_win_rate_pct: 45.0
+    min_calmar_ratio: 1.3
+
+  # トレンドフォロー戦略: 取引回数は少なくてもOK、損小利大(PF)とトレンド追従を重視
+  trend_following:
+    min_sharpe_ratio: 1.4
+    max_drawdown_pct: 5.0
+    min_total_trades: 4             # トレンドフォローは厳選エントリーのため少なくても可
+    min_profit_factor: 1.35         # 損小利大
+    min_win_rate_pct: 35.0          # 勝率は低くてもOK
+    min_calmar_ratio: 1.2
+
+  # 平均回帰 (Mean Reversion) 戦略: 中頻度
+  mean_reversion:
+    min_sharpe_ratio: 1.3
+    max_drawdown_pct: 3.5
+    min_total_trades: 8
+    min_profit_factor: 1.25
+    min_win_rate_pct: 45.0
+    min_calmar_ratio: 1.2
+
+# ============================================================
+# 過剰適合（Overfitting / Curve Fitting）防止ガード
+# In-Sample (訓練期 70%) と Out-of-Sample (テスト期 30%) を比較検証
+# ============================================================
+overfitting_guard:
+  enable_oos_validation: true
+  split_ratio: 0.7
+
+  # 1. シャープレシオ劣化許容率 (%)
+  # In-SampleからOut-of-Sampleへの低下がこれを超えると過剰適合と判定
+  max_oos_sharpe_degradation_pct: 35.0
+
+  # 2. Out-of-Sampleでの黒字必須化
+  # 訓練期で勝てていても、テスト期で合計損失(マイナスリターン)になった戦略は即却下
+  require_positive_oos_return: true
+
+  # 3. Out-of-Sampleでの最低プロフィットファクター
+  # 未知相場でも優位性(PF > 1.05)が残っているか
+  min_oos_profit_factor: 1.05
+
+  # 4. Out-of-SampleでのMDD拡大倍率上限
+  # テスト期のドローダウンが訓練期の何倍まで許容されるか (2.0倍以上は破綻リスク)
+  max_oos_mdd_multiplier: 1.8

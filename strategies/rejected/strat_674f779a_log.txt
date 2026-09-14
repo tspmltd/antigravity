@@ -1,0 +1,7 @@
+Strategy ID: strat_674f779a
+Timestamp: 2026-09-14T01:14:34.902341
+Failed Reasons:
+- 取引回数不足 (1 < 8回)
+- 過剰適合: 未知データ(OOS)で損失発生 (0.0%)
+- 過剰適合: OOS Sharpe大幅低下 (100.0% > 35.0%)
+- 過剰適合: OOS Profit Factor低下 (0.0 < 1.05)

@@ -1,0 +1,5 @@
+Strategy ID: strat_3b15866c
+Timestamp: 2026-09-14T11:11:50.847437
+Failed Reasons:
+- 過剰適合: OOS Sharpe大幅低下 (45.2% > 35.0%)
+- 過剰適合: OOS MDD急拡大 (0.5% > 0.3%)

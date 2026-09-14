@@ -1,0 +1,6 @@
+Strategy ID: strat_c70dbf6f
+Timestamp: 2026-09-13T22:09:19.085840
+Failed Reasons:
+- MDD超過 (6.91% > 5.0%)
+- 取引回数不足 (5 < 30)
+- 過剰適合検知 (OOS Sharpe劣化率 69.5% > 25.0%)
