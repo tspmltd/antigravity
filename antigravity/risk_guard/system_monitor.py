@@ -85,6 +85,42 @@ class SystemResourceMonitor:
             except Exception:
                 pass
 
+        # macOS (Darwin) - sysctl & vm_stat
+        if sys.platform == "darwin":
+            try:
+                import subprocess
+                # 総物理メモリ (hw.memsize)
+                total_out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=2).decode().strip()
+                total = int(total_out)
+
+                # ページ状態 (vm_stat)
+                vm_out = subprocess.check_output(["vm_stat"], timeout=2).decode()
+                page_size = 4096
+                free_pages = 0
+                speculative_pages = 0
+                for line in vm_out.splitlines():
+                    if "page size of" in line:
+                        parts = line.split()
+                        for p in parts:
+                            if p.isdigit():
+                                page_size = int(p)
+                                break
+                    elif "Pages free:" in line:
+                        free_pages = int(line.split(":")[1].strip().rstrip("."))
+                    elif "Pages speculative:" in line:
+                        speculative_pages = int(line.split(":")[1].strip().rstrip("."))
+
+                available = (free_pages + speculative_pages) * page_size
+                used = max(0, total - available)
+                return {
+                    "total_gb": total / (1024 ** 3),
+                    "used_gb": used / (1024 ** 3),
+                    "free_gb": available / (1024 ** 3),
+                    "used_pct": (used / total * 100.0) if total > 0 else 0.0,
+                }
+            except Exception:
+                pass
+
         # Windows (ctypes GlobalMemoryStatusEx)
         if sys.platform == "win32":
             try:
@@ -147,6 +183,29 @@ class SystemResourceMonitor:
             except Exception:
                 pass
 
+        # macOS (Darwin) - top / ps
+        if sys.platform == "darwin":
+            try:
+                import subprocess
+                # top -l 2 -n 0 で直近のCPU使用率を取得
+                out = subprocess.check_output(
+                    ["top", "-l", "2", "-n", "0", "-s", "0"],
+                    timeout=3
+                ).decode()
+                # 2回目の "CPU usage:" 行を抽出
+                lines = [line for line in out.splitlines() if "CPU usage:" in line]
+                if lines:
+                    target_line = lines[-1]  # 最新サンプル
+                    # 例: "CPU usage: 12.5% user, 8.3% sys, 79.2% idle"
+                    parts = target_line.split(",")
+                    for p in parts:
+                        if "idle" in p:
+                            idle_str = p.replace("CPU usage:", "").replace("% idle", "").strip()
+                            idle_pct = float(idle_str)
+                            return max(0.0, min(100.0, 100.0 - idle_pct))
+            except Exception:
+                pass
+
         # Windows (GetSystemTimes)
         if sys.platform == "win32":
             try:
@@ -180,12 +239,25 @@ class SystemResourceMonitor:
             except Exception:
                 pass
 
+        # Linux (/proc/self/status)
         if sys.platform.startswith("linux") and os.path.exists("/proc/self/status"):
             try:
                 with open("/proc/self/status", "r") as f:
                     for line in f:
                         if line.startswith("VmRSS:"):
                             return float(line.split()[1]) / 1024.0
+            except Exception:
+                pass
+
+        # macOS (Darwin) - ps
+        if sys.platform == "darwin":
+            try:
+                import subprocess
+                out = subprocess.check_output(
+                    ["ps", "-o", "rss=", "-p", str(os.getpid())],
+                    timeout=2
+                ).decode().strip()
+                return float(out) / 1024.0
             except Exception:
                 pass
 

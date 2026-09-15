@@ -1,4 +1,4 @@
-﻿# 環境変数・APIキー (絶対に公開リポジトリに含めない)
+# 環境変数・APIキー (絶対に公開リポジトリに含めない)
 .env
 .env.local
 *.key
@@ -22,5 +22,21 @@ scratch/
 # エージェント・一時ディレクトリ
 .agents/
 
+# 仮想環境
+venv/
+.venv/
+env/
+*.pid
+
+# macOS システムファイル
+.DS_Store
+.AppleDouble
+.LSOverride
+
 # ログ・レポート一時ファイル
 *.log
+
+# IDE 設定ファイル
+.vscode/
+.idea/
+

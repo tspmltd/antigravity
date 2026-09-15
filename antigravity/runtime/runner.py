@@ -355,11 +355,48 @@ class AntigravityRunner:
         except Exception as ex:
             print(f"[AntigravityRunner] 初回定期レポート送信失敗: {ex}", flush=True)
 
-    def stop(self):
-        """取引実行を停止"""
-        print("[AntigravityRunner] 🛑 停止中...", flush=True)
+    def stop(self, reason: str = "オペレータによる手動停止（SIGINT/SIGTERM）"):
+        """取引実行を安全に停止し、必要に応じて建玉を決済して通知を送信"""
+        print(f"[AntigravityRunner] 🛑 停止処理中 ({reason})...", flush=True)
         self.is_running = False
         self.stream.stop()
+
+        # 安全な残存建玉の決済処理
+        closed_all = True
+        total_remaining_btc = 0.0
+        with self.state_lock:
+            for name, s_info in self.strategies_map.items():
+                pos = s_info["position_btc"]
+                if abs(pos) > 1e-6:
+                    exit_side = "SELL" if pos > 0 else "BUY"
+                    try:
+                        print(f"[AntigravityRunner] 🛑 停止時緊急決済: {name} {pos:+.4f} BTC ({exit_side})", flush=True)
+                        self.client.send_order(
+                            product_code=self.product_code,
+                            side=exit_side,
+                            size=abs(pos),
+                            order_type="MARKET",
+                        )
+                        s_info["position_btc"] = 0.0
+                    except Exception as ex:
+                        print(f"[AntigravityRunner] ⚠️ 停止時決済エラー ({name}): {ex}", flush=True)
+                        closed_all = False
+                        total_remaining_btc += pos
+
+            tot_realized = sum(s["realized_pnl"] for s in self.strategies_map.values())
+
+        # 手動停止通知の送信
+        try:
+            self.notifier.send_manual_stop_alert(
+                service_name=f"Antigravity HFT ({self.product_code})",
+                reason=reason,
+                position_closed=closed_all,
+                remaining_position_btc=total_remaining_btc,
+                final_pnl_jpy=tot_realized,
+            )
+        except Exception as ex:
+            print(f"[AntigravityRunner] 手動停止通知送信失敗: {ex}", flush=True)
+
 
 
     def run_forever(self, poll_interval: float = 1.0):
@@ -401,7 +438,10 @@ class AntigravityRunner:
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             print("\n[AntigravityRunner] KeyboardInterrupt 検知。終了処理中...")
+            self.stop(reason="ユーザー操作（Ctrl+C / KeyboardInterrupt）による手動停止")
         finally:
-            self.stop()
+            if self.is_running:
+                self.stop(reason="プロセス終了（SIGTERM / システムシャットダウン）")
+
 
 

@@ -19,6 +19,29 @@ def main():
     print("         bitFlyer Private API 接続・安全確認テスト         ")
     print("=" * 60)
 
+    client = BitFlyerClient()
+
+    # --- Public API レイテンシ・相場診断 ---
+    print("\n[Public API 健全性・レイテンシ診断]")
+    try:
+        lat = client.measure_api_latency(product_code="FX_BTC_JPY", count=3)
+        if lat.get("success"):
+            print(f"  ⚡ API往復レイテンシ (RTT): 平均 {lat['avg_ms']:.1f}ms (最小 {lat['min_ms']:.1f}ms / 最大 {lat['max_ms']:.1f}ms)")
+        else:
+            print("  ⚠️ APIレイテンシ計測に失敗しました。")
+
+        depth = client.diagnose_market_depth(product_code="FX_BTC_JPY")
+        print(f"  📊 気配値・スプレッド診断 ({depth['product_code']}):")
+        print(f"     • 仲値: {depth['mid_price']:,.0f} 円 | スプレッド: {depth['spread']:,.0f} 円 ({depth['spread_bp']:.2f} bp)")
+        print(f"     • 最良買気配: {depth['best_bid']:,.0f} 円 (厚み: {depth['bid_depth']:.3f} BTC)")
+        print(f"     • 最良売気配: {depth['best_ask']:,.0f} 円 (厚み: {depth['ask_depth']:.3f} BTC)")
+        imb_sign = "BUY優勢" if depth['imbalance_ratio'] > 0.1 else ("SELL優勢" if depth['imbalance_ratio'] < -0.1 else "拮抗")
+        print(f"     • 板不均衡比率 (Imbalance): {depth['imbalance_ratio']:+.2f} ({imb_sign})")
+    except Exception as e:
+        print(f"  ⚠️ Public API 診断エラー: {e}")
+
+    # --- Private API 口座診断 ---
+    print("\n[Private API 口座・残高確認]")
     if not api_key or not api_secret or api_key == "your_bitflyer_api_key_here":
         print("\n[INFO] .env ファイルに有効な APIキー がまだ設定されていません。")
         print("以下の手順で設定してください:")
@@ -31,7 +54,6 @@ def main():
     print(f"\n[1] APIキー検知: {api_key[:6]}...{api_key[-4:]} (シークレット: 設定済み)")
     
     try:
-        client = BitFlyerClient()
         print("[2] 残高照会 API (/v1/me/getbalance) を呼び出しています...")
         balances = client.get_balance()
         

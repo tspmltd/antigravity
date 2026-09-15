@@ -1,12 +1,12 @@
 pipeline:
-  # 並行実行数 (複数テーマ/仮説の同時検証数)
-  max_parallel_tasks: 6
+  # 並行実行数 (2 vCPU環境に合わせてCPU枯渇を防ぐため 1 に最適化)
+  max_parallel_tasks: 1
   # 1つの戦略に対する最大改善イテレーション回数
   max_optimization_iterations: 3
   # エラー発生時の最大自己修復試行回数
   max_self_healing_attempts: 3
   # タイムアウト秒数
-  task_timeout_seconds: 300
+  task_timeout_seconds: 120
 
 llm:
   # LLMプロバイダー設定 ('mock', 'gemini', 'openai' 等)

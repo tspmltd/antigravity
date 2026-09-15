@@ -149,3 +149,86 @@ class BitFlyerClient:
             "child_order_acceptance_id": res.get("child_order_acceptance_id"),
             "order_details": body
         }
+
+    # ==========================================
+    # Public API & 相場・レイテンシ診断機能
+    # ==========================================
+
+    def get_ticker(self, product_code: str = "FX_BTC_JPY") -> Dict[str, Any]:
+        """Public API: ティッカー情報を取得 (/v1/getticker)"""
+        url = f"{self.BASE_URL}/v1/getticker?product_code={product_code}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Antigravity/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def get_board(self, product_code: str = "FX_BTC_JPY") -> Dict[str, Any]:
+        """Public API: 板情報（Order Book）を取得 (/v1/getboard)"""
+        url = f"{self.BASE_URL}/v1/getboard?product_code={product_code}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Antigravity/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def measure_api_latency(self, product_code: str = "FX_BTC_JPY", count: int = 3) -> Dict[str, Any]:
+        """
+        bitFlyer Public API (Ticker) への往復レイテンシ (RTT) を複数回計測し統計を算出
+        """
+        latencies = []
+        for _ in range(count):
+            t0 = time.perf_counter()
+            try:
+                self.get_ticker(product_code)
+                rtt_ms = (time.perf_counter() - t0) * 1000.0
+                latencies.append(rtt_ms)
+            except Exception as e:
+                pass
+            time.sleep(0.1)
+
+        if not latencies:
+            return {
+                "success": False,
+                "avg_ms": 0.0,
+                "min_ms": 0.0,
+                "max_ms": 0.0,
+                "samples": 0,
+            }
+
+        return {
+            "success": True,
+            "avg_ms": sum(latencies) / len(latencies),
+            "min_ms": min(latencies),
+            "max_ms": max(latencies),
+            "samples": len(latencies),
+        }
+
+    def diagnose_market_depth(self, product_code: str = "FX_BTC_JPY", depth_limit: int = 10) -> Dict[str, Any]:
+        """
+        板情報を診断し、スプレッド、気配深度、板の不均衡（Imbalance）を分析
+        """
+        board = self.get_board(product_code)
+        mid_price = float(board.get("mid_price", 0.0))
+        bids = board.get("bids", [])[:depth_limit]
+        asks = board.get("asks", [])[:depth_limit]
+
+        best_bid = float(bids[0]["price"]) if bids else 0.0
+        best_ask = float(asks[0]["price"]) if asks else 0.0
+        spread = best_ask - best_bid if (best_ask > 0 and best_bid > 0) else 0.0
+        spread_bp = (spread / mid_price * 10000.0) if mid_price > 0 else 0.0
+
+        bid_depth = sum(float(b["size"]) for b in bids)
+        ask_depth = sum(float(a["size"]) for a in asks)
+        total_depth = bid_depth + ask_depth
+
+        imbalance_ratio = ((bid_depth - ask_depth) / total_depth) if total_depth > 0 else 0.0
+
+        return {
+            "product_code": product_code,
+            "mid_price": mid_price,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread": spread,
+            "spread_bp": spread_bp,
+            "bid_depth": bid_depth,
+            "ask_depth": ask_depth,
+            "imbalance_ratio": imbalance_ratio,
+        }
+

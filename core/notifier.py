@@ -777,6 +777,46 @@ class DiscordNotifier:
             target="report",
         )
 
+    def send_manual_stop_alert(
+        self,
+        service_name: str = "Antigravity HFT Engine",
+        reason: str = "オペレータによる手動停止（SIGINT/SIGTERM）",
+        position_closed: bool = True,
+        remaining_position_btc: float = 0.0,
+        final_pnl_jpy: float = 0.0,
+        server_name: str = "Antigravity Node",
+    ) -> bool:
+        """
+        手動停止通知（Graceful Shutdown）をアラートチャンネルへ送信
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"🛑 【手動停止通知】{service_name}"
+        status_text = "全建玉を安全に決済済み" if position_closed else f"未決済建玉あり ({remaining_position_btc:+.4f} BTC)"
+
+        desc = (
+            f"**停止時刻**: `{now_str}`\n"
+            f"**対象ホスト**: `{server_name}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **停止理由**: {reason}\n"
+            f"• **建玉状態**: **{status_text}**\n"
+            f"• **最終確定損益**: `{final_pnl_jpy:+,.1f} 円`"
+        )
+        fields = [
+            {"name": "🛑 停止対象サービス", "value": f"`{service_name}`", "inline": True},
+            {"name": "📦 建玉ステータス", "value": f"`{status_text}`", "inline": True},
+            {"name": "💰 確定損益", "value": f"`{final_pnl_jpy:+,.1f} 円`", "inline": True},
+        ]
+
+        return self.send_embed(
+            title=title,
+            description=desc,
+            fields=fields,
+            color=0xF39C12,  # オレンジ
+            footer_text="Antigravity Sentinel Shutdown Guard 🛑",
+            target="alert",
+        )
+
+
 
     def _post_payload(self, payload: Dict[str, Any], webhook_url: Optional[str] = None) -> bool:
         """Webhook URLへJSONペイロードをPOST"""
