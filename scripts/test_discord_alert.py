@@ -82,20 +82,21 @@ def main():
         },
         "strategies": [
             {
-                "name": "EmaTrendTickStrategy",
+                "name": "Mock_EmaTrendTickStrategy (テスト用)",
                 "daily": {"realized_pnl": 2100.0, "trades_count": 12, "win_rate_pct": 75.0},
                 "hourly": {"realized_pnl": 450.0},
             },
             {
-                "name": "MicroSpreadMM",
+                "name": "Mock_MicroSpreadMM (テスト用)",
                 "daily": {"realized_pnl": 1380.0, "trades_count": 16, "win_rate_pct": 68.8},
                 "hourly": {"realized_pnl": 170.0},
             },
         ],
     }
-    r1 = notifier.send_regular_report(mock_snapshot, symbol="FX_BTC_JPY")
+    r1 = notifier.send_regular_report(mock_snapshot, symbol="FX_BTC_JPY [🧪疎通テスト用モック]")
     print(f"  ➔ 結果: {'成功 (HTTP 200/204)' if r1 else '失敗または未設定'}")
     time.sleep(0.5)
+
 
     # -------------------------------------------------------------
     # 2. システム改善・自律発見パイプライン通知 (システム改善チャンネル)

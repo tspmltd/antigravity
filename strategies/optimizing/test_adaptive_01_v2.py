@@ -46,11 +46,10 @@ class CustomStrategy(BaseStrategy):
         # シグナルをフォワードフィルしてポジション維持
         df["signal"] = df["signal"].replace(0, np.nan).ffill().fillna(0).astype(int)
         
-        # Optimizer追加: レジームフィルター (200期間SMA立脚判定)
+        # [OPTIMIZER_REGIME_FILTER]: 上位足レジーム同方向エントリー限定
         df["ma_regime"] = df["close"].rolling(window=100).mean()
         trend_up = df["close"] > df["ma_regime"]
         trend_down = df["close"] < df["ma_regime"]
         df.loc[(df["signal"] == 1) & (~trend_up), "signal"] = 0
         df.loc[(df["signal"] == -1) & (~trend_down), "signal"] = 0
-        df["signal"] = df["signal"].replace(0, np.nan).ffill().fillna(0).astype(int)
         return df
