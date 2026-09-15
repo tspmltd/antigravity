@@ -29,12 +29,16 @@ class WebSocketTickStream:
         window_seconds: float = 15.0,
         max_buffer_size: int = 2000,
         on_ticks_callback: Optional[Callable[[List[Dict[str, Any]], Dict[str, Any]], None]] = None,
+        on_connect_callback: Optional[Callable[[], None]] = None,
+        on_disconnect_callback: Optional[Callable[[str], None]] = None,
     ):
         self.product_code = product_code
         self.ws_url = ws_url
         self.window_seconds = window_seconds
         self.max_buffer_size = max_buffer_size
         self.on_ticks_callback = on_ticks_callback
+        self.on_connect_callback = on_connect_callback
+        self.on_disconnect_callback = on_disconnect_callback
 
         self.analyzer = FlowAnalyzer(window_seconds=window_seconds)
         self.ticks: List[Dict[str, Any]] = []
@@ -169,12 +173,26 @@ class WebSocketTickStream:
                     }
                     ws.send(json.dumps(sub))
                     print(f"[WebSocket] Connected to {channel} in real-time mode.", flush=True)
+                    if self.on_connect_callback:
+                        try:
+                            self.on_connect_callback()
+                        except Exception as ex:
+                            print(f"[WebSocket] on_connect_callback error: {ex}", flush=True)
 
                 def on_error(ws, error):
-                    pass
+                    if error:
+                        print(f"[WebSocket] Error: {error}", flush=True)
 
                 def on_close(ws, close_status_code, close_msg):
+                    was_connected = self.is_ws_connected
                     self.is_ws_connected = False
+                    reason = f"code={close_status_code}, msg={close_msg}"
+                    print(f"[WebSocket] Closed ({reason})", flush=True)
+                    if was_connected and self.on_disconnect_callback and self.is_running:
+                        try:
+                            self.on_disconnect_callback(reason)
+                        except Exception as ex:
+                            print(f"[WebSocket] on_disconnect_callback error: {ex}", flush=True)
 
                 self.ws_app = websocket.WebSocketApp(
                     self.ws_url,

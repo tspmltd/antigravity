@@ -240,3 +240,239 @@ class DiscordNotifier:
             target="alert",
         )
 
+    def send_system_down_alert(
+        self,
+        service_name: str,
+        reason: str,
+        log_snippet: str = "",
+        auto_recovery_status: str = "自動再起動シーケンスを実行中...",
+        server_name: str = "Antigravity HFT Engine",
+    ) -> bool:
+        """
+        システムダウン・プロセス停止・クラッシュ検知アラートを即時送信
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"🚨 【緊急警報：システムダウン検知】{service_name}"
+        desc = (
+            f"**検知時刻**: `{now_str}`\n"
+            f"**対象ホスト**: `{server_name}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"**障害内容**: {reason}\n"
+            f"**対応状況**: {auto_recovery_status}"
+        )
+        fields = [
+            {"name": "⚠️ 停止対象プロセス", "value": f"`{service_name}`", "inline": True},
+            {"name": "⚙️ フェイルセーフ状態", "value": f"`{auto_recovery_status}`", "inline": True},
+        ]
+        if log_snippet:
+            # ログ末尾（最大800文字）
+            snip = log_snippet[-800:].strip()
+            fields.append({"name": "📜 直近ログ出力", "value": f"```text\n{snip}\n```", "inline": False})
+
+        return self.send_embed(
+            title=title,
+            description=desc,
+            fields=fields,
+            color=0xE74C3C,  # 赤
+            footer_text="Antigravity Watchdog Sentinel 🚨",
+            target="alert",
+        )
+
+    def send_system_recovered_alert(
+        self,
+        service_name: str,
+        message: str = "プロセスが正常に再起動され、運用が復帰しました。",
+        server_name: str = "Antigravity HFT Engine",
+    ) -> bool:
+        """
+        システムダウンからの自動復旧完了通知
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"🟢 【システム自動復旧完了】{service_name}"
+        desc = (
+            f"**復旧時刻**: `{now_str}`\n"
+            f"**対象ホスト**: `{server_name}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{message}"
+        )
+        fields = [
+            {"name": "✅ 復旧プロセス", "value": f"`{service_name}`", "inline": True},
+            {"name": "📡 稼働状態", "value": "`RUNNING (正常稼働中)`", "inline": True},
+        ]
+        return self.send_embed(
+            title=title,
+            description=desc,
+            fields=fields,
+            color=0x2ECC71,  # 緑
+            footer_text="Antigravity Watchdog Sentinel 🟢",
+            target="alert",
+        )
+
+    def send_drawdown_alert(
+        self,
+        current_dd: float,
+        max_dd: float,
+        peak_pnl: float,
+        current_pnl: float,
+        is_halted: bool = False,
+        reason: str = "",
+        symbol: str = "FX_BTC_JPY",
+    ) -> bool:
+        """
+        ドローダウン警戒またはサーキットブレーカー発動アラートを即時送信
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        pct = (current_dd / max_dd * 100.0) if max_dd > 0 else 0.0
+
+        if is_halted:
+            title = f"🚨 【最大ドローダウン超過・緊急停止】{symbol}"
+            color = 0xE74C3C  # 赤
+            action_text = "🚫 **サーキットブレーカー発動**: 全保有建玉を直ちに強制エグジットしました。冷却待機に入ります。"
+        else:
+            title = f"⚠️ 【ドローダウン警戒警報】{symbol} (許容上限の{pct:.0f}%到達)"
+            color = 0xF39C12  # オレンジ
+            action_text = "⚠️ **警戒水準到達**: 最大ドローダウン許容限度に接近しています。逆流エグジット基準を厳格化中。"
+
+        desc = (
+            f"**検知時刻**: `{now_str}`\n"
+            f"**対象市場**: `{symbol}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{action_text}\n"
+            f"• **要因**: {reason}"
+        )
+        fields = [
+            {"name": "📉 現在のドローダウン", "value": f"**`{current_dd:,.1f} 円`** (許容限度: `{max_dd:,.0f} 円` | `{pct:.1f}%`)", "inline": False},
+            {"name": "🏔️ 過去ピーク損益", "value": f"`{peak_pnl:+,.1f} 円`", "inline": True},
+            {"name": "💰 現在の総損益", "value": f"`{current_pnl:+,.1f} 円`", "inline": True},
+        ]
+
+        return self.send_embed(
+            title=title,
+            description=desc,
+            fields=fields,
+            color=color,
+            footer_text="Antigravity Risk Guard 🛡️",
+            target="alert",
+        )
+
+    def send_resource_pressure_alert(
+        self,
+        metrics: Dict[str, Any],
+        trigger_reasons: List[str],
+        remediation_actions: Optional[List[str]] = None,
+        server_name: str = "Trading Server",
+        level: str = "critical",
+    ) -> bool:
+        """
+        CPU/メモリ/ディスクのシステム圧迫検知アラートを即時送信
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        disk = metrics.get("disk", {})
+        mem = metrics.get("memory", {})
+        cpu = metrics.get("cpu_pct", 0.0)
+
+        is_crit = (level.lower() == "critical")
+        title = f"🚨 【システム圧迫緊急警報】{server_name} 負荷逼迫" if is_crit else f"⚠️ 【システム圧迫注意報】{server_name} 高負荷検知"
+        color = 0xE74C3C if is_crit else 0xF39C12
+
+        reasons_text = "\n".join([f"• ❗ {r}" for r in trigger_reasons])
+        actions_text = "\n".join([f"• 🛠️ {a}" for a in (remediation_actions or ["自動クリーンアップ実行"])])
+
+        desc = (
+            f"**発生時刻**: `{now_str}`\n"
+            f"**サーバー**: `{server_name}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"**検知トリガー**:\n{reasons_text}"
+        )
+
+        fields = [
+            {"name": "🧠 メモリ使用状況", "value": f"使用率: **`{mem.get('used_pct', 0.0):.1f}%`** (空き: `{mem.get('free_gb', 0.0):.2f} GB` / `{mem.get('total_gb', 0.0):.1f} GB`)", "inline": True},
+            {"name": "⚡ CPU使用率", "value": f"負荷: **`{cpu:.1f}%`**", "inline": True},
+            {"name": "💾 ディスク使用状況", "value": f"使用率: **`{disk.get('used_pct', 0.0):.1f}%`** (空き: `{disk.get('free_gb', 0.0):.1f} GB`)", "inline": True},
+            {"name": "🔧 自動実行された改善策", "value": actions_text, "inline": False},
+        ]
+
+        return self.send_embed(
+            title=title,
+            description=desc,
+            fields=fields,
+            color=color,
+            footer_text="Antigravity System Resource Guard 🚨",
+            target="alert",
+        )
+
+    def send_significant_trade_report(
+        self,
+        strategy_name: str,
+        side: str,
+        size_btc: float,
+        entry_price: float,
+        exit_price: float,
+        pnl_jpy: float,
+        reason: str = "",
+        symbol: str = "FX_BTC_JPY",
+    ) -> bool:
+        """
+        大幅な収益実現または大幅な損失発生時の速報を定期報告チャンネルへ送信
+        """
+        is_profit = pnl_jpy > 0
+        if is_profit:
+            title = f"🎉 【大幅収益実現】{strategy_name} ({pnl_jpy:+,.1f} 円)"
+            color = 0x2ECC71  # 緑
+            badge = "🟢 利確"
+        else:
+            title = f"⚠️ 【大幅損失発生】{strategy_name} ({pnl_jpy:+,.1f} 円)"
+            color = 0xE74C3C  # 赤
+            badge = "🔴 損切"
+
+        desc = (
+            f"**決済時刻**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n"
+            f"**対象市場**: `{symbol}` | **戦略**: `{strategy_name}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **決済区分**: {badge} ({side})\n"
+            f"• **確定損益**: **`{pnl_jpy:+,.1f} 円`**\n"
+            f"• **約定価格**: `{entry_price:,.0f} 円` ➔ `{exit_price:,.0f} 円`\n"
+            f"• **取引数量**: `{size_btc:.4f} BTC`\n"
+            f"• **決済トリガー**: {reason}"
+        )
+
+        return self.send_embed(
+            title=title,
+            description=desc,
+            color=color,
+            footer_text="Antigravity Performance Reporter 📊",
+            target="report",
+        )
+
+    def send_performance_improvement_report(
+        self,
+        strategy_name: str,
+        improvement_details: str,
+        current_stats: Dict[str, Any],
+        symbol: str = "FX_BTC_JPY",
+    ) -> bool:
+        """
+        勝率向上、PF改善、損益向上などの成績改善レポートを定期報告チャンネルへ送信
+        """
+        title = f"📈 【成績改善レポート】{strategy_name}"
+        desc = (
+            f"**更新時刻**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n"
+            f"**対象市場**: `{symbol}` | **戦略**: `{strategy_name}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"**改善推移**: {improvement_details}"
+        )
+        fields = [
+            {"name": "🎯 現在の勝率", "value": f"`{current_stats.get('win_rate_pct', 0.0):.1f}%`", "inline": True},
+            {"name": "💵 本日累計損益", "value": f"`{current_stats.get('daily_pnl', 0.0):+,.1f} 円`", "inline": True},
+            {"name": "📊 取引回数", "value": f"`{current_stats.get('trades_count', 0)} 回`", "inline": True},
+        ]
+        return self.send_embed(
+            title=title,
+            description=desc,
+            fields=fields,
+            color=0x2ECC71,
+            footer_text="Antigravity Performance Reporter 📈",
+            target="report",
+        )
+
+

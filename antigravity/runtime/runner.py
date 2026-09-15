@@ -50,6 +50,7 @@ class AntigravityRunner:
             cooldown_seconds=cooldown_sec,
             on_trip_callback=self._on_circuit_breaker_tripped,
             on_resume_callback=self._on_circuit_breaker_resumed,
+            on_warning_callback=self._on_circuit_breaker_warning,
         )
 
         # 戦略マップ
@@ -74,12 +75,26 @@ class AntigravityRunner:
         self.last_resource_check_time = time.time()
         self.last_resource_alert_time = 0.0
 
-
         # WebSocketストリーム初期化
         self.stream = WebSocketTickStream(
             product_code=self.product_code,
             window_seconds=15.0,
             on_ticks_callback=self._on_ticks_received,
+            on_connect_callback=self._on_ws_connected,
+            on_disconnect_callback=self._on_ws_disconnected,
+        )
+
+    def _on_circuit_breaker_warning(self, reason: str, current_dd: float, total_pnl: float):
+        """ドローダウン警戒コールバック：許容上限に接近した段階でDiscordへ早期警戒通報"""
+        print(f"\n[AntigravityRunner] ⚠️ DRAWDOWN WARNING: {reason}", flush=True)
+        self.notifier.send_drawdown_alert(
+            current_dd=current_dd,
+            max_dd=self.circuit_breaker.max_drawdown_limit_jpy,
+            peak_pnl=self.circuit_breaker.peak_pnl,
+            current_pnl=total_pnl,
+            is_halted=False,
+            reason=reason,
+            symbol=self.product_code,
         )
 
     def _on_circuit_breaker_tripped(self, reason: str, current_dd: float, total_pnl: float):
@@ -103,26 +118,40 @@ class AntigravityRunner:
                     s_info["entry_price"] = 0.0
                     s_info["entry_time"] = None
 
-        self.notifier.send_emergency_alert(
-            title="【緊急停止・サーキットブレーカー発動】",
-            message=(
-                f"**許容最大ドローダウンを超過したため、全建玉を強制エグジットしました。**\n\n"
-                f"• **市場**: `{self.product_code}`\n"
-                f"• **トリガー要因**: {reason}\n"
-                f"• **ピークからの落ち込み**: `{current_dd:,.1f} 円`\n"
-                f"• **現在の総損益**: `{total_pnl:+,.1f} 円`\n"
-                f"• **冷却待機期間**: `{int(self.circuit_breaker.cooldown_seconds / 60)} 分間`"
-            ),
-            level="critical",
+        self.notifier.send_drawdown_alert(
+            current_dd=current_dd,
+            max_dd=self.circuit_breaker.max_drawdown_limit_jpy,
+            peak_pnl=self.circuit_breaker.peak_pnl,
+            current_pnl=total_pnl,
+            is_halted=True,
+            reason=reason,
+            symbol=self.product_code,
         )
 
     def _on_circuit_breaker_resumed(self, reason: str):
         """運用自動復帰コールバック"""
         print(f"\n[AntigravityRunner] 🟢 RESUMING TRADING: {reason}", flush=True)
-        self.notifier.send_emergency_alert(
-            title="【自動運用復帰・サーキットブレーカー解除】",
+        self.notifier.send_system_recovered_alert(
+            service_name=f"Antigravity HFT ({self.product_code})",
             message=f"冷却期間が経過し、相場の安定を確認したため取引を自動再開しました。\n要因: {reason}",
-            level="info",
+        )
+
+    def _on_ws_connected(self):
+        """WebSocket接続確立コールバック"""
+        print(f"[AntigravityRunner] 🟢 WebSocket接続確立: {self.product_code}", flush=True)
+
+    def _on_ws_disconnected(self, reason: str):
+        """WebSocket切断コールバック"""
+        print(f"[AntigravityRunner] ⚠️ WebSocket切断検知: {reason}", flush=True)
+        self.notifier.send_emergency_alert(
+            title="【WebSocket切断・通信障害検知】",
+            message=(
+                f"**bitFlyer Lightning WebSocketストリームの切断を検知しました。**\n\n"
+                f"• **市場**: `{self.product_code}`\n"
+                f"• **要因**: `{reason}`\n"
+                f"• **状態**: 自動再接続ループが継続実行中です。"
+            ),
+            level="warning",
         )
 
     def _on_ticks_received(self, ticks: List[Dict[str, Any]], stats: Dict[str, Any]):
@@ -189,6 +218,22 @@ class AntigravityRunner:
             s_info["entry_time"] = None
             sign = "+" if trade_pnl >= 0 else ""
             print(f"[WS-ms] 🎯 【ミリ秒手仕舞い】[{name}] 損益: {sign}{trade_pnl:.1f} 円 | 理由: {reason}", flush=True)
+
+            # 大幅な収益実現または大幅な損失発生時の即時速報 (定期報告チャンネル宛)
+            if abs(trade_pnl) >= 20.0:
+                try:
+                    self.notifier.send_significant_trade_report(
+                        strategy_name=name,
+                        side=side,
+                        size_btc=abs(pos),
+                        entry_price=ep,
+                        exit_price=price,
+                        pnl_jpy=trade_pnl,
+                        reason=reason,
+                        symbol=self.product_code,
+                    )
+                except Exception as ex:
+                    print(f"[AntigravityRunner] 決済速報送信失敗: {ex}", flush=True)
         elif pos == 0:
             # 新規エントリー
             trade_size = self.order_size
@@ -230,22 +275,51 @@ class AntigravityRunner:
 
     def check_system_resources_and_remediate(self, force: bool = False):
         """
-        1時間に1回（毎時00分正時またはCPU/MEM/DISK逼迫時）にサーバーリソースを診断し、
-        自動改善策（GC/ログ縮退/一時ファイル削除）を実行してDiscordのアラートチャンネルへ送信。
+        サーバーリソース（CPU/MEM/DISK）を常時監視し、
+        圧迫検知時は直ちに（その都度）緊急アラートを発報し自己修復を実行。
+        定時（毎時00分正時）には健全性レポートを送信。
         """
         now = time.time()
         now_jst = get_jst_now()
         is_on_the_hour = (now_jst.minute == 0 and (now - self.last_resource_check_time > 120.0))
         is_interval = (now - self.last_resource_check_time >= self.report_interval_sec)
 
-        # 10分おきに高負荷クイックチェック（85%超えの早期検知）
-        should_check_early = (now - self.last_resource_alert_time >= 600.0)
+        # 30秒ごとに高負荷・圧迫の早期検知チェック
+        should_check_early = (now - self.last_resource_alert_time >= 30.0)
 
         if force or is_on_the_hour or is_interval or should_check_early:
             metrics = self.sys_monitor.collect_all_metrics()
-            is_anomaly = metrics.get("is_warning", False) or metrics.get("is_critical", False)
+            is_warning = metrics.get("is_warning", False)
+            is_critical = metrics.get("is_critical", False)
+            is_anomaly = is_warning or is_critical
 
-            if force or is_on_the_hour or is_interval or is_anomaly:
+            if is_anomaly:
+                # 異常検知時：クールダウンが経過しているか、またはcriticalへの昇格時に即時通報
+                if force or (now - self.last_resource_alert_time >= 300.0) or is_critical:
+                    actions = self.sys_monitor.execute_remediation(metrics)
+                    reasons = []
+                    disk = metrics.get("disk", {})
+                    mem = metrics.get("memory", {})
+                    cpu = metrics.get("cpu_pct", 0.0)
+                    if disk.get("used_pct", 0.0) >= self.sys_monitor.disk_warning_pct:
+                        reasons.append(f"ディスク容量逼迫 ({disk.get('used_pct', 0.0):.1f}% 使用中)")
+                    if mem.get("used_pct", 0.0) >= self.sys_monitor.mem_warning_pct:
+                        reasons.append(f"メモリ逼迫 ({mem.get('used_pct', 0.0):.1f}% 使用中)")
+                    if cpu >= self.sys_monitor.cpu_warning_pct:
+                        reasons.append(f"CPU高負荷逼迫 ({cpu:.1f}%)")
+
+                    level = "critical" if is_critical else "warning"
+                    self.notifier.send_resource_pressure_alert(
+                        metrics=metrics,
+                        trigger_reasons=reasons,
+                        remediation_actions=actions,
+                        server_name=f"Antigravity HFT ({self.product_code})",
+                        level=level,
+                    )
+                    self.last_resource_alert_time = now
+                    self.last_resource_check_time = now
+            elif force or is_on_the_hour or is_interval:
+                # 正常時の定時診断レポート
                 actions = self.sys_monitor.execute_remediation(metrics)
                 self.notifier.send_system_resource_report(
                     metrics=metrics,
@@ -253,8 +327,6 @@ class AntigravityRunner:
                     server_name=f"Antigravity HFT ({self.product_code})",
                 )
                 self.last_resource_check_time = now
-                if is_anomaly:
-                    self.last_resource_alert_time = now
 
     def start(self):
         """取引実行を開始"""

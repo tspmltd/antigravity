@@ -13,17 +13,23 @@ class PeakDrawdownCircuitBreaker:
     def __init__(
         self,
         max_drawdown_limit_jpy: float = 3000.0,
+        warning_ratio: float = 0.70,
         cooldown_seconds: float = 300.0,
         on_trip_callback: Optional[Callable[[str, float, float], None]] = None,
         on_resume_callback: Optional[Callable[[str], None]] = None,
+        on_warning_callback: Optional[Callable[[str, float, float], None]] = None,
     ):
         self.max_drawdown_limit_jpy = max_drawdown_limit_jpy
+        self.warning_ratio = warning_ratio
+        self.warning_drawdown_limit_jpy = max_drawdown_limit_jpy * warning_ratio
         self.cooldown_seconds = cooldown_seconds
         self.on_trip_callback = on_trip_callback
         self.on_resume_callback = on_resume_callback
+        self.on_warning_callback = on_warning_callback
 
         self.peak_pnl: float = 0.0
         self.is_halted: bool = False
+        self.is_warning_active: bool = False
         self.halt_start_time: Optional[float] = None
         self.trip_count: int = 0
         self.last_trip_reason: str = ""
@@ -53,10 +59,31 @@ class PeakDrawdownCircuitBreaker:
             )
             self.trip(reason=reason, current_dd=current_dd, current_total_pnl=current_total_pnl)
 
+        # 早期警戒チェック（許容上限の70%超過）
+        elif current_dd >= self.warning_drawdown_limit_jpy:
+            if not self.is_warning_active:
+                self.is_warning_active = True
+                pct = (current_dd / self.max_drawdown_limit_jpy) * 100.0 if self.max_drawdown_limit_jpy > 0 else 0.0
+                reason = (
+                    f"許容最大ドローダウンの警戒水準到達 "
+                    f"(下落額: {current_dd:,.1f} 円 / 許容限度: {self.max_drawdown_limit_jpy:,.0f} 円 [{pct:.1f}%])"
+                )
+                print(f"[CircuitBreaker] ⚠️ DRAWDOWN WARNING: {reason}", flush=True)
+                if self.on_warning_callback:
+                    try:
+                        self.on_warning_callback(reason, current_dd, current_total_pnl)
+                    except Exception as ex:
+                        print(f"[CircuitBreaker] Error in on_warning_callback: {ex}", flush=True)
+
+        # ドローダウンが50%以下まで回復した場合、警戒フラグをリセット
+        elif self.is_warning_active and current_dd < (self.warning_drawdown_limit_jpy * 0.7):
+            self.is_warning_active = False
+
         return {
             "is_halted": self.is_halted,
             "peak_pnl": self.peak_pnl,
             "current_dd": current_dd,
+            "is_warning_active": self.is_warning_active,
             "trip_count": self.trip_count,
             "halt_start_time": self.halt_start_time,
         }

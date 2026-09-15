@@ -44,7 +44,42 @@ def main():
         report_interval_sec=args.report_interval,
     )
 
-    runner.run_forever()
+    # 未処理例外発生時のクラッシュ・システムダウン即時通報フック
+    def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
+        import traceback
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        print(f"[CRITICAL] Uncaught exception:\n{tb_str}", file=sys.stderr, flush=True)
+        try:
+            runner.notifier.send_system_down_alert(
+                service_name=f"Antigravity HFT Engine ({args.symbol})",
+                reason=f"予期せぬ致命的例外によりプロセスが強制終了しました: {exc_value}",
+                log_snippet=tb_str,
+                auto_recovery_status="Watchdogによる自動再起動待ち",
+            )
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = handle_uncaught_exception
+
+    try:
+        runner.run_forever()
+    except KeyboardInterrupt:
+        print("[Antigravity] 手動停止 (KeyboardInterrupt) を検知しました。", flush=True)
+        runner.stop()
+    except Exception as ex:
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            runner.notifier.send_system_down_alert(
+                service_name=f"Antigravity HFT Engine ({args.symbol})",
+                reason=f"メインループ異常終了: {ex}",
+                log_snippet=tb,
+                auto_recovery_status="Watchdogによる自動再起動待ち",
+            )
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":
