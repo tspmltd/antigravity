@@ -106,6 +106,10 @@ class StrategyOptimizer(BaseAgent):
             code = code.replace('"fast_period": 12', '"fast_period": 10')
             code = code.replace('"slow_period": 26', '"slow_period": 30')
             changes.append("EMAスパン調整(10, 30)")
+        elif "grid_spacing_atr" in code:
+            code = code.replace('"grid_spacing_atr": 0.8', '"grid_spacing_atr": 1.0')
+            code = code.replace('"bb_period": 20', '"bb_period": 15')
+            changes.append("グリッド間隔拡大(1.0 ATR) & BB周期適応(15)")
         elif "rsi_oversold" in code:
             code = code.replace('"rsi_oversold": 30', '"rsi_oversold": 25')
             code = code.replace('"rsi_overbought": 70', '"rsi_overbought": 75')
@@ -115,19 +119,30 @@ class StrategyOptimizer(BaseAgent):
             code = code.replace('"vol_filter_threshold": 1.5', '"vol_filter_threshold": 1.2')
             changes.append("スプレッド拡大(0.7) & ボラフィルター厳格化(1.2)")
 
-        # ドローダウン対策フィルターの注入 (未導入の場合)
-        if "regime_filter" not in code:
+        # トレンドフォロー戦略へのレジームフィルター注入 (未導入の場合のみ)
+        is_trend_strat = any(k in code for k in ["fast_period", "Donchian", "macd"])
+        if is_trend_strat and "# [OPTIMIZER_REGIME_FILTER]" not in code:
             injection = """
-        # Optimizer追加: レジームフィルター (200期間SMA立脚判定)
+        # [OPTIMIZER_REGIME_FILTER]: 上位足レジーム同方向エントリー限定
         df["ma_regime"] = df["close"].rolling(window=100).mean()
         trend_up = df["close"] > df["ma_regime"]
         trend_down = df["close"] < df["ma_regime"]
         df.loc[(df["signal"] == 1) & (~trend_up), "signal"] = 0
         df.loc[(df["signal"] == -1) & (~trend_down), "signal"] = 0
-        df["signal"] = df["signal"].replace(0, np.nan).ffill().fillna(0).astype(int)
         return df"""
             code = code.replace("return df", injection)
             changes.append("100SMAレジームフィルター追加")
+
+        # MM/グリッド逆張り戦略へのタイムアウト手仕舞いフィルター注入
+        is_mm_strat = any(k in code for k in ["grid_spacing_atr", "spread_multiplier", "InventorySkew"])
+        if is_mm_strat and "# [OPTIMIZER_MM_TIMEOUT]" not in code:
+            injection = """
+        # [OPTIMIZER_MM_TIMEOUT]: MM在庫スタック防止 (最大20本での時間切れ手仕舞い)
+        holding_bars = (df["signal"] != 0).astype(int).groupby((df["signal"] == 0).cumsum()).cumsum()
+        df.loc[holding_bars >= 20, "signal"] = 0
+        return df"""
+            code = code.replace("return df", injection)
+            changes.append("MM在庫滞留タイムアウト手仕舞い(20本)追加")
 
         summary = " + ".join(changes) if changes else f"パラメータチューニング (iter {next_iter})"
         return code, summary

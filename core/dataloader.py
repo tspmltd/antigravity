@@ -96,11 +96,23 @@ class DataLoader:
         if source == "binance":
             df = cls._fetch_binance_klines(symbol=symbol, interval=timeframe, limit=limit)
         elif source == "bitflyer":
-            df = cls._fetch_bitflyer_executions_as_ohlcv(symbol=symbol, timeframe=timeframe, max_executions=max(limit * 10, 15000))
+            df = cls._fetch_bitflyer_executions_as_ohlcv(symbol=symbol, timeframe=timeframe, max_executions=max(limit * 20, 30000))
         elif source == "gmo":
             df = cls._fetch_gmo_klines(symbol=symbol, interval=timeframe)
         else:
             raise ValueError(f"未対応のデータソース: {source}")
+
+        # 既存キャッシュとのマージ（過去ローソク足の継続蓄積）
+        if os.path.exists(cache_path):
+            try:
+                old_df = cls.load_from_csv(cache_path)
+                if not old_df.empty and "timestamp" in old_df.columns:
+                    merged = pd.concat([old_df, df], ignore_index=True)
+                    merged["timestamp"] = pd.to_datetime(merged["timestamp"])
+                    merged = merged.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+                    df = merged
+            except Exception as ex:
+                print(f"[DataLoader] キャッシュマージ例外 (新規保存にフォールバック): {ex}")
 
         # キャッシュに保存
         df.to_csv(cache_path, index=False)
