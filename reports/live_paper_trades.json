@@ -196,5 +196,86 @@
     "exit_price": 11742342.0,
     "size": 0.001,
     "pnl": -0.5
+  },
+  {
+    "timestamp": "2026-09-17T01:13:47.996585",
+    "reason": "CLOSE_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11768016.0,
+    "exit_price": 11767019.0,
+    "size": 0.001,
+    "pnl": 1.0
+  },
+  {
+    "timestamp": "2026-09-17T01:14:18.692287",
+    "reason": "CLOSE_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11770451.0,
+    "exit_price": 11768360.0,
+    "size": 0.001,
+    "pnl": 2.1
+  },
+  {
+    "timestamp": "2026-09-17T01:14:49.621021",
+    "reason": "CLOSE_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11770483.0,
+    "exit_price": 11767449.0,
+    "size": 0.001,
+    "pnl": 3.0
+  },
+  {
+    "timestamp": "2026-09-17T01:28:16.933919",
+    "reason": "CLOSE_LONG",
+    "direction": "LONG",
+    "entry_price": 11750000.0,
+    "exit_price": 11753032.0,
+    "size": 0.001,
+    "pnl": 3.0
+  },
+  {
+    "timestamp": "2026-09-17T01:28:47.436298",
+    "reason": "CLOSE_LONG",
+    "direction": "LONG",
+    "entry_price": 11750775.0,
+    "exit_price": 11751417.0,
+    "size": 0.001,
+    "pnl": 0.6
+  },
+  {
+    "timestamp": "2026-09-17T01:29:02.773678",
+    "reason": "CLOSE_LONG",
+    "direction": "LONG",
+    "entry_price": 11750880.0,
+    "exit_price": 11749999.0,
+    "size": 0.001,
+    "pnl": -0.9
+  },
+  {
+    "timestamp": "2026-09-17T01:34:02.223103",
+    "reason": "CLOSE_LONG",
+    "direction": "LONG",
+    "entry_price": 11745930.0,
+    "exit_price": 11747172.0,
+    "size": 0.001,
+    "pnl": 1.2
+  },
+  {
+    "timestamp": "2026-09-17T01:43:45.596415",
+    "reason": "CLOSE_LONG",
+    "direction": "LONG",
+    "entry_price": 11737948.0,
+    "exit_price": 11740213.0,
+    "size": 0.001,
+    "pnl": 2.3
+  },
+  {
+    "timestamp": "2026-09-17T01:43:56.202536",
+    "reason": "CLOSE_LONG",
+    "direction": "LONG",
+    "entry_price": 11736895.0,
+    "exit_price": 11738937.0,
+    "size": 0.001,
+    "pnl": 2.0
   }
 ]
