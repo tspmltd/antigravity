@@ -61,15 +61,40 @@ class SingleStrategyState:
         self.win_trades: int = 0
         self.loss_trades: int = 0
         self.total_pnl: float = 0.0
+        self.total_pnl_bp: float = 0.0
         self.peak_pnl: float = 0.0
         self.max_dd: float = 0.0
         self.consecutive_losses: int = 0
         self.is_halted: bool = False
         self.halt_reason: str = ""
+        self.trades_history: List[Dict[str, Any]] = []
 
         # 直近の行動記録
         self.last_action: str = "INIT"
         self.last_reason: str = "Initial state"
+
+    def get_window_stats(self, hours: float = 1.0) -> Dict[str, Any]:
+        """指定ウィンドウ (1h または 24h) の成績を集計"""
+        now = time.time()
+        cutoff = now - (hours * 3600.0)
+        recent = [t for t in self.trades_history if t["ts"] >= cutoff]
+
+        total_t = len(recent)
+        win_t = sum(1 for t in recent if t["is_win"])
+        loss_t = total_t - win_t
+        pnl_jpy = sum(t["pnl_jpy"] for t in recent)
+        pnl_bp = sum(t["pnl_bp"] for t in recent)
+        wr = (win_t / total_t * 100.0) if total_t > 0 else 0.0
+
+        return {
+            "window_hours": hours,
+            "total_trades": total_t,
+            "win_trades": win_t,
+            "loss_trades": loss_t,
+            "win_rate_pct": round(wr, 1),
+            "pnl_jpy": round(pnl_jpy, 1),
+            "pnl_bp": round(pnl_bp, 2),
+        }
 
     def to_dict(self) -> Dict[str, Any]:
         win_rate = (self.win_trades / self.total_trades * 100) if self.total_trades > 0 else 0.0
@@ -85,6 +110,9 @@ class SingleStrategyState:
             "loss_trades": self.loss_trades,
             "win_rate_pct": round(win_rate, 1),
             "total_pnl_jpy": round(self.total_pnl, 1),
+            "total_pnl_bp": round(self.total_pnl_bp, 2),
+            "stats_1h": self.get_window_stats(1.0),
+            "stats_24h": self.get_window_stats(24.0),
             "max_dd_jpy": round(self.max_dd, 1),
             "is_halted": self.is_halted,
             "last_action": self.last_action,
@@ -320,9 +348,9 @@ class ApprovedStrategyArena:
             now_str = now.strftime("%H:%M:%S")
             print(
                 f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | "
-                f"🥇 {top1.strat_id[:12]}: ¥{top1.total_pnl:+,.1f} | "
-                f"🥈 {top2.strat_id[:12]}: ¥{top2.total_pnl:+,.1f} | "
-                f"🥉 {top3.strat_id[:12]}: ¥{top3.total_pnl:+,.1f}",
+                f"🥇 {top1.strat_id[:10]}: {top1.total_pnl_bp:+.1f}bp (¥{top1.total_pnl:+,.0f}) | "
+                f"🥈 {top2.strat_id[:10]}: {top2.total_pnl_bp:+.1f}bp (¥{top2.total_pnl:+,.0f}) | "
+                f"🥉 {top3.strat_id[:10]}: {top3.total_pnl_bp:+.1f}bp (¥{top3.total_pnl:+,.0f})",
                 flush=True
             )
 
@@ -349,6 +377,19 @@ class ApprovedStrategyArena:
 
     def _close_position(self, s: SingleStrategyState, price: float, pnl: float, reason: str):
         s.total_pnl += pnl
+        order_val = s.position_size * price if price > 0 else 12500.0
+        pnl_bp = (pnl / order_val) * 10000.0 if order_val > 0 else 0.0
+        s.total_pnl_bp += pnl_bp
+
+        now_ts = time.time()
+        is_win = pnl > 0
+        s.trades_history.append({
+            "ts": now_ts,
+            "pnl_jpy": pnl,
+            "pnl_bp": pnl_bp,
+            "is_win": is_win,
+        })
+
         if pnl > 0:
             s.win_trades += 1
             s.consecutive_losses = 0
@@ -365,7 +406,7 @@ class ApprovedStrategyArena:
 
         s.last_action = f"CLOSE_{s.position.upper()}"
         s.last_reason = reason
-        self._log_to_file(f"[{s.strat_id}] 📤 決済: {s.position.upper()} @ ¥{price:,.0f} | PnL: ¥{pnl:+,.1f} ({reason})")
+        self._log_to_file(f"[{s.strat_id}] 📤 決済: {s.position.upper()} @ ¥{price:,.0f} | PnL: {pnl_bp:+.2f}bp (¥{pnl:+,.1f}) ({reason})")
 
         s.position = None
         s.entry_price = 0.0
@@ -424,36 +465,44 @@ class ApprovedStrategyArena:
         self.notifier.post_dryrun_multicast({"embeds": [embed]})
 
     def _send_discord_summary_report(self, interrupted: bool = False):
-        sorted_strats = sorted(self.strategies.values(), key=lambda x: x.total_pnl, reverse=True)
+        sorted_strats = sorted(self.strategies.values(), key=lambda x: x.total_pnl_bp, reverse=True)
         total_arena_pnl = sum(s.total_pnl for s in sorted_strats)
+        total_arena_bp = sum(s.total_pnl_bp for s in sorted_strats)
         total_arena_trades = sum(s.total_trades for s in sorted_strats)
 
         elapsed_h = (time.time() - self.start_time) / 3600.0
-        title = "⚠️ 【承認済み12戦略 アリーナ 中断レポート】" if interrupted else "🏆 【承認済み12戦略 アリーナ 1時間定期成績ランキング】"
+        title = "⚠️ 【承認済み12戦略 アリーナ 中断レポート】" if interrupted else "🏆 【承認済み12戦略 アリーナ 定期成績ランキング (bp表示)】"
 
-        # ランキングテキスト作成
+        # ランキングテキスト作成 (1h & 24h 累積 bp 表示)
         rank_lines = []
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟", "1️⃣1️⃣", "1️⃣2️⃣"]
         for i, s in enumerate(sorted_strats):
             medal = medals[i] if i < len(medals) else f"{i+1}."
-            wr = (s.win_trades / s.total_trades * 100) if s.total_trades > 0 else 0.0
+            s_1h = s.get_window_stats(1.0)
+            s_24h = s.get_window_stats(24.0)
             pos = f"[{s.position.upper()}]" if s.position else "[FLAT]"
             rank_lines.append(
-                f"{medal} **`{s.strat_id[:16]}`** ({s.name}): **`¥{s.total_pnl:+,.1f}`** ({s.total_trades}戦/{wr:.0f}% {pos})"
+                f"{medal} **`{s.strat_id[:14]}`** ({s.name}) `{pos}`\n"
+                f"   • 1h: **`{s_1h['pnl_bp']:+.2f} bp`** ({s_1h['total_trades']}戦/{s_1h['win_rate_pct']:.0f}% / ¥{s_1h['pnl_jpy']:+,.0f})\n"
+                f"   • 24h: **`{s_24h['pnl_bp']:+.2f} bp`** ({s_24h['total_trades']}戦/{s_24h['win_rate_pct']:.0f}% / ¥{s_24h['pnl_jpy']:+,.0f})"
             )
 
         embed = {
             "title": title,
-            "description": f"観測経過時間: **{elapsed_h:.2f} 時間** | 参戦アルゴ: **{len(sorted_strats)} 戦略**\n合算損益: **`¥{total_arena_pnl:+,.1f}`** (総取引数: {total_arena_trades}回)",
-            "color": 0x2ECC71 if total_arena_pnl >= 0 else 0xE74C3C,
+            "description": (
+                f"観測経過時間: **{elapsed_h:.2f} 時間** | 参戦アルゴ: **{len(sorted_strats)} 戦略**\n"
+                f"合算損益: **`{total_arena_bp:+.2f} bp`** (`¥{total_arena_pnl:+,.1f}`, 総取引数: {total_arena_trades}回)\n"
+                f"🔒 運用方針: **自動調整完全禁止 (FROZEN)**"
+            ),
+            "color": 0x2ECC71 if total_arena_bp >= 0 else 0xE74C3C,
             "fields": [
                 {
-                    "name": "📊 リアルタイム成績順位表 (PnL順)",
+                    "name": "📊 リアルタイム成績順位表 (TOP 6 / bp順)",
                     "value": "\n".join(rank_lines[:6]),
                     "inline": False,
                 },
                 {
-                    "name": "📊 下位グループ",
+                    "name": "📊 下位グループ (7〜12位)",
                     "value": "\n".join(rank_lines[6:]),
                     "inline": False,
                 },

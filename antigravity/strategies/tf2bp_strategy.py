@@ -57,6 +57,8 @@ class TF2BPStrategy:
         self.total_trades: int = 0
         self.win_trades: int = 0
         self.total_pnl: float = 0.0
+        self.total_pnl_bp: float = 0.0
+        self.trades_history: List[Dict[str, Any]] = []
 
     def set_user_override(self, new_params: Dict[str, Any], reason: str = "ユーザー指示による調整"):
         """ユーザーからの明示的な指示によるパラメータ変更"""
@@ -180,19 +182,57 @@ class TF2BPStrategy:
 
         return {"action": "hold", "reason": "WAIT_MOMENTUM_2BP"}
 
-    def record_trade(self, side: str, fill_price: float, pnl: float):
-        """約定および損益の記録"""
-        self.total_trades += 1
-        if pnl > 0:
-            self.win_trades += 1
-        self.total_pnl += pnl
+    def record_trade(self, side: str, fill_price: float, pnl: float, mid_price: float = 0.0):
+        """約定および損益の記録 (bp換算対応)"""
+        now = time.time()
+        eval_price = mid_price if mid_price > 0 else fill_price
+        order_val_jpy = self.params["order_size_btc"] * eval_price if eval_price > 0 else 12500.0
+        pnl_bp = (pnl / order_val_jpy) * 10000.0 if order_val_jpy > 0 else 0.0
 
-        if side in ("buy", "sell"):
-            self.position_side = side
-            self.entry_price = fill_price
-            self.peak_price = fill_price
-            self.entry_time = time.time()
-        elif side in ("close_buy", "close_sell", "exit", "cancel"):
+        if side in ("close_buy", "close_sell", "exit", "cancel"):
+            self.total_trades += 1
+            if pnl > 0:
+                self.win_trades += 1
+            self.total_pnl += pnl
+            self.total_pnl_bp += pnl_bp
+            self.trades_history.append({
+                "ts": now,
+                "side": self.position_side,
+                "exit_side": side,
+                "fill_price": fill_price,
+                "pnl_jpy": round(pnl, 1),
+                "pnl_bp": round(pnl_bp, 2),
+                "is_win": (pnl > 0),
+            })
             self.position_side = None
             self.entry_price = 0.0
             self.peak_price = 0.0
+
+        elif side in ("buy", "sell"):
+            self.position_side = side
+            self.entry_price = fill_price
+            self.peak_price = fill_price
+            self.entry_time = now
+
+    def get_window_stats(self, hours: float = 1.0) -> Dict[str, Any]:
+        """指定ウィンドウ (1h または 24h) の成績を集計"""
+        now = time.time()
+        cutoff = now - (hours * 3600.0)
+        recent_trades = [t for t in self.trades_history if t["ts"] >= cutoff]
+
+        total_t = len(recent_trades)
+        win_t = sum(1 for t in recent_trades if t["is_win"])
+        loss_t = total_t - win_t
+        pnl_jpy = sum(t["pnl_jpy"] for t in recent_trades)
+        pnl_bp = sum(t["pnl_bp"] for t in recent_trades)
+        wr = (win_t / total_t * 100.0) if total_t > 0 else 0.0
+
+        return {
+            "window_hours": hours,
+            "total_trades": total_t,
+            "win_trades": win_t,
+            "loss_trades": loss_t,
+            "win_rate_pct": round(wr, 1),
+            "pnl_jpy": round(pnl_jpy, 1),
+            "pnl_bp": round(pnl_bp, 2),
+        }

@@ -251,4 +251,47 @@ GIT正本（`FIX.me` 2026年9月11日〜14日停止直前確定記録 CSR-504 / 
 4. **Watchdog 常駐登録**:
    - `hourly_dryrun_reporter` を監視対象に組み込み、毎時の定期配信を恒久担保。
 
+---
+
+## 12. 成績の bp（ベーシスポイント）表示化 & 1時間・24時間累積 二重集計体制 (2026-09-19 02:33 JST)
+
+ユーザーからの**「全て成績はｂｐ表示で、1時間と２４時間のるいせきで」**という指示を完全実装。
+
+### 1. 損益表示の bp（ベーシスポイント）統一
+- **計算式**:
+  $$\text{PnL (bp)} = \left( \frac{\text{損益 (JPY)}}{\text{発注数量 (BTC)} \times \text{約定価格 (Mid/LTP)}} \right) \times 10,000$$
+  - 発注ロット 0.001 BTC（約12,650円）の場合、1円の損益は約 **0.79 bp**。
+- **適用対象**:
+  - ① UMM (CSR-504)
+  - ② TF2BP (CSR-499)
+  - ③ 承認済み12戦略アリーナ（各戦略およびアリーナ合計）
+  - ④ 全Dry-run 総合計
+  - ⑤ コンソールリアルタイム出力（`+XX.Xbp (¥+XX)` 表記）
+  - ⑥ Discord Embed 毎時定期レポート（bp を第一主表記とし、円損益・取引数・勝率を補足併記）
+
+### 2. 直近1時間 (1h) & 過去24時間累積 (24h) のローリング二重集計
+- 各戦略に `trades_history: List[Dict[str, Any]]` を実装（各取引のタイムスタンプ `ts`、`pnl_jpy`、`pnl_bp`、`is_win` を永続保持）。
+- `get_window_stats(hours)` メソッドにより、指定した時間枠（1.0h および 24.0h）内の：
+  - 取引回数 (`total_trades`)
+  - 勝ち数 / 負け数 (`win_trades` / `loss_trades`)
+  - 勝率 (`win_rate_pct`)
+  - 損益 (bp) (`pnl_bp`)
+  - 損益 (円) (`pnl_jpy`)
+  をミリ秒精度で集計。
+- 状態永続化 JSON (`data/dryrun_umm_tf2bp_state.json`, `data/dryrun_approved_arena_state.json`) に `stats_1h` および `stats_24h` フィールドを追加。
+
+### 3. Watchdog プロセス検知バグの修正
+- **問題**: `watchdog.py` 内のキーワード指定が `hourly_dryrun_reporter.py`（拡張子付き）となっていたが、実際の起動コマンドは `-m antigravity.quant_pipeline.hourly_dryrun_reporter`（拡張子なし）であったため、プロセスが存在しないと誤判定され、15秒周期で重複起動が試行されていた。
+- **対策**: キーワードを `hourly_dryrun_reporter` に修正し、重複プロセスを一掃。PID `1233574` で単一常駐が正常に確立。
+
+### 4. 現在の稼働中プロセス一覧 (2026-09-19 02:33 JST 更新)
+| プロセス名 | PID | 役割 | 損益表示 |
+| :--- | :---: | :--- | :---: |
+| `antigravity.risk_guard.watchdog` | `1233425` | 24時間死活監視・自動再起動・リソース保護 | - |
+| `antigravity.quant_pipeline.run_pipeline` | `1233546` | 4AGENT 合議シミュレーション | JPY/bp |
+| `antigravity.quant_pipeline.run_dryrun_approved_arena` | `1233570` | 承認済み12戦略アリーナ (FROZEN) | **1h & 24h bp** |
+| `antigravity.quant_pipeline.hourly_dryrun_reporter` | `1233574` | 毎時ジャスト 統合レポートマルチキャスト配信 | **1h & 24h bp** |
+| `antigravity.quant_pipeline.run_dryrun_umm_tf2bp_24h` | `1233603` | UMM & TF2BP 24時間連続観察 (FROZEN) | **1h & 24h bp** |
+
+
 

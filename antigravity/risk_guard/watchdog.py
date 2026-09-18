@@ -240,7 +240,7 @@ class WatchdogSentinel:
             },
             "hourly_dryrun_reporter": {
                 "name": "DRYRUN 1時間毎 統合定期レポート配信デーモン",
-                "keywords": ["hourly_dryrun_reporter.py"],
+                "keywords": ["hourly_dryrun_reporter"],
                 "exclude": ["watchdog"],
                 "log_file": os.path.join(self.base_dir, "logs", "hourly_dryrun_reporter.log"),
                 "check_heartbeat": False,

@@ -50,7 +50,7 @@ class HourlyDryRunReporter:
         return {}
 
     def build_and_send_report(self, trigger_reason: str = "毎時定期報告") -> bool:
-        """全 Dry-run 状態を集約して Discord へマルチキャスト送信"""
+        """全 Dry-run 状態を集約して Discord へマルチキャスト送信 (全て bp 表示、1h & 24h 累積)"""
         umm_tf = self._load_json(UMM_TF_STATE)
         arena = self._load_json(ARENA_STATE)
         council = self._load_json(COUNCIL_STATE)
@@ -58,36 +58,76 @@ class HourlyDryRunReporter:
         now_jst = datetime.now(JST)
         now_str = now_jst.strftime("%Y-%m-%d %H:%M:%S JST")
 
-        # 1. UMM & TF2BP データ
+        # 1. UMM & TF2BP データ (1h & 24h)
         umm = umm_tf.get("umm", {})
         tf = umm_tf.get("tf2bp", {})
-        umm_pnl = umm.get("total_pnl", 0.0)
-        tf_pnl = tf.get("total_pnl", 0.0)
-        umm_trades = umm.get("total_trades", 0)
-        umm_wins = umm.get("win_trades", 0)
-        tf_trades = tf.get("total_trades", 0)
-        tf_wins = tf.get("win_trades", 0)
+
+        umm_1h = umm.get("stats_1h", {})
+        umm_24h = umm.get("stats_24h", {})
+        umm_1h_bp = umm_1h.get("pnl_bp", 0.0)
+        umm_24h_bp = umm_24h.get("pnl_bp", umm.get("total_pnl_bp", 0.0))
+        umm_1h_jpy = umm_1h.get("pnl_jpy", 0.0)
+        umm_24h_jpy = umm_24h.get("pnl_jpy", umm.get("total_pnl", 0.0))
+        umm_1h_t = umm_1h.get("total_trades", 0)
+        umm_24h_t = umm_24h.get("total_trades", umm.get("total_trades", 0))
+        umm_1h_wr = umm_1h.get("win_rate_pct", 0.0)
+        umm_24h_wr = umm_24h.get("win_rate_pct", (umm.get("win_trades", 0) / umm_24h_t * 100) if umm_24h_t > 0 else 0.0)
         umm_pos = umm.get("position", "FLAT")
+
+        tf_1h = tf.get("stats_1h", {})
+        tf_24h = tf.get("stats_24h", {})
+        tf_1h_bp = tf_1h.get("pnl_bp", 0.0)
+        tf_24h_bp = tf_24h.get("pnl_bp", tf.get("total_pnl_bp", 0.0))
+        tf_1h_jpy = tf_1h.get("pnl_jpy", 0.0)
+        tf_24h_jpy = tf_24h.get("pnl_jpy", tf.get("total_pnl", 0.0))
+        tf_1h_t = tf_1h.get("total_trades", 0)
+        tf_24h_t = tf_24h.get("total_trades", tf.get("total_trades", 0))
+        tf_1h_wr = tf_1h.get("win_rate_pct", 0.0)
+        tf_24h_wr = tf_24h.get("win_rate_pct", (tf.get("win_trades", 0) / tf_24h_t * 100) if tf_24h_t > 0 else 0.0)
         tf_pos = tf.get("position", "FLAT")
 
-        umm_wr = (umm_wins / umm_trades * 100) if umm_trades > 0 else 0.0
-        tf_wr = (tf_wins / tf_trades * 100) if tf_trades > 0 else 0.0
+        umm_tf_1h_bp = umm_1h_bp + tf_1h_bp
+        umm_tf_24h_bp = umm_24h_bp + tf_24h_bp
+        umm_tf_1h_jpy = umm_1h_jpy + tf_1h_jpy
+        umm_tf_24h_jpy = umm_24h_jpy + tf_24h_jpy
 
-        # 2. 承認済み12戦略アリーナ データ
+        # 2. 承認済み12戦略アリーナ データ (1h & 24h)
         ranking = arena.get("ranking", [])
-        arena_total_pnl = sum(r.get("total_pnl_jpy", 0.0) for r in ranking)
+        # 24h bp 順（または total_pnl_bp 順）にソート
+        ranking_sorted = sorted(
+            ranking,
+            key=lambda r: r.get("stats_24h", {}).get("pnl_bp", r.get("total_pnl_bp", 0.0)),
+            reverse=True
+        )
+
+        arena_1h_bp = sum(r.get("stats_1h", {}).get("pnl_bp", 0.0) for r in ranking)
+        arena_24h_bp = sum(r.get("stats_24h", {}).get("pnl_bp", r.get("total_pnl_bp", 0.0)) for r in ranking)
+        arena_1h_jpy = sum(r.get("stats_1h", {}).get("pnl_jpy", 0.0) for r in ranking)
+        arena_24h_jpy = sum(r.get("stats_24h", {}).get("pnl_jpy", r.get("total_pnl_jpy", 0.0)) for r in ranking)
         arena_total_trades = sum(r.get("total_trades", 0) for r in ranking)
 
         rank_lines = []
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-        for i, r in enumerate(ranking[:5]):
+        for i, r in enumerate(ranking_sorted[:5]):
             medal = medals[i] if i < len(medals) else f"{i+1}."
-            pnl_val = r.get("total_pnl_jpy", 0.0)
-            n_t = r.get("total_trades", 0)
-            wr_v = r.get("win_rate_pct", 0.0)
+            s_id = r.get("strat_id", "")[:12]
+            s_name = r.get("name", "")
             pos_v = r.get("position", "FLAT")
+            r_1h = r.get("stats_1h", {})
+            r_24h = r.get("stats_24h", {})
+            r_1h_bp = r_1h.get("pnl_bp", 0.0)
+            r_24h_bp = r_24h.get("pnl_bp", r.get("total_pnl_bp", 0.0))
+            r_1h_t = r_1h.get("total_trades", 0)
+            r_24h_t = r_24h.get("total_trades", r.get("total_trades", 0))
+            r_1h_wr = r_1h.get("win_rate_pct", 0.0)
+            r_24h_wr = r_24h.get("win_rate_pct", r.get("win_rate_pct", 0.0))
+            r_1h_jpy = r_1h.get("pnl_jpy", 0.0)
+            r_24h_jpy = r_24h.get("pnl_jpy", r.get("total_pnl_jpy", 0.0))
+
             rank_lines.append(
-                f"{medal} **`{r.get('strat_id')[:14]}`** ({r.get('name')}): **`¥{pnl_val:+,.1f}`** ({n_t}戦/{wr_v:.0f}% `[{pos_v}]`)"
+                f"{medal} **`{s_id}`** ({s_name}) `[{pos_v}]`\n"
+                f"   • 1h: **`{r_1h_bp:+.2f} bp`** ({r_1h_t}戦/{r_1h_wr:.0f}% / ¥{r_1h_jpy:+,.0f})\n"
+                f"   • 24h: **`{r_24h_bp:+.2f} bp`** ({r_24h_t}戦/{r_24h_wr:.0f}% / ¥{r_24h_jpy:+,.0f})"
             )
 
         # 3. 4AGENT 評議会合議データ
@@ -96,32 +136,44 @@ class HourlyDryRunReporter:
         adv_score = verdict.get("adverse_score", 0.0)
         action = verdict.get("recommended_action", "HOLD")
 
-        # 4. 全体サマリー合算損益
-        total_pnl = umm_pnl + tf_pnl + arena_total_pnl
-        color = 0x2ECC71 if total_pnl >= 0 else 0xE67E22
+        # 4. 全Dry-run 合算損益 (1h & 24h)
+        total_1h_bp = umm_tf_1h_bp + arena_1h_bp
+        total_24h_bp = umm_tf_24h_bp + arena_24h_bp
+        total_1h_jpy = umm_tf_1h_jpy + arena_1h_jpy
+        total_24h_jpy = umm_tf_24h_jpy + arena_24h_jpy
+
+        color = 0x2ECC71 if total_24h_bp >= 0 else 0xE74C3C
 
         embed = {
             "title": f"📊 【DRYRUN 1時間毎 統合定期レポート】 ({trigger_reason})",
             "description": (
                 f"🕒 **集計時刻**: `{now_str}`\n"
-                f"💰 **全Dry-run 合算累計損益**: **`¥{total_pnl:+,.1f}`**\n"
-                f"🏛️ **4AGENT合議ステータス**: 相場レジーム:`{regime}` | 逆選択スコア:`{adv_score:.2f}` | 判定:`{action}`\n"
-                f"🔒 **パラメータ運用方針**: **自動調整完全禁止 (FROZEN / MANUAL-ONLY)**"
+                f"🎯 **直近 1時間 (1h) 全体合算**: **`{total_1h_bp:+.2f} bp`** (`¥{total_1h_jpy:+,.1f}`)\n"
+                f"📈 **過去24時間 (24h) 累積合算**: **`{total_24h_bp:+.2f} bp`** (`¥{total_24h_jpy:+,.1f}`)\n"
+                f"🏛️ **4AGENT合議**: 相場レジーム:`{regime}` | 逆選択スコア:`{adv_score:.2f}` | 判定:`{action}`\n"
+                f"🔒 **運用方針**: **自動調整完全禁止 (FROZEN / MANUAL-ONLY)**"
             ),
             "color": color,
             "fields": [
                 {
                     "name": "① UMM ＆ TF2BP 24時間観察 (最新確定版 CSR-504/499)",
                     "value": (
-                        f"• **UMM (在庫スキューMM)**: **`¥{umm_pnl:+,.1f}`** ({umm_trades}戦/{umm_wr:.0f}%, 建玉:`{umm_pos}`)\n"
-                        f"• **TF2BP (2bpトレンド)**: **`¥{tf_pnl:+,.1f}`** ({tf_trades}戦/{tf_wr:.0f}%, 建玉:`{tf_pos}`)\n"
-                        f"• 小計損益: **`¥{(umm_pnl + tf_pnl):+,.1f}`**"
+                        f"• **UMM (在庫スキューMM)** `[{umm_pos}]`:\n"
+                        f"   • 1h: **`{umm_1h_bp:+.2f} bp`** ({umm_1h_t}戦/{umm_1h_wr:.0f}% / ¥{umm_1h_jpy:+,.0f})\n"
+                        f"   • 24h: **`{umm_24h_bp:+.2f} bp`** ({umm_24h_t}戦/{umm_24h_wr:.0f}% / ¥{umm_24h_jpy:+,.0f})\n"
+                        f"• **TF2BP (2bpトレンド)** `[{tf_pos}]`:\n"
+                        f"   • 1h: **`{tf_1h_bp:+.2f} bp`** ({tf_1h_t}戦/{tf_1h_wr:.0f}% / ¥{tf_1h_jpy:+,.0f})\n"
+                        f"   • 24h: **`{tf_24h_bp:+.2f} bp`** ({tf_24h_t}戦/{tf_24h_wr:.0f}% / ¥{tf_24h_jpy:+,.0f})\n"
+                        f"• **小計**: 1h: **`{umm_tf_1h_bp:+.2f} bp`** (`¥{umm_tf_1h_jpy:+,.0f}`) | 24h: **`{umm_tf_24h_bp:+.2f} bp`** (`¥{umm_tf_24h_jpy:+,.0f}`)"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": f"② 承認済み12戦略 アリーナ (TOP5 / 全12戦略 PnL: ¥{arena_total_pnl:+,.1f})",
-                    "value": "\n".join(rank_lines) if rank_lines else "(集計中)",
+                    "name": f"② 承認済み12戦略 アリーナ (TOP5 / 全12戦略 総取引: {arena_total_trades}回)",
+                    "value": (
+                        ("\n".join(rank_lines) + "\n" if rank_lines else "(集計中)\n") +
+                        f"• **アリーナ合算**: 1h: **`{arena_1h_bp:+.2f} bp`** (`¥{arena_1h_jpy:+,.0f}`) | 24h: **`{arena_24h_bp:+.2f} bp`** (`¥{arena_24h_jpy:+,.0f}`)"
+                    ),
                     "inline": False,
                 },
                 {
@@ -135,7 +187,7 @@ class HourlyDryRunReporter:
         }
 
         success = self.notifier.post_dryrun_multicast({"embeds": [embed]})
-        log_msg = f"[{now_str}] 統合定期レポート送信: {'成功' if success else '失敗'} (合算PnL: ¥{total_pnl:+,.1f})"
+        log_msg = f"[{now_str}] 統合定期レポート送信: {'成功' if success else '失敗'} (1h: {total_1h_bp:+.2f}bp, 24h: {total_24h_bp:+.2f}bp)"
         print(log_msg, flush=True)
         self._log_to_file(log_msg)
         return success

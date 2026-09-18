@@ -166,8 +166,8 @@ class DryRunObservation24h:
                     spread_val = snap.best_ask - snap.best_bid
                     adv_str = f"{adv_state.get('adverse_side', 'none')[:1].upper()}:{adv_score:.2f}"
 
-                    umm_pos_str = f"{self.umm.position_side.upper() if self.umm.position_side else 'FLAT'} (¥{self.umm.total_pnl:+.1f})"
-                    tf_pos_str = f"{self.tf2bp.position_side.upper() if self.tf2bp.position_side else 'FLAT'} (¥{self.tf2bp.total_pnl:+.1f})"
+                    umm_pos_str = f"{self.umm.position_side.upper() if self.umm.position_side else 'FLAT'} ({self.umm.total_pnl_bp:+.1f}bp)"
+                    tf_pos_str = f"{self.tf2bp.position_side.upper() if self.tf2bp.position_side else 'FLAT'} ({self.tf2bp.total_pnl_bp:+.1f}bp)"
 
                     print(
                         f" [{time_str}] | {snap.mid_price:12,.0f} | ¥{spread_val:5,.0f} | {adv_str:7} | "
@@ -213,17 +213,24 @@ class DryRunObservation24h:
             if strat.position_side:
                 fill_price = snap.best_bid if strat.position_side == "buy" else snap.best_ask
                 pnl = res.get("expected_pnl", res.get("pnl", 0.0))
-                strat.record_trade(action, fill_price, pnl)
+                strat.record_trade(action, fill_price, pnl, mid_price=snap.mid_price)
                 acc["pnl"] += pnl
                 if pnl > 0:
                     acc["wins"] += 1
                 else:
                     acc["losses"] += 1
-                log_line = f"[{name}] 📤 エグジット/キャンセル ({action}): PnL: {pnl:+.1f}円 @ ¥{fill_price:,.0f} ({res.get('reason')})"
+                order_val = strat.params["order_size_btc"] * snap.mid_price if snap.mid_price > 0 else 12500.0
+                pnl_bp = (pnl / order_val) * 10000.0 if order_val > 0 else 0.0
+                log_line = f"[{name}] 📤 エグジット/キャンセル ({action}): PnL: {pnl:+.1f}円 ({pnl_bp:+.2f}bp) @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
 
     def _persist_state(self, snap: OrderbookMicroSnapshot, elapsed_sec: float):
         try:
+            umm_1h = self.umm.get_window_stats(1.0)
+            umm_24h = self.umm.get_window_stats(24.0)
+            tf_1h = self.tf2bp.get_window_stats(1.0)
+            tf_24h = self.tf2bp.get_window_stats(24.0)
+
             state = {
                 "timestamp": int(time.time() * 1000),
                 "elapsed_hours": round(elapsed_sec / 3600.0, 2),
@@ -237,6 +244,9 @@ class DryRunObservation24h:
                     "total_trades": self.umm.total_trades,
                     "win_trades": self.umm.win_trades,
                     "total_pnl": round(self.umm.total_pnl, 1),
+                    "total_pnl_bp": round(self.umm.total_pnl_bp, 2),
+                    "stats_1h": umm_1h,
+                    "stats_24h": umm_24h,
                     "params": self.umm.params,
                     "frozen": self.umm.frozen_mode,
                     "user_directive": self.umm.last_user_directive,
@@ -246,6 +256,9 @@ class DryRunObservation24h:
                     "total_trades": self.tf2bp.total_trades,
                     "win_trades": self.tf2bp.win_trades,
                     "total_pnl": round(self.tf2bp.total_pnl, 1),
+                    "total_pnl_bp": round(self.tf2bp.total_pnl_bp, 2),
+                    "stats_1h": tf_1h,
+                    "stats_24h": tf_24h,
                     "params": self.tf2bp.params,
                     "frozen": self.tf2bp.frozen_mode,
                     "user_directive": self.tf2bp.last_user_directive,
