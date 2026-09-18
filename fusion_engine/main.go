@@ -157,9 +157,16 @@ func runMultiDaemon(profiles []MarketProfile, balanceJpy, riskBudget float64, po
 			initAtr = 40.0
 		}
 
-		feeder := NewSyntheticFeeder(prof.Symbol, initPrice, prof.TickSize, initAtr, 1000)
+		// 省エネ高効率インターバル (BTC: 20ms=秒50回, その他: 100ms=秒10回 でCPU圧迫を恒久防止)
+		intervalUs := 20000
+		if prof.Symbol != "BTCJPY" {
+			intervalUs = 100000
+		}
+		feeder := NewSyntheticFeeder(prof.Symbol, initPrice, prof.TickSize, initAtr, intervalUs)
+
 		doneCh := make(chan struct{})
 		feederDones = append(feederDones, doneCh)
+
 
 		go func(f *SyntheticFeeder, tCh chan Trade, sCh chan MarketSnapshot, dCh chan struct{}) {
 			_ = f.Start(tCh, sCh, dCh)

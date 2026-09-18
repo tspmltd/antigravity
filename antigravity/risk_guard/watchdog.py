@@ -205,6 +205,23 @@ class WatchdogSentinel:
                 "is_down": False,
                 "restart_attempts": 0,
             },
+            "umm_tf2bp_24h": {
+                "name": "UMM & TF2BP 24時間連続Dry-run観測エンジン (固定パラメータ・自動調整禁止)",
+                "keywords": ["run_dryrun_umm_tf2bp_24h"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "dryrun_umm_tf2bp_24h.log"),
+                "check_heartbeat": True,
+                "start_cmd": [
+                    self.python_bin, "-u", "-m", "antigravity.quant_pipeline.run_dryrun_umm_tf2bp_24h",
+                    "--symbol", "FX_BTC_JPY",
+                    "--hours", "24.0",
+                    "--interval", "2.0",
+                    "--report-interval", "900.0",
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
         }
 
         # アラートクールダウン管理

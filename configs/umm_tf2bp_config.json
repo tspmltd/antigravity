@@ -1,0 +1,44 @@
+{
+  "version": "v1.0.0-fixed-csr504-csr499",
+  "updated_at": "2026-09-19T01:34:00+09:00",
+  "policy": {
+    "auto_tune_allowed": false,
+    "frozen_mode": true,
+    "description": "自動最適化・動的再学習を禁止し、パラメータ調整はユーザーからの明示的指示のみとする。"
+  },
+  "umm_config": {
+    "strategy_name": "UMM_v1",
+    "git_source": "gapcore-platform/internal/strategy/unified_mm_v1.go (CSR-504)",
+    "spread_min_bp": 1.2,
+    "max_spread_jpy": 3000.0,
+    "gamma_high": 0.15,
+    "order_size_btc": 0.001,
+    "max_position_btc": 0.005,
+    "take_profit_jpy": 35.0,
+    "stop_loss_jpy": 25.0,
+    "max_hold_sec": 1800.0,
+    "target_spread_markup": 0.5
+  },
+  "tf2bp_config": {
+    "strategy_name": "TF2BP_v1",
+    "git_source": "gapcore-platform/scripts/ops/tf2bp_entry_heavy_phase2.py (CSR-495/499)",
+    "micro_mom_bp": 2.0,
+    "target_bp": 15.0,
+    "trail_stop_bp": 4.0,
+    "flow_window": 5,
+    "reverse_noise_max": 0.25,
+    "order_size_btc": 0.001,
+    "max_hold_sec": 1200.0,
+    "theta_mae": 3.82,
+    "theta_md": 0.12,
+    "target_cells": ["1600_2200|mid|BOOST", "1600_2200|hi|BASE"]
+  },
+  "observation_24h": {
+    "target_symbol": "FX_BTC_JPY",
+    "duration_hours": 24,
+    "discord_reporting_interval_sec": 900,
+    "dryrun_only": true,
+    "log_path": "logs/dryrun_umm_tf2bp_24h.log",
+    "state_path": "data/dryrun_umm_tf2bp_state.json"
+  }
+}
