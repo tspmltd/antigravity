@@ -222,6 +222,22 @@ class WatchdogSentinel:
                 "is_down": False,
                 "restart_attempts": 0,
             },
+            "approved_arena": {
+                "name": "承認済み12戦略 統合Dry-runアリーナ (Approved Strategy Arena)",
+                "keywords": ["run_dryrun_approved_arena"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "dryrun_approved_arena.log"),
+                "check_heartbeat": True,
+                "start_cmd": [
+                    self.python_bin, "-u", "-m", "antigravity.quant_pipeline.run_dryrun_approved_arena",
+                    "--symbol", "FX_BTC_JPY",
+                    "--interval", "5.0",
+                    "--report-interval", "900.0",
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
         }
 
         # アラートクールダウン管理
