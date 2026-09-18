@@ -52,8 +52,10 @@ class PerformanceMetrics:
         else:
             sharpe_ratio = 0.0
 
-        # 最大ドローダウン (MDD)
+        # 最大ドローダウン (MDD: % および 円)
         cummax = equity_curve.cummax()
+        drawdown_jpy = cummax - equity_curve
+        max_drawdown_jpy = float(drawdown_jpy.max()) if not drawdown_jpy.empty else 0.0
         drawdown = (equity_curve - cummax) / cummax
         max_drawdown_pct = abs(float(drawdown.min())) * 100.0 if not drawdown.empty else 0.0
 
@@ -71,10 +73,17 @@ class PerformanceMetrics:
 
         # トレード統計
         total_trades = len(trades)
+        total_pnl_jpy = 0.0
+        avg_trade_pnl_jpy = 0.0
+        max_consecutive_losses = 0
+
         if total_trades > 0:
             winning_trades = [t for t in trades if t.get("pnl", 0) > 0]
             losing_trades = [t for t in trades if t.get("pnl", 0) < 0]
             win_rate_pct = (len(winning_trades) / total_trades) * 100.0
+
+            total_pnl_jpy = sum(t.get("pnl", 0) for t in trades)
+            avg_trade_pnl_jpy = total_pnl_jpy / total_trades
 
             gross_profit = sum(t["pnl"] for t in winning_trades)
             gross_loss = abs(sum(t["pnl"] for t in losing_trades))
@@ -83,20 +92,38 @@ class PerformanceMetrics:
                 profit_factor = gross_profit / gross_loss
             else:
                 profit_factor = 999.0 if gross_profit > 0 else 0.0
+
+            # 最大連続損失数 (連敗) 計算
+            cur_consec = 0
+            for t in trades:
+                if t.get("pnl", 0) < 0:
+                    cur_consec += 1
+                    if cur_consec > max_consecutive_losses:
+                        max_consecutive_losses = cur_consec
+                elif t.get("pnl", 0) > 0:
+                    cur_consec = 0
         else:
             win_rate_pct = 0.0
             profit_factor = 0.0
+            winning_trades = []
+            losing_trades = []
 
         return {
             "initial_capital": float(initial_capital),
             "final_capital": float(final_capital),
             "total_return_pct": round(float(total_return_pct), 2),
+            "total_pnl_jpy": round(float(total_pnl_jpy), 1),
+            "avg_trade_pnl_jpy": round(float(avg_trade_pnl_jpy), 2),
             "sharpe_ratio": round(float(sharpe_ratio), 2),
             "max_drawdown_pct": round(float(max_drawdown_pct), 2),
+            "max_drawdown_jpy": round(float(max_drawdown_jpy), 1),
             "calmar_ratio": round(float(calmar_ratio), 2),
             "total_trades": total_trades,
+            "winning_trades": len(winning_trades),
+            "losing_trades": len(losing_trades),
             "win_rate_pct": round(float(win_rate_pct), 2),
             "profit_factor": round(float(profit_factor), 2),
+            "max_consecutive_losses": max_consecutive_losses,
             "timeframe": timeframe
         }
 
@@ -106,11 +133,17 @@ class PerformanceMetrics:
             "initial_capital": 0.0,
             "final_capital": 0.0,
             "total_return_pct": 0.0,
+            "total_pnl_jpy": 0.0,
+            "avg_trade_pnl_jpy": 0.0,
             "sharpe_ratio": 0.0,
             "max_drawdown_pct": 0.0,
+            "max_drawdown_jpy": 0.0,
             "calmar_ratio": 0.0,
             "total_trades": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
             "win_rate_pct": 0.0,
             "profit_factor": 0.0,
+            "max_consecutive_losses": 0,
             "timeframe": "unknown"
         }

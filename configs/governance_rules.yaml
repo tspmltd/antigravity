@@ -9,9 +9,12 @@ profiles:
     min_sharpe_ratio: 1.5           # 最低シャープレシオ (年率換算)
     max_drawdown_pct: 3.5           # 最大許容ドローダウン率 (タイトな損切り)
     min_total_trades: 8             # 直近データ(1〜2日)に対する最低取引数
-    min_profit_factor: 1.3          # 最低プロフィットファクター
-    min_win_rate_pct: 40.0          # 最低勝率 (%)
-    min_calmar_ratio: 1.5
+    min_profit_factor: 1.25         # 最低プロフィットファクター (LIVE準拠)
+    min_win_rate_pct: 45.0          # 最低勝率 (%)
+    max_consecutive_losses: 3       # 最大許容連敗数 (LIVEの4連敗CB手前で防衛)
+    max_drawdown_jpy: 200.0         # 最大許容ドローダウン (円)
+    min_avg_trade_pnl_jpy: 0.1      # 1トレード平均損益 (円, スプレッド勝ち越し必須)
+    min_calmar_ratio: 1.2
 
   # 15分足〜1時間足: デイトレード・スイング向け (標準)
   intraday_1h:
@@ -46,36 +49,48 @@ strategy_types:
   market_making:
     min_sharpe_ratio: 1.2
     max_drawdown_pct: 2.0           # 低ドローダウン
+    max_drawdown_jpy: 150.0         # 最大許容ドローダウン (円)
     min_total_trades: 15            # MMは取引回数が多い (15〜50回以上)
     min_profit_factor: 1.2
     min_win_rate_pct: 50.0          # 高勝率重視
+    max_consecutive_losses: 3       # 最大連敗数
+    min_avg_trade_pnl_jpy: 0.1      # 平均損益
     min_calmar_ratio: 1.2
 
   # マイクロトレンド戦略: 2bpの初動から10〜20bpの波を狙うOrder Flow順張り
   micro_trend:
     min_sharpe_ratio: 1.3
     max_drawdown_pct: 2.5           # 低ドローダウン
+    max_drawdown_jpy: 180.0
     min_total_trades: 10            # 2bp初動の積み重ねのため取引回数多め
     min_profit_factor: 1.30
     min_win_rate_pct: 45.0
+    max_consecutive_losses: 3
+    min_avg_trade_pnl_jpy: 0.1
     min_calmar_ratio: 1.3
 
   # トレンドフォロー戦略: 取引回数は少なくてもOK、損小利大(PF)とトレンド追従を重視
   trend_following:
     min_sharpe_ratio: 1.4
     max_drawdown_pct: 5.0
+    max_drawdown_jpy: 250.0
     min_total_trades: 4             # トレンドフォローは厳選エントリーのため少なくても可
     min_profit_factor: 1.35         # 損小利大
     min_win_rate_pct: 35.0          # 勝率は低くてもOK
+    max_consecutive_losses: 3
+    min_avg_trade_pnl_jpy: 0.1
     min_calmar_ratio: 1.2
 
   # 平均回帰 (Mean Reversion) 戦略: 中頻度
   mean_reversion:
     min_sharpe_ratio: 1.3
     max_drawdown_pct: 3.5
+    max_drawdown_jpy: 200.0
     min_total_trades: 8
     min_profit_factor: 1.25
     min_win_rate_pct: 45.0
+    max_consecutive_losses: 3
+    min_avg_trade_pnl_jpy: 0.1
     min_calmar_ratio: 1.2
 
 # ============================================================

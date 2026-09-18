@@ -69,6 +69,8 @@ class AntigravityRunner:
         self.is_running = False
         self.last_report_time = time.time()
         self.current_price = 0.0
+        self.last_entry_notification_time: Dict[str, float] = {}
+        self.last_trade_notification_time: Dict[str, float] = {}
 
         # システムリソース監視・自動改善エンジン
         self.sys_monitor = SystemResourceMonitor()
@@ -219,10 +221,11 @@ class AntigravityRunner:
             sign = "+" if trade_pnl >= 0 else ""
             print(f"[WS-ms] 🎯 【ミリ秒手仕舞い】[{name}] 損益: {sign}{trade_pnl:.1f} 円 | 理由: {reason}", flush=True)
 
-            # 大幅な収益実現または大幅な損失発生時の即時速報 (定期報告チャンネル宛)
-            if abs(trade_pnl) >= 20.0:
+            # DRYRUN 手仕舞い速報 (0.5円以上の損益、または15秒以上間隔が空いた決済をDiscord通知)
+            last_t_notif = self.last_trade_notification_time.get(name, 0.0)
+            if abs(trade_pnl) >= 0.5 or (now - last_t_notif >= 15.0):
                 try:
-                    self.notifier.send_significant_trade_report(
+                    self.notifier.send_dryrun_trade_report(
                         strategy_name=name,
                         side=side,
                         size_btc=abs(pos),
@@ -232,6 +235,7 @@ class AntigravityRunner:
                         reason=reason,
                         symbol=self.product_code,
                     )
+                    self.last_trade_notification_time[name] = now
                 except Exception as ex:
                     print(f"[AntigravityRunner] 決済速報送信失敗: {ex}", flush=True)
         elif pos == 0:
@@ -241,6 +245,22 @@ class AntigravityRunner:
             s_info["entry_price"] = price
             s_info["entry_time"] = now
             print(f"[WS-ms] 🚀 【ミリ秒ENTRY】[{name}] {side} {trade_size} BTC @ {price:,.0f} 円 | 理由: {reason}", flush=True)
+
+            # DRYRUN 新規エントリー速報 (過剰連投防止スロットリング: 戦略ごとに15秒間隔)
+            last_e_notif = self.last_entry_notification_time.get(name, 0.0)
+            if now - last_e_notif >= 15.0:
+                try:
+                    self.notifier.send_dryrun_entry_report(
+                        strategy_name=name,
+                        side=side,
+                        size_btc=trade_size,
+                        price=price,
+                        reason=reason,
+                        symbol=self.product_code,
+                    )
+                    self.last_entry_notification_time[name] = now
+                except Exception as ex:
+                    print(f"[AntigravityRunner] エントリー速報送信失敗: {ex}", flush=True)
 
 
     def check_and_send_regular_report(self, force: bool = False):

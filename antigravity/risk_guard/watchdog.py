@@ -60,14 +60,19 @@ class WatchdogSentinel:
 
         # 監視対象サービス定義
         self.services = {
-            "antigravity_engine": {
-                "name": "Antigravity 取引エンジン (HFT Real-Time)",
-                "keywords": ["-m antigravity"],
+            "grid_mm_live": {
+                "name": "RsiMeanReversion LIVE本番取引エンジン (strat_9ca5d130)",
+                "keywords": ["run_live.py"],
                 "exclude": ["watchdog"],
-                "log_file": os.path.join(self.base_dir, "antigravity.log"),
+                "log_file": os.path.join(self.base_dir, "grid_mm_live.log"),
                 "check_heartbeat": True,
                 "start_cmd": [
-                    self.python_bin, "-u", "-m", "antigravity", "--symbol", "FX_BTC_JPY"
+                    self.python_bin, "-u", os.path.join(self.base_dir, "run_live.py"),
+                    "--strategy", os.path.join(self.base_dir, "strategies", "approved", "strat_9ca5d130_approved.py"),
+                    "--symbol", "FX_BTC_JPY", "--size", "0.001", "--interval", "5.0",
+                    "--min-profit", "18.0", "--stop-loss", "25.0", "--max-hold", "1800.0",
+                    "--daily-loss-limit", "300.0", "--max-consecutive-losses", "4",
+                    "--real", "--yes",
                 ],
                 "last_down_alert_time": 0.0,
                 "is_down": False,
@@ -95,6 +100,106 @@ class WatchdogSentinel:
                 "check_heartbeat": False,
                 "start_cmd": [
                     self.python_bin, "-u", os.path.join(self.base_dir, "news_pipeline", "scheduler.py"), "--daemon"
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "sekai_kabuka_sentinel": {
+                "name": "世界の株価 リアルタイム急変センチネル (1%突破監視)",
+                "keywords": ["sekai_kabuka_realtime_sentinel.py"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "news_pipeline", "logs", "sekai_kabuka_sentinel.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    self.python_bin, "-u", os.path.join(self.base_dir, "news_pipeline", "sekai_kabuka_realtime_sentinel.py"), "--interval", "60.0"
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "edinet_sentinel": {
+                "name": "EDINET 10文字速報センチネル (大量保有・TOB等)",
+                "keywords": ["edinet_sentinel.py"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "news_pipeline", "logs", "edinet_sentinel.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    self.python_bin, "-u", os.path.join(self.base_dir, "news_pipeline", "edinet_sentinel.py")
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "tdnet_sentinel": {
+                "name": "東証適時開示 (TDnet) リアルタイム速報センチネル (MIS判定・X/Discord)",
+                "keywords": ["tdnet_sentinel.py"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "news_pipeline", "logs", "tdnet_sentinel.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    self.python_bin, "-u", os.path.join(self.base_dir, "news_pipeline", "tdnet_sentinel.py")
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "pts_sentinel": {
+                "name": "日本株PTS夜間取引センチネル (急変・出来高急増・因果AI)",
+                "keywords": ["pts_sentinel.py"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "news_pipeline", "logs", "pts_sentinel.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    self.python_bin, "-u", os.path.join(self.base_dir, "news_pipeline", "pts_sentinel.py")
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "quant_pipeline": {
+                "name": "Quant Fusion Dry-run観測エンジン (仮想シミュレーション & Discord配信)",
+                "keywords": ["quant_pipeline.run_pipeline"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "quant_pipeline.log"),
+                "check_heartbeat": True,
+                "start_cmd": [
+                    self.python_bin, "-u", "-m", "antigravity.quant_pipeline.run_pipeline",
+                    "--interval", "2.0", "--flush-interval", "30.0",
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "jp_equity_paper": {
+                "name": "日本株専属ポッド (JP Pod) ペーパートレード自律デーモン",
+                "keywords": ["run_jp_equity_paper.py"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "jp_equity_paper.log"),
+                "check_heartbeat": True,
+                "start_cmd": [
+                    self.python_bin, "-u", os.path.join(self.base_dir, "run_jp_equity_paper.py"),
+                    "--daemon",
+                    "--symbols", "7203,9984,6758,6857,8035,8306",
+                    "--interval", "10.0",
+                    "--budget", "20000.0",
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "fusion_engine": {
+                "name": "超低レイテンシ HFT Core (Go Fusion Engine Multi-Asset)",
+                "keywords": ["fusion_engine/fusion_engine", "fusion_engine --mode=daemon"],
+                "exclude": ["go test", "go build"],
+                "log_file": os.path.join(self.base_dir, "logs", "fusion_engine.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    os.path.join(self.base_dir, "fusion_engine", "fusion_engine"),
+                    "--mode=daemon",
+                    "--symbols=USDJPY,BTCJPY,7203,NQ",
+                    "--port=9090",
+                    "--ipc-sock=/tmp/antigravity_fusion.sock",
                 ],
                 "last_down_alert_time": 0.0,
                 "is_down": False,
@@ -172,6 +277,15 @@ class WatchdogSentinel:
         now = time.time()
 
         for svc_id, svc in self.services.items():
+            # 旧来の単体逆張りLIVEエンジンは廃止
+            if svc_id == "grid_mm_live":
+                continue
+
+            # 意図的停止フラグがある場合は LIVE 取引の再起動をスキップ
+            halt_flag = os.path.join(self.base_dir, "data", "LIVE_HALTED.flag")
+            if svc_id == "quant_pipeline" and os.path.exists(halt_flag):
+                continue
+
             pid = self.get_service_pid(svc["keywords"], exclude=svc.get("exclude"))
 
             # 1. プロセス停止（システムダウン）判定

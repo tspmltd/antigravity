@@ -16,8 +16,8 @@ llm:
 
 backtest:
   initial_capital: 1000000.0 # 初期資金 (100万円)
-  commission_rate: 0.0005     # 片道手数料 (0.05%)
-  slippage_rate: 0.0002       # スリッページ想定 (0.02%)
+  commission_rate: 0.0000     # bitFlyer Lightning FX は取引手数料無料 (0.0%)
+  slippage_rate: 0.0003       # 実勢スプレッド摩擦 (0.03% = 3.0bp ≒ 約3,500円幅)
   default_timeframe: "1h"
 
 # 実稼働中の自律成績監視 ＆ 自動再最適化・差し替え設定

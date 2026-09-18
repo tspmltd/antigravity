@@ -27,7 +27,10 @@ class DiscordNotifier:
         system_webhook_url: Optional[str] = None,
         alert_webhook_url: Optional[str] = None
     ):
-        self.report_webhook_url = webhook_url if webhook_url is not None else os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+        self.report_webhook_url = webhook_url if webhook_url is not None else (
+            os.environ.get("DISCORD_LIVE_WEBHOOK_URL", "").strip()
+            or os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+        )
         self.system_webhook_url = system_webhook_url if system_webhook_url is not None else os.environ.get("DISCORD_SYSTEM_WEBHOOK_URL", "").strip() or self.report_webhook_url
         self.alert_webhook_url = alert_webhook_url if alert_webhook_url is not None else os.environ.get("DISCORD_ALERT_WEBHOOK_URL", "").strip() or self.report_webhook_url
         self.webhook_url = self.report_webhook_url  # 互換性

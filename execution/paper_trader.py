@@ -33,12 +33,25 @@ class LivePaperTrader:
         initial_capital_jpy: float = 100000.0,
         enable_real_trading: bool = False,
         poll_interval_sec: float = 5.0,
+        min_profit_jpy: float = 18.0,
+        stop_loss_jpy: float = 25.0,
+        max_hold_sec: float = 1800.0,
+        daily_loss_limit_jpy: float = 300.0,
+        max_consecutive_losses: int = 4,
     ):
         self.strategy_path = strategy_path
         self.product_code = product_code
         self.timeframe = timeframe
         self.order_size_btc = order_size_btc
         self.poll_interval_sec = poll_interval_sec
+        self.min_profit_jpy = min_profit_jpy
+        self.stop_loss_jpy = stop_loss_jpy
+        self.max_hold_sec = max_hold_sec
+        self.daily_loss_limit_jpy = daily_loss_limit_jpy
+        self.max_consecutive_losses = max_consecutive_losses
+        self.consecutive_losses = 0
+        self.is_halted = False
+        self.halt_reason = ""
 
         # bitFlyerクライアント初期化
         self.client = BitFlyerClient(enable_real_trading=enable_real_trading)
@@ -49,8 +62,25 @@ class LivePaperTrader:
         self.virtual_cash_jpy = initial_capital_jpy
         self.virtual_position_btc = 0.0
         self.entry_price = 0.0
+        self.entry_time = 0.0
+        self.last_guard_log_time = 0.0
         self.realized_pnl_jpy = 0.0
         self.trades_history: List[Dict[str, Any]] = []
+
+        # 本番モード時：取引所の既存実ポジションを自動復元同期
+        if self.is_real:
+            try:
+                positions = self.client.get_positions(self.product_code)
+                if positions:
+                    total_size = sum(p["size"] if p["side"] == "BUY" else -p["size"] for p in positions)
+                    total_val = sum(p["price"] * p["size"] for p in positions)
+                    self.virtual_position_btc = round(total_size, 4)
+                    if abs(self.virtual_position_btc) > 0:
+                        self.entry_price = total_val / sum(p["size"] for p in positions)
+                        self.entry_time = time.time()
+                        print(f"[LiveTrader] 🎯 [POSITION RESTORE] 取引所から既存実建玉を同期復元: {self.virtual_position_btc:+.4f} BTC @ {self.entry_price:,.0f} 円", flush=True)
+            except Exception as e:
+                print(f"[LiveTrader] ⚠️ ポジション同期失敗: {e}", flush=True)
 
         # 自律適応マネージャー
         self.adaptive_manager = AdaptiveManager()
@@ -112,9 +142,12 @@ class LivePaperTrader:
         """
         1サイクルの監視・シグナル判定・注文実行処理
         """
-        # 1. 最新価格取得
+        # 1. 最新価格情報 (LTP, Best Bid, Best Ask) の取得
         ticker = self.fetch_current_ticker()
         current_price = ticker["ltp"]
+        best_bid = ticker["best_bid"]
+        best_ask = ticker["best_ask"]
+        spread = best_ask - best_bid
         now = datetime.now()
 
         # 2. 最新バーの更新 (足の確定・追加判定)
@@ -148,43 +181,90 @@ class LivePaperTrader:
         df_signals = self.strategy.generate_signals(self.df_history.copy())
         current_signal = int(df_signals["signal"].iloc[-1]) if "signal" in df_signals else 0
 
-        # 4. ポジション判定 & 発注
+        # 4. 気配値・スプレッドを反映した真の即時決済想定評価損益 (Net Unrealized PnL)
         trade_action = None
         unrealized_pnl = 0.0
+        elapsed_hold_sec = 0.0
         if self.virtual_position_btc > 0:
-            unrealized_pnl = (current_price - self.entry_price) * self.virtual_position_btc
+            # ロング保有時：即時成行決済はBest Bidで約定
+            unrealized_pnl = (best_bid - self.entry_price) * self.virtual_position_btc
+            elapsed_hold_sec = time.time() - self.entry_time if self.entry_time > 0 else 0.0
         elif self.virtual_position_btc < 0:
-            unrealized_pnl = (self.entry_price - current_price) * abs(self.virtual_position_btc)
+            # ショート保有時：即時成行決済はBest Askで約定
+            unrealized_pnl = (self.entry_price - best_ask) * abs(self.virtual_position_btc)
+            elapsed_hold_sec = time.time() - self.entry_time if self.entry_time > 0 else 0.0
 
+        # 5. 【最重要防衛1】サーキットブレーカー判定 (日次損失上限 または 連続損失上限到達)
+        if self.is_halted or self.realized_pnl_jpy <= -abs(self.daily_loss_limit_jpy):
+            if not self.is_halted:
+                self.is_halted = True
+                self.halt_reason = f"日次損失上限到達 (-{abs(self.daily_loss_limit_jpy):.1f}円)"
+                halt_msg = (
+                    f"🚨 **【日次サーキットブレーカー発動】**\n"
+                    f"本日の累計実現損失が許容上限 (`-{abs(self.daily_loss_limit_jpy):.1f}円`) に達しました。\n"
+                    f"口座破綻を絶対に防ぐため、以降の新規発注を完全に遮断（HALT）します。"
+                )
+                print(f"\n[LiveTrader] {halt_msg}\n", flush=True)
+                self.notifier.send_alert(title="日次損失サーキットブレーカー発動", message=halt_msg, level="critical")
+            if self.virtual_position_btc != 0:
+                print(f"[LiveTrader] 🚨 [CIRCUIT BREAKER] 残存建玉を緊急防衛決済します...", flush=True)
+                self._close_position(current_price, "CIRCUIT_BREAKER_HALT", ticker=ticker)
+            current_signal = 0
+            trade_action = "HALTED"
+
+        # 6. 【最重要防衛2】ハードストップロス判定 (急変ブレイクアウト即時損切り)
+        elif self.virtual_position_btc != 0 and unrealized_pnl <= -abs(self.stop_loss_jpy):
+            sl_reason = "STOP_LOSS_LONG" if self.virtual_position_btc > 0 else "STOP_LOSS_SHORT"
+            print(f"[LiveTrader] 🚨 [HARD STOP-LOSS] 損失許容上限 (-{abs(self.stop_loss_jpy)}円) 到達！防衛決済を発動します (含み損: {unrealized_pnl:+.1f}円)", flush=True)
+            self._close_position(current_price, sl_reason, ticker=ticker)
+            trade_action = "STOP_LOSS"
+            current_signal = 0
+
+        # 7. シグナル判定 & 発注
         # 買いシグナル (保有なしから買い、またはドテン買い)
-        if current_signal == 1 and self.virtual_position_btc <= 0:
+        elif current_signal == 1 and self.virtual_position_btc <= 0:
             # 既存ショートの決済
             if self.virtual_position_btc < 0:
-                self._close_position(current_price, "CLOSE_SHORT")
+                self._close_position(current_price, "DOTEN_CLOSE_SHORT", ticker=ticker)
             # 新規ロング
-            self._open_position(current_price, "BUY", self.order_size_btc)
+            self._open_position(current_price, "BUY", self.order_size_btc, ticker=ticker)
             trade_action = "OPEN_LONG"
 
         # 売りシグナル (保有なしから売り、またはドテン売り)
         elif current_signal == -1 and self.virtual_position_btc >= 0:
             # 既存ロングの決済
             if self.virtual_position_btc > 0:
-                self._close_position(current_price, "CLOSE_LONG")
+                self._close_position(current_price, "DOTEN_CLOSE_LONG", ticker=ticker)
             # 新規ショート
-            self._open_position(current_price, "SELL", self.order_size_btc)
+            self._open_position(current_price, "SELL", self.order_size_btc, ticker=ticker)
             trade_action = "OPEN_SHORT"
 
         # 中立・手仕舞いシグナル
         elif current_signal == 0 and self.virtual_position_btc != 0:
-            action_type = "CLOSE_LONG" if self.virtual_position_btc > 0 else "CLOSE_SHORT"
-            self._close_position(current_price, action_type)
-            trade_action = "EXIT"
+            can_take_profit = unrealized_pnl >= self.min_profit_jpy
+            is_timeout = elapsed_hold_sec >= self.max_hold_sec
+
+            if can_take_profit or is_timeout:
+                reason = "TAKE_PROFIT" if can_take_profit else "TIMEOUT_EXIT"
+                action_type = f"{reason}_{'LONG' if self.virtual_position_btc > 0 else 'SHORT'}"
+                self._close_position(current_price, action_type, ticker=ticker)
+                trade_action = reason
+            else:
+                # スプレッド負け防止ガード作動: 最低目標利益に届くまで決済を見送る
+                trade_action = "HOLD_GUARD"
+                curr_t = time.time()
+                if curr_t - self.last_guard_log_time >= 30.0:
+                    print(f"[LiveTrader] 🛡️ [SPREAD GUARD] 利確見送り (含み損益: {unrealized_pnl:+.1f}円 < 最低目標: +{self.min_profit_jpy}円, 経過: {int(elapsed_hold_sec)}s)", flush=True)
+                    self.last_guard_log_time = curr_t
 
         total_equity = self.virtual_cash_jpy + unrealized_pnl
 
         return {
             "timestamp": now.strftime("%H:%M:%S"),
             "current_price": current_price,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread": spread,
             "signal": current_signal,
             "position": self.virtual_position_btc,
             "entry_price": self.entry_price,
@@ -194,20 +274,46 @@ class LivePaperTrader:
             "trade_action": trade_action,
         }
 
-    def _open_position(self, price: float, side: str, size: float):
-        """新規ポジション構築"""
+    def _open_position(self, price: float, side: str, size: float, ticker: Optional[Dict[str, Any]] = None):
+        """新規ポジション構築 (実約定同期 & 気配値スプレッド反映)"""
         order_res = self.client.send_order(
             product_code=self.product_code,
             side=side,
             size=size,
             order_type="MARKET"
         )
-        self.entry_price = price
-        self.virtual_position_btc = size if side == "BUY" else -size
-        print(f"[LiveTrader] [ENTRY] 新規エントリー: {side} {size} BTC @ {price:,.0f} 円", flush=True)
 
-    def _close_position(self, price: float, reason: str):
-        """ポジション決済"""
+        actual_price = None
+        # 1. 本番トレード時は取引所から実約定加重平均価格を取得
+        if self.is_real and isinstance(order_res, dict):
+            acc_id = order_res.get("child_order_acceptance_id")
+            if acc_id:
+                actual_price = self.client.get_execution_price_by_acceptance_id(
+                    product_code=self.product_code,
+                    acceptance_id=acc_id,
+                    max_retries=5,
+                    retry_interval_sec=0.4
+                )
+                if actual_price:
+                    print(f"[LiveTrader] 🎯 [EXECUTION SYNC] 取引所実約定価格を取得・同期: {actual_price:,.0f} 円 (受付ID: {acc_id})", flush=True)
+
+        # 2. 実約定未取得またはペーパートレード時の気配値適用
+        if actual_price is None:
+            if ticker:
+                # 買いはAsk、売りはBidで約定
+                actual_price = ticker["best_ask"] if side == "BUY" else ticker["best_bid"]
+            else:
+                actual_price = price
+
+        self.entry_price = actual_price
+        self.entry_time = time.time()
+        self.virtual_position_btc = size if side == "BUY" else -size
+        
+        spread_info = f" (気配差: {ticker['best_ask'] - ticker['best_bid']:,.0f}円)" if ticker else ""
+        print(f"[LiveTrader] [ENTRY] 新規エントリー: {side} {size} BTC @ {actual_price:,.0f} 円{spread_info}", flush=True)
+
+    def _close_position(self, price: float, reason: str, ticker: Optional[Dict[str, Any]] = None):
+        """ポジション決済 (実約定同期 & 気配値スプレッド反映)"""
         side = "SELL" if self.virtual_position_btc > 0 else "BUY"
         qty = abs(self.virtual_position_btc)
 
@@ -218,24 +324,69 @@ class LivePaperTrader:
             order_type="MARKET"
         )
 
-        pnl = (price - self.entry_price) * self.virtual_position_btc
+        actual_price = None
+        # 1. 本番トレード時は取引所から実約定加重平均価格を取得
+        if self.is_real and isinstance(order_res, dict):
+            acc_id = order_res.get("child_order_acceptance_id")
+            if acc_id:
+                actual_price = self.client.get_execution_price_by_acceptance_id(
+                    product_code=self.product_code,
+                    acceptance_id=acc_id,
+                    max_retries=5,
+                    retry_interval_sec=0.4
+                )
+                if actual_price:
+                    print(f"[LiveTrader] 🎯 [EXECUTION SYNC] 取引所決済約定価格を取得・同期: {actual_price:,.0f} 円", flush=True)
+
+        # 2. 実約定未取得またはペーパートレード時の気配値適用
+        if actual_price is None:
+            if ticker:
+                # 決済売りはBid、決済買いはAskで約定
+                actual_price = ticker["best_bid"] if side == "SELL" else ticker["best_ask"]
+            else:
+                actual_price = price
+
+        pnl = (actual_price - self.entry_price) * self.virtual_position_btc
         self.realized_pnl_jpy += pnl
+        self.virtual_cash_jpy += pnl
+        hold_sec = round(time.time() - self.entry_time, 1) if self.entry_time > 0 else 0.0
         
         trade_record = {
             "timestamp": datetime.now().isoformat(),
             "reason": reason,
             "direction": "LONG" if self.virtual_position_btc > 0 else "SHORT",
             "entry_price": self.entry_price,
-            "exit_price": price,
+            "exit_price": actual_price,
             "size": qty,
             "pnl": round(pnl, 1),
+            "hold_duration_sec": hold_sec,
         }
         self.trades_history.append(trade_record)
         self._save_trade_history()
 
-        print(f"[LiveTrader] [EXIT] ポジション決済 ({reason}): {qty} BTC @ {price:,.0f} 円 | 損益: {pnl:+,.1f} 円", flush=True)
+        # 連続損失（連敗）トラッキング & サーキットブレーカー判定
+        if pnl < 0:
+            self.consecutive_losses += 1
+            print(f"[LiveTrader] ⚠️ 損失決済を検知 (直近連続: {self.consecutive_losses} / 許容上限: {self.max_consecutive_losses})", flush=True)
+            if self.consecutive_losses >= self.max_consecutive_losses:
+                self.is_halted = True
+                self.halt_reason = f"連続 {self.consecutive_losses} 敗"
+                halt_msg = (
+                    f"🚨 **【連続損失サーキットブレーカー発動】**\n"
+                    f"直近で連続 `{self.consecutive_losses} 回` の損失決済が発生しました（許容上限: {self.max_consecutive_losses} 敗）。\n"
+                    f"相場レジームの急変・ドテン被弾を防ぐため、本日の自動発注を完全に停止（HALT）します。"
+                )
+                print(f"\n[LiveTrader] {halt_msg}\n", flush=True)
+                self.notifier.send_alert(title="連続損失サーキットブレーカー発動", message=halt_msg, level="critical")
+        elif pnl > 0:
+            if self.consecutive_losses > 0:
+                print(f"[LiveTrader] 🟢 連敗カウントをリセットしました (旧: {self.consecutive_losses} 連敗 -> 0)", flush=True)
+            self.consecutive_losses = 0
+
+        print(f"[LiveTrader] [EXIT] ポジション決済 ({reason}): {qty} BTC @ {actual_price:,.0f} 円 | 損益: {pnl:+,.1f} 円 (保持: {hold_sec}s)", flush=True)
         self.virtual_position_btc = 0.0
         self.entry_price = 0.0
+        self.entry_time = 0.0
 
         # 自律適応マネージャーによるリアルタイム成績評価 ＆ 自動改善チェック
         if self.adaptive_manager.should_evaluate(self.trades_history):
@@ -300,16 +451,21 @@ class LivePaperTrader:
         print(f"対象銘柄    : {self.product_code}", flush=True)
         print(f"戦略        : {self.strategy.name}", flush=True)
         print(f"発注ロット  : {self.order_size_btc} BTC", flush=True)
+        print(f"最低目標利幅: +{self.min_profit_jpy:.1f} 円 (スプレッド負け防止ガード)", flush=True)
+        print(f"緊急損切閾値: -{abs(self.stop_loss_jpy):.1f} 円 (ハードストップロス)", flush=True)
+        print(f"日次損失上限: -{abs(self.daily_loss_limit_jpy):.1f} 円 (サーキットブレーカー)", flush=True)
+        print(f"連続損失上限: {self.max_consecutive_losses} 回 (サーキットブレーカー)", flush=True)
+        print(f"最大保有時間: {self.max_hold_sec:.0f} 秒 (タイムアウト)", flush=True)
         print(f"監視間隔    : {self.poll_interval_sec} 秒", flush=True)
         print(f"仮想初期資金: {self.virtual_cash_jpy:,.0f} 円", flush=True)
         print(f"通知間隔    : {self.hourly_interval_sec / 3600:.1f} 時間ごと", flush=True)
-        print("-" * 65, flush=True)
-        print(" [時刻]    | 現在価格 (円) | シグナル | 建玉 (BTC) | 含み損益 (円) | 累計実現損益", flush=True)
-        print("-" * 65, flush=True)
+        print("-" * 78, flush=True)
+        print(" [時刻]    | 現在価格 (円) | スプレッド | シグナル | 建玉 (BTC) | 含み損益 (円) | 累計実現損益", flush=True)
+        print("-" * 78, flush=True)
 
         # 起動通知
         self.notifier.send_message(
-            f"🚀 **【自動売買監視スタート】**\n対象銘柄: `{self.product_code}`\n戦略: `{self.strategy.name}` ({self.timeframe})\nモード: `{mode_str}`\nレポート間隔: {self.hourly_interval_sec / 3600:.1f} 時間ごと"
+            f"🚀 **【自動売買監視スタート】**\n対象銘柄: `{self.product_code}`\n戦略: `{self.strategy.name}` ({self.timeframe})\nモード: `{mode_str}`\n最低利幅ガード: `+{self.min_profit_jpy}円` | 損切: `-{abs(self.stop_loss_jpy)}円`\n**日次損失上限: `-{abs(self.daily_loss_limit_jpy)}円` | 連敗上限: `{self.max_consecutive_losses}連敗`**\nレポート間隔: {self.hourly_interval_sec / 3600:.1f} 時間ごと"
         )
 
         step = 0
@@ -322,8 +478,9 @@ class LivePaperTrader:
                 pos_str = f"{status['position']:+.3f}"
                 unreal_str = f"{status['unrealized_pnl']:+8.1f}"
                 real_str = f"{status['realized_pnl']:+8.1f}"
+                spread_str = f"{status.get('spread', 0.0):5.0f}円"
 
-                print(f" {status['timestamp']} | {status['current_price']:10,.0f} | {sig_str:8} | {pos_str:10} | {unreal_str:10} | {real_str:10}", flush=True)
+                print(f" {status['timestamp']} | {status['current_price']:10,.0f} | {spread_str:7} | {sig_str:8} | {pos_str:10} | {unreal_str:10} | {real_str:10}", flush=True)
 
                 # 定期レポート送信 (デフォルト1時間ごと)
                 if time.time() - self.last_hourly_report_time >= self.hourly_interval_sec:

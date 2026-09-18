@@ -73,9 +73,44 @@ def main():
         help="最大実行ステップ数 (テスト用、省略時は継続監視)",
     )
     parser.add_argument(
+        "--min-profit",
+        type=float,
+        default=18.0,
+        help="スプレッド負け防止ガードの最低利幅目標 (円, デフォルト: 18.0円 [第1段階: +15~+20円])",
+    )
+    parser.add_argument(
+        "--stop-loss",
+        type=float,
+        default=25.0,
+        help="ハードストップロス緊急損切閾値 (円, デフォルト: 25.0円 [第1段階: -20~-30円])",
+    )
+    parser.add_argument(
+        "--max-hold",
+        type=float,
+        default=1800.0,
+        help="最大保有時間秒 (デフォルト: 1800秒 = 30分)",
+    )
+    parser.add_argument(
+        "--daily-loss-limit",
+        type=float,
+        default=300.0,
+        help="日次最大許容損失 (円, 到達で当日エントリー遮断 & 緊急全決済, デフォルト: 300.0円)",
+    )
+    parser.add_argument(
+        "--max-consecutive-losses",
+        type=int,
+        default=4,
+        help="最大連続損失回数 (連敗到達で当日エントリー遮断 & 緊急全決済, デフォルト: 4回)",
+    )
+    parser.add_argument(
         "--real",
         action="store_true",
         help="【危険】本番実資金トレードモードを有効化 (自己責任で実行)",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="本番確認プロンプトをスキップして即時起動",
     )
 
     args = parser.parse_args()
@@ -86,15 +121,22 @@ def main():
     # 本番トレード二重確認ガード
     is_real = False
     if args.real:
-        print("\n" + "!" * 60)
-        print("                 【警告: 本番実資金取引モード】                 ")
-        print("  実資金を用いた注文が bitFlyer API に送信されます。")
-        print("!" * 60)
-        confirm = input("本当に本番発注を実行しますか？ (実行する場合は大文字で 'YES' と入力): ")
-        if confirm.strip() != "YES":
-            print("[中止] 本番モードはキャンセルされました。ペーパートレードとして起動します。")
-            is_real = False
+        if not args.yes:
+            print("\n" + "!" * 60)
+            print("                 【警告: 本番実資金取引モード】                 ")
+            print("  実資金を用いた注文が bitFlyer API に送信されます。")
+            print("!" * 60)
+            confirm = input("本当に本番発注を実行しますか？ (実行する場合は大文字で 'YES' と入力): ")
+            if confirm.strip() != "YES":
+                print("[中止] 本番モードはキャンセルされました。ペーパートレードとして起動します。")
+                is_real = False
+            else:
+                is_real = True
         else:
+            print("\n" + "!" * 60)
+            print("     🚨 【本番実資金取引モード (Non-Interactive: --yes)】 🚨     ")
+            print("  実資金を用いた注文が bitFlyer API に送信されます。")
+            print("!" * 60 + "\n")
             is_real = True
 
     trader = LivePaperTrader(
@@ -103,7 +145,12 @@ def main():
         timeframe=args.timeframe,
         order_size_btc=args.size,
         poll_interval_sec=args.interval,
-        enable_real_trading=is_real
+        enable_real_trading=is_real,
+        min_profit_jpy=args.min_profit,
+        stop_loss_jpy=args.stop_loss,
+        max_hold_sec=args.max_hold,
+        daily_loss_limit_jpy=args.daily_loss_limit,
+        max_consecutive_losses=args.max_consecutive_losses
     )
     trader.hourly_interval_sec = args.report_interval
 

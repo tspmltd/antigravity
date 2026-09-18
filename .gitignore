@@ -15,9 +15,24 @@ node_modules/
 npm-debug.log*
 
 # データ・キャッシュ・実行状態
-data/cache/
+data/
+*.parquet
+*.duckdb
+*.jsonl
 pipeline_state.json
+jp_equity_state.json
+jp_equity_paper_state.json
+market_price_cache.json
+sentinel_notified_states.json
+sentinel_x_posted_states.json
+x_global_daily_state.json
 scratch/
+
+# 自動生成・検証戦略ディレクトリ (run_autonomous_daemon)
+strategies/proposed/
+strategies/rejected/
+strategies/optimizing/
+strategies/test_healing/
 
 # エージェント・一時ディレクトリ
 .agents/
@@ -27,6 +42,7 @@ venv/
 .venv/
 env/
 *.pid
+*.flag
 
 # macOS システムファイル
 .DS_Store
@@ -36,7 +52,10 @@ env/
 # ログ・レポート一時ファイル
 *.log
 
+# 画像・チャートプレビュー
+*.png
+
 # IDE 設定ファイル
 .vscode/
 .idea/
-
+fusion_engine/fusion_engine

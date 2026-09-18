@@ -3,7 +3,7 @@
 - **戦略ID**: `test_golden_001`
 - **戦略名**: `GoldenStrategy`
 - **バージョン**: `v1.0`
-- **認定日時**: 2026-09-16 16:08:13
+- **認定日時**: 2026-09-18 16:25:57
 - **承認コード配置先**: `strategies/approved/test_golden_001_approved.py`
 - **適用プロファイル**: `N/A`
 
@@ -18,11 +18,13 @@
 | 評価項目 | 実績値 | ガバナンス合格ライン | 判定 |
 | :--- | :--- | :--- | :--- |
 | **Sharpe Ratio** | **2.5** | >= 1.8 | [PASS] |
-| **Max Drawdown (MDD)** | **3.8%** | <= 6.0% | [PASS] |
+| **Max Drawdown (MDD)** | **3.8%** (0.0円) | <= 6.0% (200.0円) | [PASS] |
 | **Total Trades** | **45回** | >= 15回 | [PASS] |
 | **Profit Factor** | **2.1** | >= 1.5 | [PASS] |
-| **Total Return** | **42.5%** | - | - |
+| **Total Return** | **42.5%** (+0.0円) | - | - |
 | **Win Rate** | **65.0%** | >= 45.0% | [PASS] |
+| **Max Consecutive Losses** | **0連敗** | <= 3連敗 | [PASS] |
+| **Avg Trade PnL** | **+0.0円** | >= +0.1円 | [PASS] |
 | **Calmar Ratio** | **3.2** | >= 2.0 | [PASS] |
 
 ---

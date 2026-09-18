@@ -150,6 +150,31 @@ class BitFlyerClient:
             "order_details": body
         }
 
+    def get_execution_price_by_acceptance_id(
+        self,
+        product_code: str = "FX_BTC_JPY",
+        acceptance_id: Optional[str] = None,
+        max_retries: int = 5,
+        retry_interval_sec: float = 0.5
+    ) -> Optional[float]:
+        """発注受付IDから実約定加重平均価格を取得"""
+        if not acceptance_id or not self.enable_real_trading:
+            return None
+
+        for _ in range(max_retries):
+            try:
+                time.sleep(retry_interval_sec)
+                path = f"/v1/me/getexecutions?product_code={product_code}&child_order_acceptance_id={acceptance_id}"
+                execs = self._request("GET", path)
+                if execs and isinstance(execs, list) and len(execs) > 0:
+                    total_qty = sum(float(e["size"]) for e in execs)
+                    if total_qty > 0:
+                        avg_p = sum(float(e["price"]) * float(e["size"]) for e in execs) / total_qty
+                        return avg_p
+            except Exception:
+                pass
+        return None
+
     # ==========================================
     # Public API & 相場・レイテンシ診断機能
     # ==========================================

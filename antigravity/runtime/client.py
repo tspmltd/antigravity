@@ -131,3 +131,21 @@ class BitflyerClient:
             body["price"] = int(price)
 
         return self._request("POST", "/v1/me/sendchildorder", body)
+
+    def get_collateral(self) -> Dict[str, Any]:
+        """証拠金情報を取得 (GET /v1/me/getcollateral)"""
+        return self._request("GET", "/v1/me/getcollateral")
+
+    def get_positions(self, product_code: str = "FX_BTC_JPY") -> List[Dict[str, Any]]:
+        """保有建玉一覧を取得 (GET /v1/me/getpositions)"""
+        return self._request("GET", f"/v1/me/getpositions?product_code={product_code}")
+
+    def get_my_executions(self, product_code: str = "FX_BTC_JPY", count: int = 10) -> List[Dict[str, Any]]:
+        """自分の約定履歴を取得 (GET /v1/me/getexecutions)"""
+        return self._request("GET", f"/v1/me/getexecutions?product_code={product_code}&count={count}")
+
+    def cancel_all_orders(self, product_code: str = "FX_BTC_JPY") -> Dict[str, Any]:
+        """未約定注文を一括キャンセル (POST /v1/me/cancelallchildorders)"""
+        return self._request("POST", "/v1/me/cancelallchildorders", {"product_code": product_code})
+
+

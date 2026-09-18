@@ -80,29 +80,41 @@ class StrategyGovernance(BaseAgent):
 
         sharpe = is_metrics.get("sharpe_ratio", 0.0)
         mdd = is_metrics.get("max_drawdown_pct", 100.0)
+        mdd_jpy = is_metrics.get("max_drawdown_jpy", 9999.0)
         trades = is_metrics.get("total_trades", 0)
         pf = is_metrics.get("profit_factor", 0.0)
         win_rate = is_metrics.get("win_rate_pct", 0.0)
+        consec_losses = is_metrics.get("max_consecutive_losses", 0)
+        avg_trade_pnl = is_metrics.get("avg_trade_pnl_jpy", 0.0)
 
         min_sharpe = profile.get("min_sharpe_ratio", 1.5)
         max_mdd = profile.get("max_drawdown_pct", 5.0)
+        max_mdd_jpy = profile.get("max_drawdown_jpy", 200.0)
         min_trades = profile.get("min_total_trades", 10)
-        min_pf = profile.get("min_profit_factor", 1.3)
+        min_pf = profile.get("min_profit_factor", 1.25)
         min_win_rate = profile.get("min_win_rate_pct", 40.0)
+        max_consec = profile.get("max_consecutive_losses", 3)
+        min_avg_pnl = profile.get("min_avg_trade_pnl_jpy", 0.1)
 
         failed_criteria = []
 
-        # 1. 基本パフォーマンスチェック (In-Sample)
+        # 1. 基本パフォーマンスチェック (In-Sample: LIVE準拠)
         if sharpe < min_sharpe:
             failed_criteria.append(f"Sharpe Ratio不足 ({sharpe} < {min_sharpe})")
         if mdd > max_mdd:
             failed_criteria.append(f"MDD超過 ({mdd}% > {max_mdd}%)")
+        if "max_drawdown_jpy" in is_metrics and is_metrics["max_drawdown_jpy"] > max_mdd_jpy:
+            failed_criteria.append(f"MDD(円)超過 ({is_metrics['max_drawdown_jpy']:.1f}円 > {max_mdd_jpy:.1f}円)")
         if trades < min_trades:
             failed_criteria.append(f"取引回数不足 ({trades} < {min_trades}回)")
         if pf < min_pf:
             failed_criteria.append(f"Profit Factor不足 ({pf} < {min_pf})")
         if win_rate < min_win_rate and trades > 0:
             failed_criteria.append(f"勝率不足 ({win_rate}% < {min_win_rate}%)")
+        if "max_consecutive_losses" in is_metrics and is_metrics["max_consecutive_losses"] > max_consec:
+            failed_criteria.append(f"最大連敗数超過 ({is_metrics['max_consecutive_losses']}連敗 > {max_consec}連敗上限: LIVE CB抵触リスク)")
+        if "avg_trade_pnl_jpy" in is_metrics and is_metrics["avg_trade_pnl_jpy"] < min_avg_pnl and trades > 0:
+            failed_criteria.append(f"平均トレード損益不足 ({is_metrics['avg_trade_pnl_jpy']:+.2f}円 < {min_avg_pnl}円: スプレッド負け)")
 
         # 2. 過剰適合（カーブフィッティング）チェック (Out-of-Sample)
         if oos_rules.get("enable_oos_validation", True) and oos_metrics:
@@ -198,11 +210,13 @@ class StrategyGovernance(BaseAgent):
 | 評価項目 | 実績値 | ガバナンス合格ライン | 判定 |
 | :--- | :--- | :--- | :--- |
 | **Sharpe Ratio** | **{is_m.get('sharpe_ratio')}** | >= {profile.get('min_sharpe_ratio')} | [PASS] |
-| **Max Drawdown (MDD)** | **{is_m.get('max_drawdown_pct')}%** | <= {profile.get('max_drawdown_pct')}% | [PASS] |
+| **Max Drawdown (MDD)** | **{is_m.get('max_drawdown_pct')}%** ({is_m.get('max_drawdown_jpy', 0.0):.1f}円) | <= {profile.get('max_drawdown_pct')}% ({profile.get('max_drawdown_jpy', 200.0):.1f}円) | [PASS] |
 | **Total Trades** | **{is_m.get('total_trades')}回** | >= {profile.get('min_total_trades')}回 | [PASS] |
 | **Profit Factor** | **{is_m.get('profit_factor')}** | >= {profile.get('min_profit_factor')} | [PASS] |
-| **Total Return** | **{is_m.get('total_return_pct')}%** | - | - |
+| **Total Return** | **{is_m.get('total_return_pct')}%** ({is_m.get('total_pnl_jpy', 0.0):+.1f}円) | - | - |
 | **Win Rate** | **{is_m.get('win_rate_pct')}%** | >= {profile.get('min_win_rate_pct')}% | [PASS] |
+| **Max Consecutive Losses** | **{is_m.get('max_consecutive_losses', 0)}連敗** | <= {profile.get('max_consecutive_losses', 3)}連敗 | [PASS] |
+| **Avg Trade PnL** | **{is_m.get('avg_trade_pnl_jpy', 0.0):+.1f}円** | >= +{profile.get('min_avg_trade_pnl_jpy', 0.1)}円 | [PASS] |
 | **Calmar Ratio** | **{is_m.get('calmar_ratio')}** | >= {profile.get('min_calmar_ratio')} | [PASS] |
 
 ---

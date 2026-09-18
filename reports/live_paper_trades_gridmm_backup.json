@@ -1,0 +1,272 @@
+[
+  {
+    "timestamp": "2026-09-17T09:37:21.019657",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11928535.0,
+    "exit_price": 11913581.0,
+    "size": 0.001,
+    "pnl": 15.0,
+    "hold_duration_sec": 42.0
+  },
+  {
+    "timestamp": "2026-09-17T09:39:24.383905",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11915297.0,
+    "exit_price": 11927856.0,
+    "size": 0.001,
+    "pnl": -12.6,
+    "hold_duration_sec": 87.1
+  },
+  {
+    "timestamp": "2026-09-17T09:42:13.293717",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11925716.0,
+    "exit_price": 11921143.0,
+    "size": 0.001,
+    "pnl": 4.6,
+    "hold_duration_sec": 163.3
+  },
+  {
+    "timestamp": "2026-09-17T10:06:43.679904",
+    "reason": "TAKE_PROFIT_LONG",
+    "direction": "LONG",
+    "entry_price": 11897999.0,
+    "exit_price": 11908484.0,
+    "size": 0.001,
+    "pnl": 10.5,
+    "hold_duration_sec": 325.6
+  },
+  {
+    "timestamp": "2026-09-17T10:23:31.467328",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11911880.0,
+    "exit_price": 11924789.0,
+    "size": 0.001,
+    "pnl": -12.9,
+    "hold_duration_sec": 234.3
+  },
+  {
+    "timestamp": "2026-09-17T10:25:24.494844",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11924969.0,
+    "exit_price": 11936741.0,
+    "size": 0.001,
+    "pnl": -11.8,
+    "hold_duration_sec": 107.4
+  },
+  {
+    "timestamp": "2026-09-17T10:32:08.881469",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11944425.0,
+    "exit_price": 11956480.0,
+    "size": 0.001,
+    "pnl": -12.1,
+    "hold_duration_sec": 377.5
+  },
+  {
+    "timestamp": "2026-09-17T10:34:06.572367",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11958230.0,
+    "exit_price": 11950940.0,
+    "size": 0.001,
+    "pnl": 7.3,
+    "hold_duration_sec": 112.0
+  },
+  {
+    "timestamp": "2026-09-17T10:38:07.861210",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11967625.0,
+    "exit_price": 11963838.0,
+    "size": 0.001,
+    "pnl": 3.8,
+    "hold_duration_sec": 25.9
+  },
+  {
+    "timestamp": "2026-09-17T10:39:19.735497",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11961936.0,
+    "exit_price": 11956806.0,
+    "size": 0.001,
+    "pnl": 5.1,
+    "hold_duration_sec": 66.2
+  },
+  {
+    "timestamp": "2026-09-17T10:42:08.422601",
+    "reason": "TAKE_PROFIT_LONG",
+    "direction": "LONG",
+    "entry_price": 11934835.0,
+    "exit_price": 11940780.0,
+    "size": 0.001,
+    "pnl": 5.9,
+    "hold_duration_sec": 31.0
+  },
+  {
+    "timestamp": "2026-09-17T10:48:29.643680",
+    "reason": "TAKE_PROFIT_LONG",
+    "direction": "LONG",
+    "entry_price": 11931149.0,
+    "exit_price": 11935883.0,
+    "size": 0.001,
+    "pnl": 4.7,
+    "hold_duration_sec": 41.1
+  },
+  {
+    "timestamp": "2026-09-17T10:54:40.906788",
+    "reason": "STOP_LOSS_LONG",
+    "direction": "LONG",
+    "entry_price": 11925388.0,
+    "exit_price": 11913629.0,
+    "size": 0.001,
+    "pnl": -11.8,
+    "hold_duration_sec": 86.4
+  },
+  {
+    "timestamp": "2026-09-17T11:01:08.337321",
+    "reason": "STOP_LOSS_LONG",
+    "direction": "LONG",
+    "entry_price": 11916326.0,
+    "exit_price": 11903851.0,
+    "size": 0.001,
+    "pnl": -12.5,
+    "hold_duration_sec": 381.8
+  },
+  {
+    "timestamp": "2026-09-17T11:09:31.722033",
+    "reason": "STOP_LOSS_LONG",
+    "direction": "LONG",
+    "entry_price": 11895996.0,
+    "exit_price": 11880865.0,
+    "size": 0.001,
+    "pnl": -15.1,
+    "hold_duration_sec": 172.8
+  },
+  {
+    "timestamp": "2026-09-17T11:14:39.815311",
+    "reason": "TAKE_PROFIT_LONG",
+    "direction": "LONG",
+    "entry_price": 11879569.0,
+    "exit_price": 11885493.0,
+    "size": 0.001,
+    "pnl": 5.9,
+    "hold_duration_sec": 284.5
+  },
+  {
+    "timestamp": "2026-09-17T11:21:17.374615",
+    "reason": "TAKE_PROFIT_LONG",
+    "direction": "LONG",
+    "entry_price": 11869987.0,
+    "exit_price": 11873966.0,
+    "size": 0.001,
+    "pnl": 4.0,
+    "hold_duration_sec": 61.3
+  },
+  {
+    "timestamp": "2026-09-17T11:36:31.581468",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11896000.0,
+    "exit_price": 11908428.0,
+    "size": 0.001,
+    "pnl": -12.4,
+    "hold_duration_sec": 158.0
+  },
+  {
+    "timestamp": "2026-09-17T11:37:38.778408",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11906446.0,
+    "exit_price": 11919417.0,
+    "size": 0.001,
+    "pnl": -13.0,
+    "hold_duration_sec": 61.6
+  },
+  {
+    "timestamp": "2026-09-17T11:39:15.953640",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11918315.0,
+    "exit_price": 11930590.0,
+    "size": 0.001,
+    "pnl": -12.3,
+    "hold_duration_sec": 91.6
+  },
+  {
+    "timestamp": "2026-09-17T11:45:43.022297",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11928525.0,
+    "exit_price": 11924737.0,
+    "size": 0.001,
+    "pnl": 3.8,
+    "hold_duration_sec": 381.5
+  },
+  {
+    "timestamp": "2026-09-17T12:08:28.174185",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11932234.0,
+    "exit_price": 11928055.0,
+    "size": 0.001,
+    "pnl": 4.2,
+    "hold_duration_sec": 132.6
+  },
+  {
+    "timestamp": "2026-09-17T13:21:11.698878",
+    "reason": "STOP_LOSS_LONG",
+    "direction": "LONG",
+    "entry_price": 11905350.0,
+    "exit_price": 11893026.0,
+    "size": 0.001,
+    "pnl": -12.3,
+    "hold_duration_sec": 676.2
+  },
+  {
+    "timestamp": "2026-09-17T13:24:35.783524",
+    "reason": "STOP_LOSS_LONG",
+    "direction": "LONG",
+    "entry_price": 11892035.0,
+    "exit_price": 11879371.0,
+    "size": 0.001,
+    "pnl": -12.7,
+    "hold_duration_sec": 178.2
+  },
+  {
+    "timestamp": "2026-09-17T13:40:23.239534",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11898145.0,
+    "exit_price": 11911412.0,
+    "size": 0.001,
+    "pnl": -13.3,
+    "hold_duration_sec": 66.5
+  },
+  {
+    "timestamp": "2026-09-17T13:42:16.314829",
+    "reason": "TAKE_PROFIT_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11909278.0,
+    "exit_price": 11903328.0,
+    "size": 0.001,
+    "pnl": 6.0,
+    "hold_duration_sec": 107.5
+  },
+  {
+    "timestamp": "2026-09-17T13:48:23.191181",
+    "reason": "STOP_LOSS_SHORT",
+    "direction": "SHORT",
+    "entry_price": 11902254.0,
+    "exit_price": 11916264.0,
+    "size": 0.001,
+    "pnl": -14.0,
+    "hold_duration_sec": 361.2
+  }
+]

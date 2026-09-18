@@ -1,9 +1,9 @@
 import time
 from typing import Dict, Any, Optional
-from .base import BaseTickStrategy
+from .base import BaseTickStrategy, StrategyBrain
 
 
-class EmaTrendTickStrategy(BaseTickStrategy):
+class EmaTrendTickStrategy(StrategyBrain):
     """
     【大波EMAトレンドフォロー・ティック戦略】
     - リアルタイムティックから逐次EMA（短期Fast & 長期Slow）を動的算出
@@ -21,13 +21,18 @@ class EmaTrendTickStrategy(BaseTickStrategy):
             "trail_trigger_bp": 20.0,     # トレーリング発動閾値 (+20bp)
             "trail_distance_bp": 10.0,    # 最高値からのトレーリング許容幅 (10bp)
             "stop_loss_bp": 12.0,         # 逆行防衛ストップ (12bp)
+            # GAPCORE流 芯①: Mid値洗い ＆ 板厚不均衡フィルタ
+            "use_mid_price": True,        # LTPノイズを全廃し、仲値(Mid)でEMA更新・評価値洗い
+            "enable_imbalance_filter": True, # 板厚不均衡(OBI)による逆選択エントリー遮断
+            "min_imbalance": 0.05,        # 逆選択排除閾値 (±5%以上の敵対板過多をブロック)
+            "max_spread_bp": 8.0,         # スプレッド拡大時のTakerエントリー抑止 (8bp上限)
         }
         if parameters:
             default_params.update(parameters)
         if kwargs:
             default_params.update(kwargs)
 
-        super().__init__(name="EmaTrendTick", version="v1.0", parameters=default_params)
+        super().__init__(name="EmaTrendTick", version="v1.1", parameters=default_params)
         self.strategy_type = "trend_following"
 
         # 逐次EMA計算用内部ステート
@@ -63,20 +68,30 @@ class EmaTrendTickStrategy(BaseTickStrategy):
         entry_price: float,
     ) -> Dict[str, Any]:
         curr_p = tick.get("price", 0.0)
+        mid_p = tick.get("mid", flow_stats.get("mid_price", 0.0))
         now_ts = tick.get("timestamp", time.time())
-        if curr_p <= 0:
+
+        # GAPCORE流 芯①: LTPの約定ヒゲを排除し、仲値(Mid)でEMAおよび値洗いを実行
+        eval_p = mid_p if (self.parameters.get("use_mid_price", True) and mid_p > 0) else curr_p
+        if eval_p <= 0:
             return {"action": "HOLD", "reason": "無効価格"}
 
-        # EMAの逐次更新
-        self._update_emas(curr_p, now_ts)
+        # EMAの逐次更新 (Midベース)
+        self._update_emas(eval_p, now_ts)
         delta_ratio = flow_stats.get("delta_ratio", 0.0)
+        book_imb = flow_stats.get("book_imbalance", 0.0)
+        market_spread_bp = flow_stats.get("spread_bp", 0.0)
+        use_imb_filter = self.parameters.get("enable_imbalance_filter", True)
+        min_imb = self.parameters.get("min_imbalance", 0.05)
+        max_sp_bp = self.parameters.get("max_spread_bp", 8.0)
 
         # --------------------------------------------------------
         # 1. ポジション保有中の管理（大波追随・トレーリング・反転EXIT）
         # --------------------------------------------------------
         if current_pos != 0 and entry_price > 0:
             is_long = current_pos > 0
-            ret_bp = ((curr_p - entry_price) / entry_price * 10000.0) * (1.0 if is_long else -1.0)
+            # Midベースでの厳密な未実現収益率 (スプレッド飛びノイズ排除)
+            ret_bp = ((eval_p - entry_price) / entry_price * 10000.0) * (1.0 if is_long else -1.0)
 
             # 最高益（ピーク）の更新
             if ret_bp > self.highest_return_bp:
@@ -87,7 +102,8 @@ class EmaTrendTickStrategy(BaseTickStrategy):
                 self.highest_return_bp = 0.0
                 return {
                     "action": "EXIT",
-                    "reason": f"大波EMAトレンド目標到達利確 (+{ret_bp:.1f}bp)",
+                    "target_qty": 0.0,
+                    "reason": f"大波EMAトレンド目標到達利確 (+{ret_bp:.1f}bp @ Mid:{eval_p:,.0f}円)",
                     "target_price": None,
                 }
 
@@ -98,6 +114,7 @@ class EmaTrendTickStrategy(BaseTickStrategy):
                     self.highest_return_bp = 0.0
                     return {
                         "action": "EXIT",
+                        "target_qty": 0.0,
                         "reason": f"EMAトレーリング利確保護 (ピーク:+{self.highest_return_bp:.1f}bp -> 現在:+{ret_bp:.1f}bp)",
                         "target_price": None,
                     }
@@ -107,6 +124,7 @@ class EmaTrendTickStrategy(BaseTickStrategy):
                 self.highest_return_bp = 0.0
                 return {
                     "action": "EXIT",
+                    "target_qty": 0.0,
                     "reason": f"EMAデッドクロス反転手仕舞い (損益:{ret_bp:+.1f}bp)",
                     "target_price": None,
                 }
@@ -114,6 +132,7 @@ class EmaTrendTickStrategy(BaseTickStrategy):
                 self.highest_return_bp = 0.0
                 return {
                     "action": "EXIT",
+                    "target_qty": 0.0,
                     "reason": f"EMAゴールデンクロス反転手仕舞い (損益:{ret_bp:+.1f}bp)",
                     "target_price": None,
                 }
@@ -123,37 +142,77 @@ class EmaTrendTickStrategy(BaseTickStrategy):
                 self.highest_return_bp = 0.0
                 return {
                     "action": "EXIT",
+                    "target_qty": 0.0,
                     "reason": f"大波防衛ストップ損切 ({ret_bp:.1f}bp)",
                     "target_price": None,
                 }
 
-            return {"action": "HOLD", "reason": f"大波トレンド追随中 ({ret_bp:+.1f}bp)"}
+            return {
+                "action": "HOLD",
+                "target_qty": current_pos,
+                "reason": f"大波トレンド追随中 ({ret_bp:+.1f}bp @ Mid:{eval_p:,.0f}円)"
+            }
 
         # --------------------------------------------------------
-        # 2. ノーポジション時のエントリー（EMAクロス ＆ Taker Delta一致）
+        # 2. ノーポジション時のエントリー（EMAクロス ＆ Taker Delta ＆ 板厚不均衡フィルタ）
         # --------------------------------------------------------
         if current_pos == 0:
             self.highest_return_bp = 0.0
             min_delta = self.parameters["min_delta_ratio"]
+            lot = float(self.parameters.get("order_size", 0.001))
+
+            # スプレッドフィルタ: スプレッド拡大時はTakerコスト負けするためエントリー禁止
+            if use_imb_filter and market_spread_bp > max_sp_bp:
+                return {
+                    "action": "HOLD",
+                    "target_qty": 0.0,
+                    "reason": f"スプレッド過大見送り (Spread:{market_spread_bp:.1f}bp > {max_sp_bp:.1f}bp)",
+                }
 
             # 買い条件: 短期EMA > 長期EMA かつ Taker買い優勢
             if self.fast_ema > self.slow_ema and delta_ratio >= min_delta:
+                # 板厚不均衡フィルタ: 売り板が極端に厚い (book_imb < -min_imb) 逆選択状態はエントリー見送り
+                if use_imb_filter and book_imb < -min_imb:
+                    return {
+                        "action": "HOLD",
+                        "target_qty": 0.0,
+                        "reason": f"板厚不均衡フィルタ見送り (売り板過多: Imb={book_imb:+.2f} < -{min_imb:.2f})",
+                    }
+
                 spread_bp = (self.fast_ema - self.slow_ema) / self.slow_ema * 10000.0
                 if spread_bp >= 0.5:  # 明確な乖離 (0.5bp以上)
                     return {
                         "action": "BUY",
-                        "reason": f"EMA上昇トレンド順張り (Fast-Slow:{spread_bp:+.1f}bp, Delta:{delta_ratio:+.2f})",
+                        "target_qty": lot,
+                        "reason": (
+                            f"EMA上昇トレンド順張り (Fast-Slow:{spread_bp:+.1f}bp, "
+                            f"Delta:{delta_ratio:+.2f}, Imb:{book_imb:+.2f}, Mid:{eval_p:,.0f}円)"
+                        ),
                         "target_price": None,
                     }
 
             # 売り条件: 短期EMA < 長期EMA かつ Taker売り優勢
             elif self.fast_ema < self.slow_ema and delta_ratio <= -min_delta:
+                # 板厚不均衡フィルタ: 買い板が極端に厚い (book_imb > min_imb) 逆選択状態はエントリー見送り
+                if use_imb_filter and book_imb > min_imb:
+                    return {
+                        "action": "HOLD",
+                        "target_qty": 0.0,
+                        "reason": f"板厚不均衡フィルタ見送り (買い板過多: Imb={book_imb:+.2f} > +{min_imb:.2f})",
+                    }
+
                 spread_bp = (self.fast_ema - self.slow_ema) / self.slow_ema * 10000.0
                 if spread_bp <= -0.5:
                     return {
                         "action": "SELL",
-                        "reason": f"EMA下降トレンド順張り (Fast-Slow:{spread_bp:+.1f}bp, Delta:{delta_ratio:+.2f})",
+                        "target_qty": -lot,
+                        "reason": (
+                            f"EMA下降トレンド順張り (Fast-Slow:{spread_bp:+.1f}bp, "
+                            f"Delta:{delta_ratio:+.2f}, Imb:{book_imb:+.2f}, Mid:{eval_p:,.0f}円)"
+                        ),
                         "target_price": None,
                     }
 
-        return {"action": "HOLD", "reason": "EMAトレンド待機"}
+        return {"action": "HOLD", "target_qty": current_pos, "reason": "EMAトレンド待機"}
+
+

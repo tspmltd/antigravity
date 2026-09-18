@@ -29,6 +29,24 @@ class BaseTickStrategy(ABC):
             Dict containing:
                 - action: 'BUY', 'SELL', 'EXIT', 'CANCEL', 'REFILL', 'HOLD'
                 - reason: アクション要因
-                - target_price: 指値価格（成行はNone）
         """
         pass
+
+
+class StrategyBrain(BaseTickStrategy):
+    """
+    GAPCORE Strategy Brain Interface (Clean Architecture)
+    Decouples signal generation from risk and position management.
+    The strategy acts purely as the brain, determining the target position size.
+    """
+
+    def decide_target_qty(
+        self,
+        tick: Dict[str, Any],
+        flow_stats: Dict[str, Any],
+        current_pos: float,
+        entry_price: float,
+    ) -> float:
+        """Default implementation delegates to on_tick()['target_qty']."""
+        res = self.on_tick(tick, flow_stats, current_pos, entry_price)
+        return float(res.get("target_qty", current_pos))

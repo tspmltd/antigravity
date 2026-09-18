@@ -163,7 +163,7 @@ class AdaptiveManager:
         print(f"[AdaptiveManager] 新戦略の評価結果: {decision['status']} (Sharpe: {is_m.get('sharpe_ratio')}, MDD: {is_m.get('max_drawdown_pct')}%)")
 
         # 合格した場合、自動差し替え（ホットリロード）
-        if decision["status"] == "PASS" or self.tuning_conf.get("auto_switch_strategy", True):
+        if decision["status"] == "PASS" and self.tuning_conf.get("auto_switch_strategy", True):
             new_path = improved_info["file_path"]
             success_msg = f"新戦略への自動差し替え準備完了: {improved_info['name']} ({new_path})"
             print(f"[AdaptiveManager] [SUCCESS] 【自動改善成功】稼働中戦略を新バージョンへホットリロードします！")

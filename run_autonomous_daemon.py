@@ -9,7 +9,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from pipeline.orchestrator import AutonomousPipeline
-from core.notifier import DiscordNotifier
+from antigravity.risk_guard.notifier import DiscordNotifier
 from antigravity.risk_guard.git_sync import GitAutoSync
 
 
@@ -37,7 +37,8 @@ async def discovery_loop(
     合格した新戦略を自動で生成・配置する常駐自律探索デーモン。
     """
     notifier = DiscordNotifier()
-    pipeline = AutonomousPipeline(config_path=config_path, commission_rate=0.0, slippage_rate=0.0)
+    # bitFlyer Lightning FX は取引手数料無料 (commission=0.0)、実勢スプレッド摩擦 (slippage_rate=0.0003 ≒ 3bp ≒ 約3,500円幅) を厳格に適用
+    pipeline = AutonomousPipeline(config_path=config_path, commission_rate=0.0, slippage_rate=0.0003)
     git_sync = GitAutoSync(notifier=notifier)
 
     print("\n" + "=" * 70)
@@ -85,18 +86,34 @@ async def discovery_loop(
             )
 
             approved = [r for r in results if r.get("final_status") == "APPROVED"]
+            rejected = [r for r in results if r.get("final_status") != "APPROVED"]
+
+            summary_lines = []
+            for r in results:
+                name = r.get("name", "Unknown")
+                status = r.get("final_status", "UNKNOWN")
+                metrics = r.get("metrics", {})
+                sr = metrics.get("sharpe_ratio", 0.0) if isinstance(metrics, dict) else 0.0
+                wr = (metrics.get("win_rate", 0.0) * 100) if isinstance(metrics, dict) else 0.0
+                pnl = metrics.get("total_pnl", 0.0) if isinstance(metrics, dict) else 0.0
+                status_badge = "✅ 合格 (採用)" if status == "APPROVED" else f"🛡️ 不合格 (安全ブロック)"
+                summary_lines.append(f"• **{name}**: {status_badge} | SR: `{sr:.2f}` | 勝率: `{wr:.1f}%` | 損益: `{pnl:+,.0f}円`")
+            summary_text = "\n".join(summary_lines) if summary_lines else "検証対象なし"
+
+            notifier.send_evolution_cycle_report(
+                cycle=cycle,
+                symbol=symbol,
+                timeframe=timeframe,
+                tested_themes=selected_themes,
+                approved_count=len(approved),
+                rejected_count=len(rejected),
+                summary_text=summary_text,
+                target="system",
+            )
+
             if approved:
                 print(f"\n[DiscoveryDaemon] 🏆 【新戦略発見！】{len(approved)} 件の戦略がガバナンスを突破しました！")
                 print(f"                 稼働中のポートフォリオランナーへ自動追加されます。")
-                notifier.send_alert(
-                    title=f"🏆 【探索完了・新戦略採択】Cycle {cycle} で新戦略が合格しました！",
-                    message=f"**探索市場**: `{symbol}` ({timeframe})\n"
-                            f"**採択戦略数**: **{len(approved)} 件**\n"
-                            f"稼働中のポートフォリオへ無停止で自動追加（Hot-Add）されます。",
-                    level="success",
-                    target="system"
-                )
-
                 # 未コミットの合格戦略を直ちにGitHubへ自動プッシュ
                 try:
                     strat_names = ", ".join([r.get("name", "NewStrategy") for r in approved])
@@ -104,17 +121,14 @@ async def discovery_loop(
                 except Exception as ex:
                     print(f"[DiscoveryDaemon] GitAutoSync 例外 (スキップ): {ex}", flush=True)
 
+                # 分析・重み更新サーバー (#approved-strategies) へ新戦略提案を送信
+                try:
+                    from antigravity.quant_pipeline.strategy_evolver import StrategyEvolver
+                    StrategyEvolver().propose_latest_strategy()
+                except Exception as ex_evo:
+                    print(f"[DiscoveryDaemon] StrategyEvolver 通知例外: {ex_evo}", flush=True)
             else:
-
                 print(f"\n[DiscoveryDaemon] 今回のサイクルでは新規承認戦略はありませんでした (安全ブロック)。")
-                notifier.send_alert(
-                    title=f"🔍 【探索サイクル完了】Cycle {cycle} 探索結果",
-                    message=f"**探索市場**: `{symbol}` ({timeframe})\n"
-                            f"今回検証した3テーマは、未知データ過剰適合ガード等により安全にブロック（アーカイブ）されました。\n"
-                            f"次回探索サイクル: **{interval_sec / 3600:.1f} 時間後** に最新相場で再探索します。",
-                    level="info",
-                    target="system"
-                )
 
         except Exception as e:
             print(f"[DiscoveryDaemon] ⚠️ 探索サイクル中にエラー発生: {e}")

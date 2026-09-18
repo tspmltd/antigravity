@@ -35,20 +35,36 @@ class TestAdaptiveLoop(unittest.TestCase):
             "iteration": 1
         }
 
-        # 自動再学習・最適化の実行
-        need_switch, new_path, msg = manager.evaluate_and_adapt(
-            trades_history=mock_trades,
-            initial_capital=100000.0,
-            current_cash=95500.0,
-            current_strategy_info=strat_info,
-            symbol="BTC_JPY",
-            timeframe="1m"
-        )
+        from unittest.mock import patch
 
-        self.assertTrue(need_switch, "成績低下により戦略差し替えフラグがTrueになるべきです")
-        self.assertIsNotNone(new_path, "新戦略のパスが返されるべきです")
-        self.assertTrue(os.path.exists(new_path), f"新戦略ファイルが存在するべきです: {new_path}")
-        print(f"\n[UnitTest] 自律適応テスト成功: 新戦略が自動生成され差し替え準備完了 -> {new_path}")
+        # 1. ガバナンスが PASS の場合: ホットリロードされる
+        with patch.object(manager.governance, "evaluate", return_value={"status": "PASS", "reason": "テスト合格"}):
+            need_switch, new_path, msg = manager.evaluate_and_adapt(
+                trades_history=mock_trades,
+                initial_capital=100000.0,
+                current_cash=95500.0,
+                current_strategy_info=strat_info,
+                symbol="BTC_JPY",
+                timeframe="1m"
+            )
+            self.assertTrue(need_switch, "合格時には戦略差し替えフラグがTrueになるべきです")
+            self.assertIsNotNone(new_path, "新戦略のパスが返されるべきです")
+            self.assertTrue(os.path.exists(new_path), f"新戦略ファイルが存在するべきです: {new_path}")
+            print(f"\n[UnitTest] 自律適応テスト成功: 新戦略が自動生成され差し替え準備完了 -> {new_path}")
+
+        # 2. ガバナンスが REVISE の場合: 安全ガードが作動し差し替えブロックされる
+        with patch.object(manager.governance, "evaluate", return_value={"status": "REVISE", "reason": "Sharpe不足"}):
+            need_switch_rev, new_path_rev, msg_rev = manager.evaluate_and_adapt(
+                trades_history=mock_trades,
+                initial_capital=100000.0,
+                current_cash=95500.0,
+                current_strategy_info=strat_info,
+                symbol="BTC_JPY",
+                timeframe="1m"
+            )
+            self.assertFalse(need_switch_rev, "不合格時には戦略差し替えフラグがFalse（ブロック）になるべきです")
+            self.assertIsNone(new_path_rev, "新戦略のパスはNoneであるべきです")
+            print(f"[UnitTest] 安全ガードテスト成功: 不合格戦略のホットリロードが正常に遮断されました")
 
 
 if __name__ == "__main__":

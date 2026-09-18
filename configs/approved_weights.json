@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-09-17T13:15:00+09:00",
+  "description": "Fusion Engine レジーム別重みパラメータ (DuckDB分析による最適化承認済み)",
+  "W_PRESSURE": {
+    "trend": 0.60,
+    "range": 0.40,
+    "high_vol": 0.70,
+    "low_vol": 0.30
+  },
+  "W_CONFLICT": {
+    "trend": 0.50,
+    "range": 0.80,
+    "high_vol": 0.60,
+    "low_vol": 0.40
+  },
+  "confidence_threshold": 0.65
+}
