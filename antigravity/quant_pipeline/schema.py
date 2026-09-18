@@ -118,3 +118,35 @@ class PnLLog:
     max_drawdown: float
     sharpe_rolling: float = 0.0
     win_rate_rolling: float = 0.0
+
+
+@dataclass
+class AgentConclusion:
+    """🏛️ 各専門エージェントの分析結論スキーマ (4AGENT 統一)"""
+    agent_name: str                 # MicrostructureAgent / TrendFollowAgent / DuckDBOptimizerAgent / AdverseResearchAgent
+    timestamp: int                  # Unix ms
+    verdict: str                    # エージェントの判定要約 (例: BUY_PRESSURE, NORMAL_RANGE, ADVERSE_DEPLETION_EVACUATE)
+    confidence: float               # 0.0 ~ 1.0
+    primary_action: str             # buy / sell / hold / exit / cancel / veto
+    metrics: dict = field(default_factory=dict)      # 固有の計算指標 (Imbalance, Sharpe, LeadTime etc.)
+    parameters: dict = field(default_factory=dict)   # 推奨パラメータ (重み, スプレッド上限 etc.)
+    hard_veto: bool = False         # 新規エントリーの絶対遮断権
+    emergency_cancel: bool = False  # 保有指値・ポジションの即時撤退要求
+    explanation: str = ""           # 人間可読の分析サマリー
+
+
+@dataclass
+class CouncilVerdict:
+    """👑 4AGENT 合同評議会・総合意思決定＆戦略反映ディレクティブ"""
+    timestamp: int
+    conclusions: dict = field(default_factory=dict)  # {agent_name: AgentConclusion dict}
+    final_action: str = "hold"                       # buy / sell / hold / exit / cancel
+    final_confidence: float = 0.0
+    size_multiplier: float = 1.0
+    active_regime: str = "range"
+    adverse_risk_level: str = "SAFE"                 # SAFE / WARNING / CRITICAL
+    hard_veto_active: bool = False
+    emergency_cancel_active: bool = False
+    applied_weights: dict = field(default_factory=dict)
+    strategy_directives: list = field(default_factory=list)  # 戦略への有効反映内容サマリー
+

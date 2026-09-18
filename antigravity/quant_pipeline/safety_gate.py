@@ -89,11 +89,12 @@ class SafetyGate:
         size_multiplier = float(signal.get("size_multiplier", 1.0))
         fake_bo = bool(signal.get("fake_breakout_flag", False))
 
-        # 0. EXIT はポジションがある場合常に安全弁として許可
-        if action == "exit":
+        # 0. EXIT / CANCEL はポジションがある場合常に安全弁として許可
+        if action in ("exit", "cancel"):
             if live_state.has_open_position:
-                return True, "ポジション解消のためのエグジット要求"
+                return True, f"ポジション解消のためのエグジット/キャンセル要求 ({action})"
             return False, "ポジションなしのためエグジット不要"
+
 
         # エントリー(buy/sell)の判定
         if action not in ("buy", "sell"):

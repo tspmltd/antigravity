@@ -18,6 +18,9 @@ from .parquet_logger import ParquetBatchLogger
 from .event_bus import EventBus
 from .agents.trend_agent import TrendFollowAgent
 from .agents.microstructure_agent import MicrostructureAgent
+from .agents.adverse_agent import AdverseResearchAgent
+from .agents.duckdb_optimizer_agent import DuckDBOptimizerAgent
+from .council_coordinator import FourAgentsCouncil
 from .fusion_engine import SignalFusionEngine
 from .ingestion import MarketDataIngestion
 from .quant_discord_notifier import QuantDiscordNotifier
@@ -28,7 +31,7 @@ from .sync_executor import SyncExecutor
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Antigravity Quant Pipeline Runner")
+    parser = argparse.ArgumentParser(description="Antigravity 4AGENT Quant Pipeline Runner")
     parser.add_argument("--symbol", default="FX_BTC_JPY", help="対象銘柄")
     parser.add_argument("--interval", type=float, default=2.0, help="観測間隔 (秒)")
     parser.add_argument("--steps", type=int, default=None, help="最大ステップ数 (テスト用)")
@@ -39,22 +42,23 @@ def main():
     parser.add_argument("--size", type=float, default=0.001, help="発注ロット (BTC, デフォルト: 0.001)")
     args = parser.parse_args()
 
-    print("=" * 70)
-    print("      🚀 Antigravity Quant Ingestion & Signal Fusion Pipeline      ")
-    print("=" * 70)
+    print("=" * 85)
+    print("   🏛️  Antigravity 4AGENT Autonomous Strategy & Governance Pipeline  🏛️")
+    print("   [1]Microstructure  [2]TrendFollow  [3]DuckDBOptimizer  [4]AdverseResearch")
+    print("=" * 85)
     print(f"対象銘柄          : {args.symbol}")
     print(f"観測間隔          : {args.interval} 秒")
     print(f"Parquet出力先     : data/parquet/")
     print(f"Parquetフラッシュ : {args.flush_interval} 秒ごと")
-    print(f"Discord Dry-run   : {'無効' if args.no_discord else '有効 (Quants Dry-run サーバー)'}")
+    print(f"Discord 連携      : {'無効' if args.no_discord else '有効 (4AGENT合同評議会 & Dry-run サーバー)'}")
     
     live_mode_str = "無効 (Dry-run観測のみ)"
     if args.live_sync:
         live_mode_str = f"有効 ({'🚨 実資金' if args.real else '🛡️ シミュレーション'} ロット: {args.size} BTC)"
     print(f"LIVE 本番連動     : {live_mode_str}")
-    print("-" * 70)
-    print(" [時刻]    | Mid価格 (円) | Imbalance | トレンド | 板圧力 | 確信度 | アクション | 仮想PnL  | LIVE")
-    print("-" * 70)
+    print("-" * 85)
+    print(" [時刻]    | Mid価格 (円) | Imb     | トレンド | 板圧力     | Adverse(スコア) | 確信度 | アクション | 仮想PnL  | LIVE")
+    print("-" * 85)
 
     # 1. コンポーネント初期化
     logger = ParquetBatchLogger(flush_interval_sec=args.flush_interval, batch_size=100)
@@ -94,14 +98,26 @@ def main():
             enable_real_live=args.real,
         )
 
-    # 3. エージェント登録
+    # 3. 4AGENT 登録
     trend_agent = TrendFollowAgent(bus)
     micro_agent = MicrostructureAgent(bus)
+    adverse_agent = AdverseResearchAgent(bus)
+    duckdb_agent = DuckDBOptimizerAgent(bus)
 
-    # 4. 意思決定エンジン登録
+    # 4. 4AGENT 評議会コーディネーター登録
+    council = FourAgentsCouncil(
+        bus=bus,
+        micro_agent=micro_agent,
+        trend_agent=trend_agent,
+        duckdb_agent=duckdb_agent,
+        adverse_agent=adverse_agent,
+        notifier=notifier,
+    )
+
+    # 5. 意思決定エンジン登録
     fusion_engine = SignalFusionEngine(bus, logger)
 
-    # 5. Ingestionエンジン登録
+    # 6. Ingestionエンジン登録
     ingestion = MarketDataIngestion(bus, logger, product_code=args.symbol)
 
     step = 0
@@ -113,10 +129,19 @@ def main():
             snap = ingestion.poll_once()
             if snap:
                 now_str = datetime.now().strftime("%H:%M:%S")
+
+                # 4AGENT の合議判定を策定
+                verdict = council.deliberate()
+
                 dec = fusion_engine.latest_micro
                 t_dir = fusion_engine.latest_trend["trend_direction"]
                 p_side = dec.get("pressure_side", "none")
                 p_score = dec.get("pressure_score", 0.0)
+
+                adv_state = adverse_agent.latest_state
+                adv_side = adv_state.get("adverse_side", "none")
+                adv_score = adv_state.get("adverse_score", 0.0)
+                adv_str = f"{adv_side[:1].upper()}:{adv_score:.2f}"
 
                 # 最新意思決定を取得
                 latest_dec = fusion_engine.evaluate()
@@ -156,8 +181,8 @@ def main():
                 pnl_str = f"{stats.total_pnl:+7.1f}"
 
                 print(
-                    f" {now_str} | {snap.mid_price:12,.0f} | {snap.imbalance:+9.2f} | "
-                    f"{t_dir:8} | {p_side:4}({p_score:.1f}) | {conf_val:6.2f} | {act_str:6} | {pnl_str}円 | {live_status:>7}",
+                    f" {now_str} | {snap.mid_price:12,.0f} | {snap.imbalance:+7.2f} | "
+                    f"{t_dir:8} | {p_side:4}({p_score:.1f}) | {adv_str:15} | {conf_val:6.2f} | {act_str:6} | {pnl_str}円 | {live_status:>7}",
                     flush=True
                 )
 
@@ -172,6 +197,7 @@ def main():
                         force=True
                     )
                     last_discord_summary_ts = now
+
 
             if args.steps and step >= args.steps:
                 print(f"\n[Pipeline] 指定ステップ数 ({args.steps}) に到達しました。")

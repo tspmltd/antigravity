@@ -109,3 +109,31 @@ t = 2,081ms: adverse_risk_score が「逆選択の危険！」と警報を鳴ら
 3. **ドキュメント & メモ**:
    - `MEM.md` (本書)
    - `.gitignore` (クリーン化)
+
+---
+
+## 6. 4AGENT 合同評議会 (Council) ＆ 戦略有効反映システム (2026-09-19 実装)
+
+4つの専門エージェントが独立して分析結論を出し、それをリアルタイム戦略・安全ゲート・執行系へ有効に反映させるオーケストレーション機構を構築・稼働。
+
+### 4AGENT の役割と分析結論 (AgentConclusion)
+1. **① マイクロストラクチャー板解析エージェント (`MicrostructureAgent`)**:
+   - **分析結論**: 板厚不均衡 (Imbalance), Micro-price 乖離, フェイクブレイク (だましキャンセル多発)。
+   - **戦略反映**: フェイクブレイク検知時に新規エントリーを即時遮断 (`hard_veto = True`, `size_mult = 0.0`)。
+2. **② トレンド追従エージェント (`TrendFollowAgent`)**:
+   - **分析結論**: 中期価格傾き (方向性), トレンド強度, 市場レジーム (`trend` / `range` / `high_vol` / `low_vol`)。
+   - **戦略反映**: レジーム判定に応じたリスクサイズ調整 (高ボラ時はロット半減、レンジ時はスプレッド刈り)。
+3. **③ DuckDB 最適化エージェント (`DuckDBOptimizerAgent`)**:
+   - **分析結論**: Parquet 過去ログから勝率・PF・勝敗要因を統計解析。レジーム別最適重み (`W_PRESSURE`, `W_CONFLICT`) および最適スプレッド上限を自律導出。
+   - **戦略反映**: 最適重み (`configs/approved_weights.json`) をファイル出力し、`SignalFusionEngine` が無停止ホットリロードで常時適応。
+4. **④ ADVERSE 専門研究・防御エージェント (`AdverseResearchAgent`)**:
+   - **分析結論**: 逆選択エピソード状態機械 (`DEPLETING`, `OPP_TAKER`, `MAKER_VICTIM`)、逆選択スコア、RTT先回りリードタイム (`lead_ms ≥ 85ms`)。
+   - **戦略反映**:
+     - **Hard Veto**: 逆選択予兆のある方向への新規発注を完全拒否。
+     - **Emergency Cancel & Evacuation**: トキシック成行直撃予兆時に指値キャンセル (`action = "cancel"`) および建玉の成行緊急撤退 (`ADVERSE_EMERGENCY_CANCEL`) を発令。
+
+### 評議会コーディネーター (`FourAgentsCouncil`)
+- 各エージェントの結論を集約し、総合判定 (`CouncilVerdict`) を策定。
+- 最新状態を `configs/agents_council_state.json` へ常時アトミック保存。
+- Discord 分析サーバー & Dry-run サーバーへ定期および緊急レポートを配信。
+- `tests/test_four_agents_integration.py` による結合テスト全 PASS 担保。

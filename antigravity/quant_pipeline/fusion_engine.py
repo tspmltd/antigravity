@@ -35,8 +35,15 @@ class SignalFusionEngine:
             "fake_breakout_flag": False,
             "latency_risk_flag": False,
         }
+        self.latest_adverse: Dict[str, Any] = {
+            "adverse_side": "none",
+            "adverse_score": 0.0,
+            "cancel_recommendation": False,
+            "lead_ms_estimated": 0.0,
+        }
 
         self.weights_file = "/home/azureuser/antigravity/configs/approved_weights.json"
+        self._last_weights_mtime: float = 0.0
         # レジーム別重み設定 (過去ログのDuckDB分析から動的更新可能)
         self.W_PRESSURE = {
             "trend": 0.60,
@@ -54,6 +61,19 @@ class SignalFusionEngine:
 
         self.bus.subscribe("trend_state", self._on_trend_update)
         self.bus.subscribe("micro_state", self._on_micro_update)
+        self.bus.subscribe("adverse_research_state", self._on_adverse_update)
+
+    def _check_and_reload_weights(self):
+        """承認済み重みファイルの変更を検知して無停止ホットリロード"""
+        import os
+        if os.path.exists(self.weights_file):
+            try:
+                mtime = os.path.getmtime(self.weights_file)
+                if mtime > self._last_weights_mtime:
+                    self.load_weights(self.weights_file)
+                    self._last_weights_mtime = mtime
+            except Exception:
+                pass
 
     def load_weights(self, filepath: str):
         """外部JSONファイルから承認済み重みをロード"""
@@ -69,7 +89,8 @@ class SignalFusionEngine:
                     self.W_CONFLICT.update(data["W_CONFLICT"])
                 if "confidence_threshold" in data:
                     self.confidence_threshold = float(data["confidence_threshold"])
-                # print(f"[SignalFusionEngine] ✅ 承認済み重みを適用しました: {filepath}")
+                self._last_weights_mtime = os.path.getmtime(filepath)
+                # print(f"[SignalFusionEngine] ✅ 承認済み重みをホットリロードしました: {filepath}")
             except Exception as e:
                 print(f"[SignalFusionEngine] ⚠️ 重みロード失敗: {e}")
 
@@ -81,7 +102,12 @@ class SignalFusionEngine:
         self.latest_micro = data
         self.evaluate()
 
+    def _on_adverse_update(self, data: Dict[str, Any]):
+        self.latest_adverse = data
+        self.evaluate()
+
     def evaluate(self) -> Optional[FusionDecisionLog]:
+        self._check_and_reload_weights()
         t_dir = self.latest_trend["trend_direction"]
         t_str = self.latest_trend["trend_strength"]
         regime = self.latest_trend["regime_tag"]
@@ -118,6 +144,18 @@ class SignalFusionEngine:
             if adverse_warning or adverse_score >= 0.60:
                 size_mult = 0.0  # 逆行トラップを検知してエントリー完全遮断
 
+        # ADVERSE 専門エージェントからの直接ハード拒否権 (Hard Veto Gate & Cancel)
+        adv_side = self.latest_adverse.get("adverse_side", "none")
+        adv_score = float(self.latest_adverse.get("adverse_score", 0.0))
+        adv_cancel = bool(self.latest_adverse.get("cancel_recommendation", False))
+        if adv_cancel:
+            size_mult = 0.0
+            final_confidence = 0.0
+            adverse_warning = True
+        elif (intended_action == adv_side and adv_score >= 0.70):
+            size_mult = 0.0  # 発注を完全に拒否
+            final_confidence = 0.0
+
         # マクロ急変ショック連携 (外部センチネルからの急変状態)
         try:
             from .market_shock_sentinel import MarketShockSentinel
@@ -138,8 +176,10 @@ class SignalFusionEngine:
         if lat_risk:
             size_mult *= 0.50          # 通信遅延時はロット半減
 
-        # 4. 最終アクション決定 (微小ノイズによる早すぎるExitを抑制しつつ、真の急変時のみExit)
-        if final_confidence >= self.confidence_threshold and size_mult > 0.0:
+        # 4. 最終アクション決定
+        if adv_cancel:
+            action = "cancel"  # 逆選択直撃による緊急退避・指値キャンセル
+        elif final_confidence >= self.confidence_threshold and size_mult > 0.0:
             action = intended_action
         elif final_confidence >= 0.20 and not adverse_warning:
             action = "hold"
@@ -166,8 +206,9 @@ class SignalFusionEngine:
         )
         self.logger.log("fusion_log", decision)
 
-        # 6. エントリーシグナルを配信
-        if action in ["buy", "sell"]:
+        # 6. シグナルを配信 (buy/sell/exit/cancel)
+        if action in ["buy", "sell", "exit", "cancel"]:
             self.bus.publish("final_signal", asdict(decision))
 
         return decision
+

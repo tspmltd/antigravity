@@ -92,10 +92,12 @@ class DryRunSimulator:
         action = signal.get("action", "hold").lower()
         confidence = float(signal.get("final_confidence", 0.0))
 
-        # エグジットシグナル
-        if action == "exit" and self.position_side:
+        # エグジット＆逆選択緊急キャンセルシグナル
+        if action in ("exit", "cancel") and self.position_side:
+            reason = "ADVERSE_EMERGENCY_CANCEL" if action == "cancel" else "FUSION_EXIT_SIGNAL"
             eval_price = best_bid if self.position_side == "buy" and best_bid else (best_ask if self.position_side == "sell" and best_ask else current_price)
-            return self._close_position(eval_price, "FUSION_EXIT_SIGNAL")
+            return self._close_position(eval_price, reason)
+
 
         # 新規エントリー (BUYは約定Ask、SELLは約定Bidでスプレッドを正確に反映)
         if action in ("buy", "sell") and not self.position_side:

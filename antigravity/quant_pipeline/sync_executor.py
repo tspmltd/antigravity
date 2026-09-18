@@ -86,13 +86,15 @@ class SyncExecutor:
                     signal=signal,
                     stats=stats,
                 )
-            elif action == "exit" and self.live_state.has_open_position:
+            elif action in ("exit", "cancel") and self.live_state.has_open_position:
                 exit_price = best_bid if self.live_state.open_side == "buy" and best_bid else (best_ask if self.live_state.open_side == "sell" and best_ask else current_price)
+                reason_str = "ADVERSE_EMERGENCY_CANCEL" if action == "cancel" else "FUSION_EXIT_SIGNAL"
                 self.live_executor.execute_exit(
                     current_price=exit_price,
-                    reason="FUSION_EXIT_SIGNAL",
+                    reason=reason_str,
                 )
         else:
             # 却下ログ (ノイズ防止のためコンソールのみ、またはデバッグ用)
             if action in ("buy", "sell"):
                 print(f"[SyncExecutor:LIVE-GATE] 🛡️ シグナル拒絶: {action.upper()} - {reason} (確信度: {signal.get('final_confidence', 0):.2f})")
+

@@ -3,14 +3,18 @@ Microstructure Agent (板の癖 ＆ 瞬間圧力解析)
 - 板の厚み不均衡 (Imbalance), Micro-price, Taker攻撃性, フェイクブレイク, レイテンシを監視
 - 周期: 10ms〜100ms (イベント駆動)
 """
+from typing import Optional
+from dataclasses import asdict
 from ..event_bus import EventBus
-from ..schema import OrderbookMicroSnapshot
+from ..schema import OrderbookMicroSnapshot, AgentConclusion
 
 
 class MicrostructureAgent:
     def __init__(self, bus: EventBus, latency_threshold_ms: float = 80.0):
         self.bus = bus
         self.latency_threshold_ms = latency_threshold_ms
+        self.latest_state: dict = {}
+        self.latest_conclusion: Optional[AgentConclusion] = None
         self.bus.subscribe("orderbook_micro", self.on_micro_update)
 
     def on_micro_update(self, snap: OrderbookMicroSnapshot):
@@ -44,9 +48,6 @@ class MicrostructureAgent:
         latency_risk = (snap.latency_ms >= self.latency_threshold_ms)
 
         # 4. Adverse Selection (逆選択・急激な逆行リスク) の先回り予兆判定
-        # - Micro-PriceがMid価格から先行乖離しているか
-        # - 最良気配(Depth 1)の板が薄く蒸発(Book Depletion)しているか
-        # - Taker成行フローが逆方向に偏っているか
         adverse_side = "none"
         adverse_score = 0.0
         adverse_warning = False
@@ -98,4 +99,47 @@ class MicrostructureAgent:
             "adverse_risk_score": adverse_score,
             "adverse_warning_flag": adverse_warning,
         }
+        self.latest_state = micro_state
         self.bus.publish("micro_state", micro_state)
+
+        # 結論の策定 (4AGENT 統一インターフェース)
+        verdict = "NEUTRAL"
+        primary_action = "hold"
+        hard_veto = fake_breakout
+        explanation = f"Imbalance: {snap.imbalance:+.2f}, MicroDev: {snap.micro_dev:+.0f}円"
+
+        if fake_breakout:
+            verdict = "FAKE_BREAKOUT_AVOID"
+            primary_action = "veto"
+            explanation += " [警告: 板だましキャンセル多発・エントリー遮断]"
+        elif pressure_score >= 0.30:
+            verdict = f"{pressure_side.upper()}_PRESSURE"
+            primary_action = pressure_side
+            explanation += f" [板圧力: {pressure_side.upper()} 強度{pressure_score:.2f}]"
+
+        conclusion = AgentConclusion(
+            agent_name="MicrostructureAgent",
+            timestamp=snap.timestamp,
+            verdict=verdict,
+            confidence=round(pressure_score, 3),
+            primary_action=primary_action,
+            metrics={
+                "imbalance": snap.imbalance,
+                "micro_dev": snap.micro_dev,
+                "pressure_side": pressure_side,
+                "pressure_score": pressure_score,
+                "fake_breakout": fake_breakout,
+                "latency_risk": latency_risk,
+            },
+            parameters={},
+            hard_veto=hard_veto,
+            emergency_cancel=False,
+            explanation=explanation,
+        )
+        self.latest_conclusion = conclusion
+        self.bus.publish("micro_conclusion", asdict(conclusion))
+        return conclusion
+
+    def get_latest_conclusion(self) -> Optional[AgentConclusion]:
+        return self.latest_conclusion
+

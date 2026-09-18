@@ -127,8 +127,57 @@ class AdverseResearchAgent:
             "intercepted_kills": self.intercepted_kills,
         }
 
+        self.latest_state = adverse_state
         self.bus.publish("adverse_research_state", adverse_state)
+
+        # 結論の策定 (4AGENT 統一)
+        hard_veto = (adverse_score >= 0.60)
+        emergency_cancel = cancel_recommendation
+
+        verdict = "SAFE"
+        primary_action = "hold"
+        explanation = f"逆選択スコア: {adverse_score:.2f}, 状態: (B:{self.state_buy}/S:{self.state_sell})"
+
+        if emergency_cancel:
+            verdict = "ADVERSE_CRITICAL_CANCEL"
+            primary_action = "cancel"
+            explanation += f" [🚨 緊急退避: 被害約定先回りCancel推奨 (Lead: {lead_ms_est:.0f}ms)]"
+        elif hard_veto:
+            verdict = "ADVERSE_WARNING_VETO"
+            primary_action = "veto"
+            explanation += f" [🛡️ 逆選択警戒: {adverse_side.upper()}側エントリー遮断]"
+
+        from ..schema import AgentConclusion
+        from dataclasses import asdict
+
+        conclusion = AgentConclusion(
+            agent_name="AdverseResearchAgent",
+            timestamp=snap.timestamp,
+            verdict=verdict,
+            confidence=round(adverse_score, 3),
+            primary_action=primary_action,
+            metrics={
+                "adverse_side": adverse_side,
+                "adverse_score": adverse_score,
+                "lead_ms_estimated": lead_ms_est,
+                "buy_state": self.state_buy,
+                "sell_state": self.state_sell,
+                "episode_id": active_episode_id,
+                "total_episodes": self.total_episodes,
+                "intercepted_kills": self.intercepted_kills,
+            },
+            parameters={"min_lead_ms_threshold": self.min_lead_ms_threshold},
+            hard_veto=hard_veto,
+            emergency_cancel=emergency_cancel,
+            explanation=explanation,
+        )
+        self.latest_conclusion = conclusion
+        self.bus.publish("adverse_conclusion", asdict(conclusion))
         return adverse_state
+
+    def get_latest_conclusion(self) -> Optional[Any]:
+        return getattr(self, "latest_conclusion", None)
+
 
     def _evaluate_side(
         self,
