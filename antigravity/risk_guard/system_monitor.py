@@ -25,12 +25,13 @@ class SystemResourceMonitor:
         disk_warning_pct: float = 80.0,
         mem_warning_pct: float = 80.0,
         cpu_warning_pct: float = 80.0,
-        max_log_size_mb: float = 100.0,
+        max_log_size_mb: float = 15.0,
     ):
         self.disk_warning_pct = disk_warning_pct
         self.mem_warning_pct = mem_warning_pct
         self.cpu_warning_pct = cpu_warning_pct
         self.max_log_size_mb = max_log_size_mb
+
 
         self._last_cpu_sample_time: float = 0.0
         self._last_cpu_times: Optional[Any] = None
@@ -325,23 +326,18 @@ class SystemResourceMonitor:
                 except Exception:
                     pass
 
-        # ログファイルの肥大化（> 100MB）チェック＆ローテーション
-        for log_path in glob.glob("*.log"):
-            try:
-                sz_mb = os.path.getsize(log_path) / (1024 * 1024)
-                if sz_mb > self.max_log_size_mb:
-                    # 末尾 20MB だけ残してローテーション
-                    with open(log_path, "rb") as lf:
-                        lf.seek(-int(20 * 1024 * 1024), os.SEEK_END)
-                        tail_data = lf.read()
-                    with open(log_path, "wb") as lf:
-                        lf.write(b"[LOG TRUNCATED BY SYSTEM_MONITOR TO 20MB]\n" + tail_data)
-                    actions.append(f"肥大化ログ縮退ローテーション: `{log_path}` ({sz_mb:.1f}MB -> 20MB)")
-            except Exception:
-                pass
+        # ログファイルの肥大化チェック＆自動ローテーション
+        try:
+            from .log_rotator import run_all_log_rotations
+            rot_results = run_all_log_rotations()
+            for r in rot_results:
+                actions.append(f"ログ自動ローテーション実行: `{os.path.basename(r['file'])}` ({r['old_size_mb']}MB -> {r['new_size_mb']}MB, 解放: {r['freed_mb']}MB)")
+        except Exception as e:
+            actions.append(f"ログローテーション警告: {e}")
 
         if cleaned_files > 0:
             actions.append(f"ディスク古一時ファイル削除: {cleaned_files}件 ({cleaned_bytes / 1024**2:.1f}MB 解放)")
+
 
         if not actions:
             actions.append("定期健全性維持処理完了（異常なし）")
