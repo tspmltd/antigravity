@@ -36,7 +36,7 @@
   "observation_24h": {
     "target_symbol": "FX_BTC_JPY",
     "duration_hours": 24,
-    "discord_reporting_interval_sec": 900,
+    "discord_reporting_interval_sec": 3600,
     "dryrun_only": true,
     "log_path": "logs/dryrun_umm_tf2bp_24h.log",
     "state_path": "data/dryrun_umm_tf2bp_state.json"

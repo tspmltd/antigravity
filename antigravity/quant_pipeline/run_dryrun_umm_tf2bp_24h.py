@@ -43,7 +43,7 @@ class DryRunObservation24h:
         config_path: str = CONFIG_PATH,
         duration_hours: float = 24.0,
         interval_sec: float = 2.0,
-        discord_report_sec: float = 900.0,  # 15分ごとにDiscordレポート
+        discord_report_sec: float = 3600.0,  # 1時間ごとにDiscordレポート
     ):
         self.symbol = symbol
         self.config_path = config_path
@@ -291,7 +291,7 @@ class DryRunObservation24h:
             "footer": {"text": "🏛️ Antigravity 24h Dual Strategy Dry-run Sentinel"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.notifier._post(self.notifier.dryrun_webhook_url, {"embeds": [embed]})
+        self.notifier.post_dryrun_multicast({"embeds": [embed]})
 
     def _send_discord_summary_report(self, final: bool = False, interrupted: bool = False):
         elapsed_sec = time.time() - self.start_time
@@ -300,7 +300,7 @@ class DryRunObservation24h:
         umm_wr = (self.umm.win_trades / self.umm.total_trades * 100) if self.umm.total_trades > 0 else 0.0
         tf_wr = (self.tf2bp.win_trades / self.tf2bp.total_trades * 100) if self.tf2bp.total_trades > 0 else 0.0
 
-        status_title = "🏁 【UMM ＆ TF2BP 24時間観察 完了総括レポート】" if final else "📊 【UMM ＆ TF2BP 24時間観察 進捗レポート】"
+        status_title = "🏁 【UMM ＆ TF2BP 24時間観察 完了総括レポート】" if final else "📊 【UMM ＆ TF2BP 1時間定期レポート】"
         if interrupted:
             status_title = "⚠️ 【UMM ＆ TF2BP 24時間観察 中断レポート】"
 
@@ -338,7 +338,7 @@ class DryRunObservation24h:
             "footer": {"text": "🏛️ Antigravity 24h Dual Strategy Dry-run Sentinel"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.notifier._post(self.notifier.dryrun_webhook_url, {"embeds": [embed]})
+        self.notifier.post_dryrun_multicast({"embeds": [embed]})
 
 
 def main():
@@ -346,7 +346,7 @@ def main():
     parser.add_argument("--symbol", default="FX_BTC_JPY", help="対象銘柄")
     parser.add_argument("--hours", type=float, default=24.0, help="観察時間 (デフォルト: 24時間)")
     parser.add_argument("--interval", type=float, default=2.0, help="観測間隔 (秒)")
-    parser.add_argument("--report-interval", type=float, default=900.0, help="Discord進捗レポート間隔 (秒, デフォルト15分)")
+    parser.add_argument("--report-interval", type=float, default=3600.0, help="Discord進捗レポート間隔 (秒, デフォルト1時間)")
     args = parser.parse_args()
 
     runner = DryRunObservation24h(

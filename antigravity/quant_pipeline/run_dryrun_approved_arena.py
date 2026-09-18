@@ -421,7 +421,7 @@ class ApprovedStrategyArena:
             "footer": {"text": "🏛️ Antigravity Approved Strategy Arena Sentinel"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.notifier._post(self.notifier.dryrun_webhook_url, {"embeds": [embed]})
+        self.notifier.post_dryrun_multicast({"embeds": [embed]})
 
     def _send_discord_summary_report(self, interrupted: bool = False):
         sorted_strats = sorted(self.strategies.values(), key=lambda x: x.total_pnl, reverse=True)
@@ -429,7 +429,7 @@ class ApprovedStrategyArena:
         total_arena_trades = sum(s.total_trades for s in sorted_strats)
 
         elapsed_h = (time.time() - self.start_time) / 3600.0
-        title = "⚠️ 【承認済み12戦略 アリーナ 中断レポート】" if interrupted else "🏆 【承認済み12戦略 アリーナ リアルタイム成績ランキング】"
+        title = "⚠️ 【承認済み12戦略 アリーナ 中断レポート】" if interrupted else "🏆 【承認済み12戦略 アリーナ 1時間定期成績ランキング】"
 
         # ランキングテキスト作成
         rank_lines = []
@@ -461,14 +461,14 @@ class ApprovedStrategyArena:
             "footer": {"text": "🏛️ Antigravity Approved Strategy Arena Sentinel"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.notifier._post(self.notifier.dryrun_webhook_url, {"embeds": [embed]})
+        self.notifier.post_dryrun_multicast({"embeds": [embed]})
 
 
 def main():
     parser = argparse.ArgumentParser(description="Approved Strategy Arena Runner")
     parser.add_argument("--symbol", default="FX_BTC_JPY", help="対象銘柄")
     parser.add_argument("--interval", type=float, default=5.0, help="観測間隔 (秒)")
-    parser.add_argument("--report-interval", type=float, default=900.0, help="Discordレポート間隔 (秒)")
+    parser.add_argument("--report-interval", type=float, default=3600.0, help="Discordレポート間隔 (秒, デフォルト1時間)")
     args = parser.parse_args()
 
     arena = ApprovedStrategyArena(

@@ -60,8 +60,27 @@ class QuantDiscordNotifier:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 return resp.status in (200, 204)
         except Exception as e:
-            print(f"[QuantDiscordNotifier] ⚠️ 送信エラー: {e}", flush=True)
+            print(f"[QuantDiscordNotifier] ⚠️ 送信エラー ({webhook_url[:35]}...): {e}", flush=True)
             return False
+
+    def post_dryrun_multicast(self, payload: Dict[str, Any]) -> bool:
+        """
+        DRYRUN定期報告をメイン運用報告チャンネル (REPORT) および DRYRUNチャンネルの両方に配信
+        """
+        urls = set()
+        if self.dryrun_webhook_url:
+            urls.add(self.dryrun_webhook_url)
+        if self.live_webhook_url:
+            urls.add(self.live_webhook_url)
+        report_url = os.environ.get("DISCORD_REPORT_WEBHOOK_URL", "").strip()
+        if report_url:
+            urls.add(report_url)
+
+        success = False
+        for url in urls:
+            if self._post(url, payload):
+                success = True
+        return success
 
     # =========================================================================
     # ① 本番 LIVE 取引サーバー (低頻度・高重要度)

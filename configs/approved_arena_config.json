@@ -10,7 +10,7 @@
     "symbol": "FX_BTC_JPY",
     "order_size_btc": 0.001,
     "poll_interval_sec": 5.0,
-    "report_interval_sec": 900.0,
+    "report_interval_sec": 3600.0,
     "take_profit_jpy": 25.0,
     "stop_loss_jpy": 25.0,
     "max_hold_sec": 1800.0,
