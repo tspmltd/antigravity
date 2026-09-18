@@ -137,3 +137,93 @@ t = 2,081ms: adverse_risk_score が「逆選択の危険！」と警報を鳴ら
 - 最新状態を `configs/agents_council_state.json` へ常時アトミック保存。
 - Discord 分析サーバー & Dry-run サーバーへ定期および緊急レポートを配信。
 - `tests/test_four_agents_integration.py` による結合テスト全 PASS 担保。
+
+---
+
+## 7. システムリソース圧迫緊急対応 ＆ 恒久ログ・CPU対策 (2026-09-19 01:25 JST)
+
+CPU 95%超えのアラート頻発およびメモリ逼迫に対する緊急是正と恒久対策を実施。
+
+### 根本原因の特定
+1. **Go `fusion_engine` 合成フィーダーの過剰頻度**:
+   - `NewSyntheticFeeder` が 1,000μs (1ms = 毎秒1,000回) で4銘柄の板・約定を生成しており、2コアCPUの約20%を常時占有していた。
+2. **古い `agy` ゾンビプロセスの居座り**:
+   - 9月16日から残留していたプロセス (PID 616903) が約 380MB のメモリを浪費。
+3. **`/tmp` 一時ログの肥大化**:
+   - 古い実行ログが合計約 200MB 蓄積。
+
+### 恒久対策の実施
+1. **Go `fusion_engine` スロットリング (Commit `2aa2cc1`)**:
+   - `fusion_engine/main.go`: 合成フィーダー周期を BTC: 20ms (毎秒50回) / 他銘柄: 100ms (毎秒10回) に緩和して再ビルド。
+   - CPU使用率: 18% ➔ **1.0% に激減**。
+2. **自動ログローテーション新設 (`antigravity/risk_guard/log_rotator.py`)**:
+   - 15MB 超過ログを検知し、末尾 5MB を残して自動切り詰め。
+   - `system_monitor.py` の定期監視ループに統合。
+3. **ゾンビプロセス終了 & クリーンアップ**:
+   - 利用可能メモリ: **5.8GB / 7.7GB** へ回復。ディスク使用率: **30%** (空き 87GB)。
+
+---
+
+## 8. UMM ＆ TF2BP 最新確定バージョンの GIT 導入と 24時間 Dry-run 観察 (2026-09-19 01:35 JST)
+
+GIT正本（`FIX.me` 2026年9月11日〜14日停止直前確定記録 CSR-504 / CSR-495/499）から最新確定ロジックを抽出・再配備。
+
+### 確定仕様
+1. **① UMM (Unified Market Making v1 - CSR-504 準拠)**:
+   - ソース: [`antigravity/strategies/umm_strategy.py`](file:///home/azureuser/antigravity/antigravity/strategies/umm_strategy.py)
+   - パラメータ: `spread_min_bp: 1.2`, `gamma_high: 0.15`, `take_profit_jpy: 35.0`, `stop_loss_jpy: 25.0`, `max_hold_sec: 1800.0`, `order_size_btc: 0.001` (最大枠 `0.005 BTC`)。
+2. **② TF2BP (2bp Micro Trend Order Flow v1 - CSR-495/499 準拠)**:
+   - ソース: [`antigravity/strategies/tf2bp_strategy.py`](file:///home/azureuser/antigravity/antigravity/strategies/tf2bp_strategy.py)
+   - パラメータ: `micro_mom_bp: 2.0`, `target_bp: 15.0`, `trail_stop_bp: 4.0`, `reverse_noise_max: 0.25`, 重い層 2セル `1600_2200|mid|BOOST` / `1600_2200|hi|BASE` 固定, θ固定 `3.82 / 0.12`。
+
+### 運用規則：自動調整の完全禁止 (FROZEN / MANUAL-ONLY)
+- 設定ファイル: [`configs/umm_tf2bp_config.json`](file:///home/azureuser/antigravity/configs/umm_tf2bp_config.json)
+- `auto_tune_allowed = False`, `frozen_mode = True` を強制。DuckDB や Evolver による自動変更を完全遮断し、パラメータ変更は**ユーザーからの明示的指示のみ**とする。
+
+### 24時間観測ランナー & 逆選択直結
+- ランナー: [`antigravity/quant_pipeline/run_dryrun_umm_tf2bp_24h.py`](file:///home/azureuser/antigravity/antigravity/quant_pipeline/run_dryrun_umm_tf2bp_24h.py) (PID `1229367`)
+- 4AGENT の `AdverseResearchAgent` とリアルタイム連携し、逆選択スコア高騰時に `ADVERSE_EMERGENCY_EVACUATE` を即時発火して最小微小損で仮想撤退。
+- `data/dryrun_umm_tf2bp_state.json` に毎秒アトミック保存、15分ごとに Discord Quants Dry-run チャンネルへ進捗自動報告。
+- `antigravity-watchdog.service` に登録し、24時間常駐監視と自動再起動を保証。
+
+---
+
+## 9. 承認済み12戦略 統合Dry-runアリーナ (Approved Strategy Arena) (2026-09-19 01:52 JST)
+
+過去にバックテストを通過・承認された全12個の実戦アルゴリズムを一堂に会し、同一相場で並行シミュレーションを行う「アリーナ」を新規配備。
+
+### 参戦12アルゴリズム
+1. `strat_1ac224f3` (GridMM v1)
+2. `strat_6e5a6296` (GridMM v2)
+3. `strat_92a1dffd` (GridMM v3)
+4. `strat_4d3f2c9f` (MicroSpreadMM v1)
+5. `strat_a5d8ae20` (MicroSpreadMM v2)
+6. `strat_cbcd5aed` (SpreadCaptureMM v3)
+7. `strat_de08146e` (InventorySkewMM - UMM原型)
+8. `strat_efd3fab8` (EmaTrend - トレンドフォロー)
+9. `strat_9ca5d130` (RsiMeanReversion - 旧LIVE候補、急変ブロック)
+10. `strat_7e09696a` (RsiMeanReversion - BB逆張り+RSI)
+11. `strat_a2a6d745` (RsiMeanReversion - BB逆張り+RSI反転)
+12. `micro_trend_order_flow` (MicroTrend - TF2BP原型)
+
+### 超低負荷 1プロセス統合方式
+- ランナー: [`antigravity/quant_pipeline/run_dryrun_approved_arena.py`](file:///home/azureuser/antigravity/antigravity/quant_pipeline/run_dryrun_approved_arena.py) (PID `1229372`)
+- 12戦略を個別起動せず、単一ループ内で同一のリアルタイムTickerおよびローリング1分足を用いて一括評価。
+- **CPU負荷: ~1.5%、追加メモリ: ~80MB** と極めて省エネ。
+- 各承認時の固定パラメータで稼働（自動調整完全禁止）。
+- `data/dryrun_approved_arena_state.json` にリアルタイム順位表（1位〜12位）を保存。
+- 15分ごとに Discord Quants Dry-run チャンネルへランキング速報を配信。
+- `antigravity-watchdog.service` に登録して死活監視。
+
+---
+
+## 10. 現在の常駐全 Dry-run / ペーパートレード体系一覧 (2026-09-19 時点)
+
+| # | システム / ランナー | PID | 対象市場 | 役割・特徴 | 運用モード |
+| :--- | :--- | :---: | :--- | :--- | :--- |
+| **1** | **UMM & TF2BP 24h 観測** | `1229367` | `FX_BTC_JPY` | 最新確定版MM & 極小トレンドの24時間連続耐久テスト | 🔒 固定 (手動指示のみ) |
+| **2** | **承認済み12戦略 統合アリーナ** | `1229372` | `FX_BTC_JPY` | 承認済み全12戦略のリアルタイム比較淘汰・ランキング | 🔒 固定 (手動指示のみ) |
+| **3** | **4AGENT Quant Pipeline** | `1229346` | `FX_BTC_JPY` | 4エージェント合議意思決定（板・トレンド・オプティマイザ・逆選択） | ⚡ 自律合議シミュレーション |
+| **4** | **日本株専属ポッド (JP Pod)** | `1229355` | 日本株6銘柄 | 東証・PTSミリ秒板微細構造＋開示速報連動ペーパートレード | 🛡️ 5大安全装置下ペーパー |
+| **5** | **Watchdog Sentinel** | `1229234` | 全サービス | `systemd --user` 常駐による24時間死活監視・自動再起動・リソース保全 | 🚨 自律守護 |
+
