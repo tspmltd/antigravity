@@ -20,7 +20,7 @@ load_dotenv(override=True)
 logger = logging.getLogger("news_pipeline.notifier")
 
 # デフォルトWebhook URL (ニュース Agent メイン報告チャンネル)
-DEFAULT_TRADE_WEBHOOK = "https://discord.com/api/webhooks/1538979834515038268/UX7Z7tIxWy2zbKT_DGDUjE5PK9CJzLyQn-CfuvYtE3XlxxJRygIS04G3vQuDMBQ1cx5e"
+DEFAULT_TRADE_WEBHOOK = "https://discord.com/api/webhooks/1491966933095026778/RNLz7rhBtFhQr2VQxFzslGZteI_XFo_6PM4SJ5DIS1z7dfM-jzoP-NdYI3mXbMd0xz07"
 
 DISCORD_NEWS_WEBHOOK = os.getenv("DISCORD_NEWS_WEBHOOK_URL", DEFAULT_TRADE_WEBHOOK)
 DISCORD_NEWS_ALERT_WEBHOOK = os.getenv("DISCORD_NEWS_ALERT_WEBHOOK_URL", "https://discord.com/api/webhooks/1492100555215208490/dFdXS7o-RwAeNARLJpIWdG6rMwNN36bifXplDLcDG_RK0vbC8aa-khz3vwvVcpC7AyBI")
