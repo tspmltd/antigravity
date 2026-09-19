@@ -30,7 +30,7 @@ from news_pipeline.pts_causal_engine import PTSFeatureRecord, default_pts_causal
 from news_pipeline.x_notifier import XNotifier
 from antigravity.risk_guard.notifier import DiscordNotifier
 
-load_dotenv()
+load_dotenv(override=True)
 logger = logging.getLogger("news_pipeline.pts_sentinel")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

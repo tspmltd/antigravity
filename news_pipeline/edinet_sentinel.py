@@ -30,7 +30,7 @@ from news_pipeline.x_notifier import XNotifier
 from antigravity.risk_guard.notifier import DiscordNotifier
 from news_pipeline.disclosure_dedup_engine import default_dedup_engine
 
-load_dotenv()
+load_dotenv(override=True)
 logger = logging.getLogger("news_pipeline.edinet_sentinel")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

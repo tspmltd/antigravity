@@ -44,7 +44,7 @@ from news_pipeline.post_optimizer import compute_chart_colors, optimize_tags, sh
 
 
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ロガー設定
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")

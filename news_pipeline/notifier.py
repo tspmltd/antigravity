@@ -14,13 +14,13 @@ import requests
 from dotenv import load_dotenv
 
 # 環境変数ロード
-load_dotenv()
+load_dotenv(override=True)
 
 # ロガー設定
 logger = logging.getLogger("news_pipeline.notifier")
 
-# デフォルトWebhook URL (指示書仕様)
-DEFAULT_TRADE_WEBHOOK = "https://discord.com/api/webhooks/1492100199987019818/oC2sHishX9QxVBGYlnuzRxqCaiZ05vsBvxOMooD8YIulp4E6eROjM_MMUOJE5PYOiBVj"
+# デフォルトWebhook URL (メイン運用報告チャンネル)
+DEFAULT_TRADE_WEBHOOK = "https://discord.com/api/webhooks/1490788526533509241/dRn-L0QvDx2OfHc-SQSLv4RfA18jJrSxFNAuHTUu9Xp_wCpkB2SNhav0roQGteu6cZCW"
 
 DISCORD_NEWS_WEBHOOK = os.getenv("DISCORD_NEWS_WEBHOOK_URL", DEFAULT_TRADE_WEBHOOK)
 DISCORD_TRADE_WEBHOOK = os.getenv("DISCORD_TRADE_WEBHOOK", DISCORD_NEWS_WEBHOOK)
