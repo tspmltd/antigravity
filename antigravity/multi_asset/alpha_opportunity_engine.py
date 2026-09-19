@@ -72,11 +72,9 @@ class ForecastAgent:
             prem_match = re.search(r"(\d+(?:\.\d+)?)\s*%", headline)
             prem_pct = float(prem_match.group(1)) if prem_match else 20.0
 
-            # 目標価格推計
             curr_price = current_market_price or 2000.0
             target_price = curr_price * (1.0 + prem_pct / 100.0)
 
-            # 価格から買付価格が明示されている場合 (例: 2800円)
             price_match = re.search(r"(\d{3,7})\s*円", headline)
             if price_match:
                 explicit_target = float(price_match.group(1))
@@ -84,8 +82,15 @@ class ForecastAgent:
                     target_price = explicit_target
                     prem_pct = ((target_price - curr_price) / curr_price) * 100.0
 
-            # 期待リターン (bp: 1% = 100bp)
-            expected_bp = round(prem_pct * 100.0, 1)
+            win_bp = round(prem_pct * 100.0, 1)
+            win_prob = 0.98                    # 友好的TOBの成功確率: 98%
+            loss_bp = -2000.0                  # 万一の不成立・破談時損失: -20%
+            holding_days = 60.0                # TOB買付期間・資金拘束: 平均60日
+
+            # 統計的期待値 = (P_win * R_win) - (P_loss * |R_loss|)
+            expectancy_bp = round((win_prob * win_bp) - ((1.0 - win_prob) * abs(loss_bp)), 1)
+            daily_bp = round(expectancy_bp / holding_days, 1)
+            annualized_pct = round(daily_bp * 365.0 / 100.0, 1)
 
             return AlphaForecast(
                 forecast_id=forecast_id,
@@ -95,10 +100,16 @@ class ForecastAgent:
                 opportunity_type="TOB_ARBITRAGE",
                 target_price=target_price,
                 current_price=curr_price,
-                expected_return_bp=expected_bp,
-                confidence=95.0,  # 友好的TOBは最高確度
+                expected_return_bp=expectancy_bp,
+                win_probability=win_prob,
+                win_return_bp=win_bp,
+                loss_return_bp=loss_bp,
+                holding_days=holding_days,
+                daily_expectancy_bp=daily_bp,
+                annualized_return_pct=annualized_pct,
+                confidence=95.0,
                 time_horizon="SWING",
-                unpriced_alpha_rationale=f"TOB公開買付確定価格（{target_price:,.0f}円）への市場価格収束スプレッド（期待 +{expected_bp:.1f} bp）",
+                unpriced_alpha_rationale=f"TOB買付価格（{target_price:,.0f}円）収束鞘取り（勝率{win_prob*100:.0f}%, 期待+{expectancy_bp:.1f}bp, 拘束{holding_days:.0f}日, 日次+{daily_bp:.1f}bp/日, 年率+{annualized_pct:.1f}%）",
                 timestamp=time.time(),
             )
 
@@ -107,9 +118,15 @@ class ForecastAgent:
         # -------------------------------------------------------------
         if opp_type == "ACTIVIST_FOLLOW":
             curr_price = current_market_price or 2500.0
-            # アクティビスト介入時の平均超過リターン (約 +3.5% 〜 +6.0%)
-            expected_bp = 450.0  # +450 bp (+4.5%)
-            target_price = curr_price * 1.045
+            win_bp = 450.0                     # 平均超過上昇率: +4.5%
+            win_prob = 0.72                    # アクティビスト介入時の勝率: 72%
+            loss_bp = -200.0                   # 逆行手仕舞い: -2.0%
+            holding_days = 14.0                # 買い増し・思惑期間: 14日
+            target_price = curr_price * (1.0 + win_bp / 10000.0)
+
+            expectancy_bp = round((win_prob * win_bp) - ((1.0 - win_prob) * abs(loss_bp)), 1)
+            daily_bp = round(expectancy_bp / holding_days, 1)
+            annualized_pct = round(daily_bp * 365.0 / 100.0, 1)
 
             return AlphaForecast(
                 forecast_id=forecast_id,
@@ -119,10 +136,16 @@ class ForecastAgent:
                 opportunity_type="ACTIVIST_FOLLOW",
                 target_price=target_price,
                 current_price=curr_price,
-                expected_return_bp=expected_bp,
+                expected_return_bp=expectancy_bp,
+                win_probability=win_prob,
+                win_return_bp=win_bp,
+                loss_return_bp=loss_bp,
+                holding_days=holding_days,
+                daily_expectancy_bp=daily_bp,
+                annualized_return_pct=annualized_pct,
                 confidence=85.0,
                 time_horizon="SWING",
-                unpriced_alpha_rationale=f"アクティビスト/大株主による継続買い需要と企業変革プレミアム（期待 +{expected_bp:.1f} bp）",
+                unpriced_alpha_rationale=f"アクティビスト買い増し思惑（勝率{win_prob*100:.0f}%, 期待+{expectancy_bp:.1f}bp, 拘束{holding_days:.0f}日, 日次+{daily_bp:.1f}bp/日, 年率+{annualized_pct:.1f}%）",
                 timestamp=time.time(),
             )
 
@@ -131,12 +154,18 @@ class ForecastAgent:
         # -------------------------------------------------------------
         if opp_type == "BUYBACK_DRIFT":
             curr_price = current_market_price or 3000.0
-            # 取得枠から推定期待リターン算出
             pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", headline)
             buyback_ratio = float(pct_match.group(1)) if pct_match else 3.0
-            # 自社株買い枠の約60%が株価ドリフトとして顕在化するモデル
-            expected_bp = round(buyback_ratio * 0.6 * 100.0, 1)
-            target_price = curr_price * (1.0 + expected_bp / 10000.0)
+
+            win_bp = round(buyback_ratio * 0.6 * 100.0, 1)
+            win_prob = 0.78                    # 自社株買いの下値支持勝率: 78%
+            loss_bp = -120.0                   # 指数逆行時の損切り: -1.2%
+            holding_days = 7.0                 # 集中買い付けドリフト期間: 7日
+            target_price = curr_price * (1.0 + win_bp / 10000.0)
+
+            expectancy_bp = round((win_prob * win_bp) - ((1.0 - win_prob) * abs(loss_bp)), 1)
+            daily_bp = round(expectancy_bp / holding_days, 1)
+            annualized_pct = round(daily_bp * 365.0 / 100.0, 1)
 
             return AlphaForecast(
                 forecast_id=forecast_id,
@@ -146,10 +175,16 @@ class ForecastAgent:
                 opportunity_type="BUYBACK_DRIFT",
                 target_price=target_price,
                 current_price=curr_price,
-                expected_return_bp=expected_bp,
+                expected_return_bp=expectancy_bp,
+                win_probability=win_prob,
+                win_return_bp=win_bp,
+                loss_return_bp=loss_bp,
+                holding_days=holding_days,
+                daily_expectancy_bp=daily_bp,
+                annualized_return_pct=annualized_pct,
                 confidence=88.0,
                 time_horizon="INTRADAY",
-                unpriced_alpha_rationale=f"自社株買い（取得枠 {buyback_ratio:.1f}%）による純粋な買い支え需給ドリフト（期待 +{expected_bp:.1f} bp）",
+                unpriced_alpha_rationale=f"自社株買い需給ドリフト（勝率{win_prob*100:.0f}%, 期待+{expectancy_bp:.1f}bp, 拘束{holding_days:.0f}日, 日次+{daily_bp:.1f}bp/日, 年率+{annualized_pct:.1f}%）",
                 timestamp=time.time(),
             )
 
@@ -161,9 +196,16 @@ class ForecastAgent:
             op_surp = getattr(event, "op_surprise", None)
             rev_rate = getattr(event, "revision_rate", None)
             delta = op_surp or rev_rate or 15.0
-            # PEAD期待値: サプライズの約20%が数日〜数週かけてドリフト
-            expected_bp = min(500.0, max(150.0, round(delta * 0.20 * 100.0, 1)))
-            target_price = curr_price * (1.0 + expected_bp / 10000.0)
+
+            win_bp = min(500.0, max(150.0, round(delta * 0.20 * 100.0, 1)))
+            win_prob = 0.65                    # 業績上方修正のPEAD勝率: 65%
+            loss_bp = -150.0                   # 材料出尽くし損切り: -1.5%
+            holding_days = 3.0                 # PEAD初動波及期間: 3日
+            target_price = curr_price * (1.0 + win_bp / 10000.0)
+
+            expectancy_bp = round((win_prob * win_bp) - ((1.0 - win_prob) * abs(loss_bp)), 1)
+            daily_bp = round(expectancy_bp / holding_days, 1)
+            annualized_pct = round(daily_bp * 365.0 / 100.0, 1)
 
             return AlphaForecast(
                 forecast_id=forecast_id,
@@ -173,10 +215,16 @@ class ForecastAgent:
                 opportunity_type="EARNINGS_SURPRISE",
                 target_price=target_price,
                 current_price=curr_price,
-                expected_return_bp=expected_bp,
+                expected_return_bp=expectancy_bp,
+                win_probability=win_prob,
+                win_return_bp=win_bp,
+                loss_return_bp=loss_bp,
+                holding_days=holding_days,
+                daily_expectancy_bp=daily_bp,
+                annualized_return_pct=annualized_pct,
                 confidence=78.0,
                 time_horizon="INTRADAY",
-                unpriced_alpha_rationale=f"業績サプライズ（乖離 {delta:.1f}%）に対する市場の織り込み遅延（PEAD ドリフト期待 +{expected_bp:.1f} bp）",
+                unpriced_alpha_rationale=f"業績修正PEAD織り込み遅延（勝率{win_prob*100:.0f}%, 期待+{expectancy_bp:.1f}bp, 拘束{holding_days:.0f}日, 日次+{daily_bp:.1f}bp/日, 年率+{annualized_pct:.1f}%）",
                 timestamp=time.time(),
             )
 
@@ -186,8 +234,16 @@ class ForecastAgent:
         if opp_type == "PTS_MOMENTUM":
             curr_price = current_market_price or 4000.0
             p_chg = getattr(event, "price_change", 8.0) or 8.0
-            expected_bp = round(p_chg * 0.4 * 100.0, 1) # 翌朝寄付きでの残存ギャップ
-            target_price = curr_price * (1.0 + expected_bp / 10000.0)
+
+            win_bp = round(p_chg * 0.4 * 100.0, 1)
+            win_prob = 0.62                    # PTS急変の翌朝寄付き勝率: 62%
+            loss_bp = -100.0                   # 寄付き寄り天損切り: -1.0%
+            holding_days = 0.5                 # 翌朝寄付き即手仕舞い: 0.5日 (半日)
+            target_price = curr_price * (1.0 + win_bp / 10000.0)
+
+            expectancy_bp = round((win_prob * win_bp) - ((1.0 - win_prob) * abs(loss_bp)), 1)
+            daily_bp = round(expectancy_bp / holding_days, 1)
+            annualized_pct = round(daily_bp * 365.0 / 100.0, 1)
 
             return AlphaForecast(
                 forecast_id=forecast_id,
@@ -197,10 +253,16 @@ class ForecastAgent:
                 opportunity_type="PTS_MOMENTUM",
                 target_price=target_price,
                 current_price=curr_price,
-                expected_return_bp=expected_bp,
+                expected_return_bp=expectancy_bp,
+                win_probability=win_prob,
+                win_return_bp=win_bp,
+                loss_return_bp=loss_bp,
+                holding_days=holding_days,
+                daily_expectancy_bp=daily_bp,
+                annualized_return_pct=annualized_pct,
                 confidence=75.0,
                 time_horizon="IMMEDIATE",
-                unpriced_alpha_rationale=f"PTS急変（+{p_chg:.1f}%）の翌朝寄付きギャップ捕捉（期待 +{expected_bp:.1f} bp）",
+                unpriced_alpha_rationale=f"PTS翌朝ギャップ捕捉（勝率{win_prob*100:.0f}%, 期待+{expectancy_bp:.1f}bp, 拘束{holding_days:.1f}日, 日次+{daily_bp:.1f}bp/日, 年率+{annualized_pct:.1f}%）",
                 timestamp=time.time(),
             )
 

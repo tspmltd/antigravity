@@ -74,7 +74,13 @@ class AlphaForecast:
     opportunity_type: str     # "TOB_ARBITRAGE", "ACTIVIST_FOLLOW", "BUYBACK_DRIFT", "EARNINGS_SURPRISE", "PTS_MOMENTUM"
     target_price: Optional[float] = None     # 予測目標価格 (TOB買付価格・理論フェアバリュー)
     current_price: Optional[float] = None    # 開示直後 / 現在価格
-    expected_return_bp: float = 0.0          # 期待収益率 (bp: ベーシスポイント, 例: +350.0 bp)
+    expected_return_bp: float = 0.0          # 単発トレード期待値 (bp: (P_win * R_win) - (P_loss * R_loss))
+    win_probability: float = 0.50            # 成功確率 (0.0 〜 1.0, 例: 0.98)
+    win_return_bp: float = 0.0               # 成功時利益 (bp, 例: +1500.0)
+    loss_return_bp: float = 0.0              # 失敗時損失 (bp, 例: -2000.0)
+    holding_days: float = 1.0                # 想定拘束期間 (日数, 例: 60.0, 3.0, 0.5)
+    daily_expectancy_bp: float = 0.0         # 1日あたり資金効率 (bp/日 = expected_return_bp / holding_days)
+    annualized_return_pct: float = 0.0       # 年率換算期待利回り (%, Capital Velocity = daily_bp * 365 / 100)
     confidence: float = 0.0                  # 予測確信度 (0.0 〜 100.0)
     time_horizon: str = "INTRADAY"           # "IMMEDIATE", "INTRADAY", "SWING"
     unpriced_alpha_rationale: str = ""       # 市場未織り込み根拠

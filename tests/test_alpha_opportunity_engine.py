@@ -45,7 +45,11 @@ class TestAlphaOpportunityEngine(unittest.TestCase):
         self.assertEqual(forecast.symbol, "6335")
         self.assertEqual(forecast.opportunity_type, "TOB_ARBITRAGE")
         self.assertEqual(forecast.target_price, 2500.0)
-        self.assertGreater(forecast.expected_return_bp, 2000.0)  # +25% = 2500bp
+        self.assertEqual(forecast.win_probability, 0.98)        # 成功確率 98%
+        self.assertEqual(forecast.holding_days, 60.0)           # 拘束期間 60日
+        self.assertGreater(forecast.expected_return_bp, 2000.0) # 期待値 > +2000bp
+        self.assertGreater(forecast.daily_expectancy_bp, 30.0)  # 日次資金効率 > +30bp/日
+        self.assertGreater(forecast.annualized_return_pct, 100.0) # 年率換算 > +100%
         self.assertEqual(forecast.confidence, 95.0)
 
     def test_strategy_tob_peg_v2(self):
