@@ -125,5 +125,37 @@ class TestAlphaOpportunityEngine(unittest.TestCase):
         self.assertIsNone(plan)
 
 
+    def test_tier_and_evs_ranking(self):
+        """第5階層 EVS (Expected Value Score) による「月10万に近い順」ランキング検証"""
+        from antigravity.multi_asset.alpha_opportunity_engine import HistoricalAlphaStore, ExpectedValueScorer
+
+        # イベント1: TOB (Tier 4: 高期待値だが60日拘束・年数十件)
+        ev_tob = MarketEvent(event_type="TOB", name="大型株", symbol="6335", headline_metric="買付価格2500円 (プレミアム+20%)")
+        macro_tob = MacroImpact(impact_score=75, primary_event="TOB", opportunity_score=95, opportunity_type="TOB_ARBITRAGE")
+        fcst_tob = ForecastAgent.generate_forecast(ev_tob, macro_tob, current_market_price=2000.0)
+
+        # イベント2: 大量保有5%超 (Tier 1: 7日拘束・小型株需給逼迫・高回転)
+        ev_act = MarketEvent(event_type="大量保有", name="小型株", symbol="1890", headline_metric="エフィッシモ 7.5%買い増し")
+        macro_act = MacroImpact(impact_score=45, primary_event="大量保有", opportunity_score=85, opportunity_type="ACTIVIST_FOLLOW")
+        fcst_act = ForecastAgent.generate_forecast(ev_act, macro_act, current_market_price=2500.0)
+
+        self.assertEqual(fcst_tob.tier, "TIER4")
+        self.assertEqual(fcst_act.tier, "TIER1")
+
+        # 資金回転率と小型株効果により、Tier 1 の大量保有が EVS 1位 (月10万寄与度トップ) にランクされること
+        ranked = AlphaOpportunityEngine.rank_by_evs([fcst_tob, fcst_act])
+        self.assertEqual(ranked[0].symbol, "1890")  # Tier 1 が1位
+        self.assertEqual(ranked[1].symbol, "6335")  # Tier 4 が2位
+        self.assertGreater(fcst_act.evs_score, fcst_tob.evs_score)
+
+    def test_historical_alpha_store_lookup(self):
+        """Parquet/DuckDB データレイクからの同条件母集団逆引き検証"""
+        from antigravity.multi_asset.alpha_opportunity_engine import HistoricalAlphaStore
+        prior = HistoricalAlphaStore.lookup_empirical_prior("TIER1", "ACTIVIST_FOLLOW")
+        self.assertGreaterEqual(prior["sample_size"], 100)
+        self.assertGreaterEqual(prior["win_rate"], 0.70)
+        self.assertLessEqual(prior["avg_holding_days"], 5.0)
+
+
 if __name__ == "__main__":
     unittest.main()

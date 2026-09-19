@@ -30,6 +30,8 @@ from .alpha_opportunity_engine import (
     ForecastAgent,
     StrategyAgent,
     AlphaOpportunityEngine,
+    HistoricalAlphaStore,
+    ExpectedValueScorer,
 )
 from .pods.japan_equity.jp_pod import JapanEquityPod
 from .pods.japan_equity.jp_micro_agent import JpMicroAgent
@@ -60,6 +62,8 @@ __all__ = [
     "ForecastAgent",
     "StrategyAgent",
     "AlphaOpportunityEngine",
+    "HistoricalAlphaStore",
+    "ExpectedValueScorer",
     "JapanEquityPod",
     "JpMicroAgent",
     "JpAlphaAgent",

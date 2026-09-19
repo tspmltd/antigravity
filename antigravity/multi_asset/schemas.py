@@ -41,8 +41,8 @@ class MacroImpact:
     マクロ指標・東証TDnet・EDINET・PTS夜間急変・世界主要市場の統合解析
     """
     impact_score: int         # 0 〜 100 (MIS: Market Impact Score)
-    level: str                # "NORMAL", "WARNING", "CRITICAL", "WIDE"
-    primary_event: str        # "米CPI上振れ", "トヨタ決算サプライズ", "PTS異常急変"
+    level: str = "NORMAL"     # "NORMAL", "WARNING", "CRITICAL", "WIDE"
+    primary_event: str = ""   # "米CPI上振れ", "トヨタ決算サプライズ", "PTS異常急変"
     global_regime: str = "NEUTRAL" # "RISK_ON", "RISK_OFF", "STAGFLATION", "NEUTRAL"
     asset_impact_map: Dict[str, str] = field(default_factory=dict) # {"JP_STOCK": "BULL", "FX": "BEAR_JPY", "BTC": "NEUTRAL"}
     horizon: str = "INTRADAY" # "IMMEDIATE" (〜15分), "INTRADAY" (当日), "SWING" (数日〜週)
@@ -81,6 +81,12 @@ class AlphaForecast:
     holding_days: float = 1.0                # 想定拘束期間 (日数, 例: 60.0, 3.0, 0.5)
     daily_expectancy_bp: float = 0.0         # 1日あたり資金効率 (bp/日 = expected_return_bp / holding_days)
     annualized_return_pct: float = 0.0       # 年率換算期待利回り (%, Capital Velocity = daily_bp * 365 / 100)
+    tier: str = "TIER1"                      # "TIER1" (大量保有), "TIER2" (自社株買い), "TIER3" (上方修正), "TIER4" (TOB)
+    evs_score: float = 0.0                   # 第5階層 EVS (Expected Value Score: 期待bp x 勝率 x 資金効率 x 流動性)
+    liquidity_factor: float = 1.0            # 流動性係数 (小型株でアルゴ不在なら 1.3, 超大型株は 0.8)
+    capital_requirement_jpy: float = 200000.0# 推奨必要資金 (円: 1単元の想定拘束資金)
+    sample_size: int = 0                     # DuckDB/Parquet 過去同条件母集団件数 (例: 148件)
+    empirical_win_rate: Optional[float] = None # 過去実績勝率 (例: 0.71)
     confidence: float = 0.0                  # 予測確信度 (0.0 〜 100.0)
     time_horizon: str = "INTRADAY"           # "IMMEDIATE", "INTRADAY", "SWING"
     unpriced_alpha_rationale: str = ""       # 市場未織り込み根拠
