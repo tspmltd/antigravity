@@ -28,6 +28,7 @@ from .quant_discord_notifier import QuantDiscordNotifier
 from .agents.adverse_agent import AdverseResearchAgent
 from ..strategies.umm_strategy import UMMStrategy
 from ..strategies.tf2bp_strategy import TF2BPStrategy
+from ..strategies.tf2bp_peg_v2_strategy import TF2BP_PEG_v2_Strategy
 
 JST = timezone(timedelta(hours=9))
 BASE_DIR = "/home/azureuser/antigravity"
@@ -61,6 +62,7 @@ class DryRunObservation24h:
         # 戦略インスタンス初期化 (固定パラメータ)
         self.umm = UMMStrategy(self.config_data.get("umm_config", {}))
         self.tf2bp = TF2BPStrategy(self.config_data.get("tf2bp_config", {}))
+        self.tf2bp_v2 = TF2BP_PEG_v2_Strategy(self.config_data.get("tf2bp_config", {}))
 
         # インフラ
         self.bus = EventBus()
@@ -72,6 +74,7 @@ class DryRunObservation24h:
         # 仮想口座
         self.umm_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
         self.tf2bp_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        self.tf2bp_v2_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
 
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -145,7 +148,7 @@ class DryRunObservation24h:
                     )
                     self._process_strategy_action("UMM", self.umm, umm_res, snap)
 
-                    # 3. TF2BP 戦略評価
+                    # 3. TF2BP 戦略評価 (Baseline)
                     tf2bp_res = self.tf2bp.on_tick(
                         mid_price=snap.mid_price,
                         best_bid=snap.best_bid,
@@ -157,7 +160,24 @@ class DryRunObservation24h:
                     )
                     self._process_strategy_action("TF2BP", self.tf2bp, tf2bp_res, snap)
 
-                    # 4. コンソール表示
+                    # 4. TF2BP_PEG_v2 戦略評価 (OBSERVATION: Model 3+1 検証レーン)
+                    tf2bp_v2_res = self.tf2bp_v2.on_tick(
+                        mid_price=snap.mid_price,
+                        best_bid=snap.best_bid,
+                        best_ask=snap.best_ask,
+                        taker_vol_bid=snap.taker_volume_bid,
+                        taker_vol_ask=snap.taker_volume_ask,
+                        ask_depth_1=snap.ask_depth_1,
+                        bid_depth_1=snap.bid_depth_1,
+                        taker_aggressiveness=snap.taker_aggressiveness,
+                        cancel_rate=snap.cancel_rate,
+                        refill_rate=snap.refill_rate,
+                        adverse_score=adv_score,
+                        cancel_recommendation=cancel_rec,
+                    )
+                    self._process_strategy_action("TF2BP_PEG_v2", self.tf2bp_v2, tf2bp_v2_res, snap)
+
+                    # 5. コンソール表示
                     elapsed_h = int(elapsed_sec // 3600)
                     elapsed_m = int((elapsed_sec % 3600) // 60)
                     elapsed_s = int(elapsed_sec % 60)
@@ -168,10 +188,11 @@ class DryRunObservation24h:
 
                     umm_pos_str = f"{self.umm.position_side.upper() if self.umm.position_side else 'FLAT'} ({self.umm.total_pnl_bp:+.1f}bp)"
                     tf_pos_str = f"{self.tf2bp.position_side.upper() if self.tf2bp.position_side else 'FLAT'} ({self.tf2bp.total_pnl_bp:+.1f}bp)"
+                    tf_v2_pos_str = f"{self.tf2bp_v2.position_side.upper() if self.tf2bp_v2.position_side else 'FLAT'} ({self.tf2bp_v2.total_pnl_bp:+.1f}bp)"
 
                     print(
                         f" [{time_str}] | {snap.mid_price:12,.0f} | ¥{spread_val:5,.0f} | {adv_str:7} | "
-                        f"{umm_pos_str:18} | {tf_pos_str:18}",
+                        f"{umm_pos_str:15} | {tf_pos_str:15} | PEG_v2:{tf_v2_pos_str}",
                         flush=True
                     )
 
@@ -199,7 +220,14 @@ class DryRunObservation24h:
 
     def _process_strategy_action(self, name: str, strat: Any, res: Dict[str, Any], snap: OrderbookMicroSnapshot):
         action = res.get("action", "hold")
-        acc = self.umm_account if name == "UMM" else self.tf2bp_account
+        if name == "UMM":
+            acc = self.umm_account
+        elif name == "TF2BP":
+            acc = self.tf2bp_account
+        elif name == "TF2BP_PEG_v2":
+            acc = self.tf2bp_v2_account
+        else:
+            acc = self.tf2bp_account
 
         if action in ("buy", "sell"):
             if not strat.position_side:
@@ -208,6 +236,23 @@ class DryRunObservation24h:
                 acc["trades"] += 1
                 log_line = f"[{name}] 📥 新規エントリー: {action.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
+
+        elif action == "post_peg":
+            p_side = res.get("side", "")
+            p_price = res.get("price", 0.0)
+            log_line = f"[{name}] 📝 PEG_v2 指値提示: {p_side.upper()} @ ¥{p_price:,.0f} ({res.get('reason')})"
+            self._log_to_file(log_line)
+
+        elif action == "fill":
+            fill_price = res.get("fill_price", snap.mid_price)
+            p_side = res.get("side", strat.position_side or "UNKNOWN")
+            acc["trades"] += 1
+            log_line = f"[{name}] 📥 PEG_v2 指値約定: {p_side.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
+            self._log_to_file(log_line)
+
+        elif action == "cancel_pending":
+            log_line = f"[{name}] 🚫 PEG_v2 待機取消: ({res.get('reason')})"
+            self._log_to_file(log_line)
 
         elif action in ("exit", "cancel"):
             if strat.position_side:
@@ -230,6 +275,8 @@ class DryRunObservation24h:
             umm_24h = self.umm.get_window_stats(24.0)
             tf_1h = self.tf2bp.get_window_stats(1.0)
             tf_24h = self.tf2bp.get_window_stats(24.0)
+            tf_v2_1h = self.tf2bp_v2.get_window_stats(1.0)
+            tf_v2_24h = self.tf2bp_v2.get_window_stats(24.0)
 
             state = {
                 "timestamp": int(time.time() * 1000),
@@ -263,6 +310,19 @@ class DryRunObservation24h:
                     "frozen": self.tf2bp.frozen_mode,
                     "user_directive": self.tf2bp.last_user_directive,
                 },
+                "tf2bp_peg_v2": {
+                    "position": self.tf2bp_v2.position_side or ("PENDING" if self.tf2bp_v2.pending_order else "FLAT"),
+                    "pending_order": self.tf2bp_v2.pending_order,
+                    "total_trades": self.tf2bp_v2.total_trades,
+                    "win_trades": self.tf2bp_v2.win_trades,
+                    "total_pnl": round(self.tf2bp_v2.total_pnl, 1),
+                    "total_pnl_bp": round(self.tf2bp_v2.total_pnl_bp, 2),
+                    "stats_1h": tf_v2_1h,
+                    "stats_24h": tf_v2_24h,
+                    "params": self.tf2bp_v2.params,
+                    "frozen": self.tf2bp_v2.frozen_mode,
+                    "user_directive": self.tf2bp_v2.last_user_directive,
+                },
             }
             tmp = f"{STATE_PATH}.tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -281,12 +341,13 @@ class DryRunObservation24h:
 
     def _send_start_discord_notification(self):
         embed = {
-            "title": "🚀 【UMM ＆ TF2BP 24時間 Dry-run 観察開始】",
+            "title": "🚀 【UMM ＆ TF2BP ＋ TF2BP_PEG_v2 24時間 連続Dry-run 観察開始】",
             "description": (
                 f"GIT正本（CSR-504 / CSR-499）から UMM および TF2BP を導入し、\n"
-                f"**24時間連続シミュレーション観察** を開始しました。\n\n"
-                f"🔒 **パラメータ運用方針**: **自動調整禁止 (FROZEN)**\n"
-                f"（DuckDB / Evolver による自動変更は遮断、適宜ユーザー指示のみで調整）"
+                f"さらにバックテスト最高改善 (+54bp) の **PEG_v2 (Model 3+1)** を搭載した\n"
+                f"**`TF2BP_PEG_v2` を OBSERVATION (並行観測) レーン** として稼働開始しました。\n\n"
+                f"🔒 **パラメータ運用方針**: **自動調整禁止 (FROZEN / OBSERVATION)**\n"
+                f"（DuckDB / Evolver による自動変更は遮断、完全手動・固定パラメータ）"
             ),
             "color": 0x3498DB,
             "fields": [
@@ -296,12 +357,22 @@ class DryRunObservation24h:
                     "inline": False,
                 },
                 {
-                    "name": "② TF2BP (2bp Micro Trend Order Flow - CSR-499)",
+                    "name": "② TF2BP (2bp Micro Trend - CSR-499 Baseline: FROZEN)",
                     "value": f"• 初動閾値: `{self.tf2bp.params['micro_mom_bp']} bp` | 目標: `{self.tf2bp.params['target_bp']} bp` | トレール: `{self.tf2bp.params['trail_stop_bp']} bp`\n• 逆ノイズ上限: `{self.tf2bp.params['reverse_noise_max']*100:.0f}%` | ロット: `{self.tf2bp.params['order_size_btc']} BTC`",
                     "inline": False,
                 },
+                {
+                    "name": "🔬 ③ TF2BP_PEG_v2 (Model 3+1 観測レーン: OBSERVATION)",
+                    "value": (
+                        f"• ロジック: **Model 3 (EffectiveReach) + Model 1 (DynamicRatio)**\n"
+                        f"• 指値比率: 動的 `0.910 〜 0.985` (板厚連動 ＋ テイカー攻撃性ブースト)\n"
+                        f"• エグジット: **BE5 建値防衛** (MFE $\\ge$ 5bp到達で利益ゼロ反落時即座に微小利確撤退)\n"
+                        f"• 運用方針: `🔒 OBSERVATION (Baseline と同一板並行 A/B テスト)`"
+                    ),
+                    "inline": False,
+                },
             ],
-            "footer": {"text": "🏛️ Antigravity 24h Dual Strategy Dry-run Sentinel"},
+            "footer": {"text": "🏛️ Antigravity 24h Multi-Strategy Dry-run Sentinel"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.notifier.post_dryrun_multicast({"embeds": [embed]})
@@ -310,8 +381,15 @@ class DryRunObservation24h:
         elapsed_sec = time.time() - self.start_time
         elapsed_hours = elapsed_sec / 3600.0
 
-        umm_wr = (self.umm.win_trades / self.umm.total_trades * 100) if self.umm.total_trades > 0 else 0.0
-        tf_wr = (self.tf2bp.win_trades / self.tf2bp.total_trades * 100) if self.tf2bp.total_trades > 0 else 0.0
+        umm_1h = self.umm.get_window_stats(1.0)
+        umm_24h = self.umm.get_window_stats(24.0)
+        tf_1h = self.tf2bp.get_window_stats(1.0)
+        tf_24h = self.tf2bp.get_window_stats(24.0)
+        v2_1h = self.tf2bp_v2.get_window_stats(1.0)
+        v2_24h = self.tf2bp_v2.get_window_stats(24.0)
+
+        diff_1h_bp = v2_1h["pnl_bp"] - tf_1h["pnl_bp"]
+        diff_24h_bp = v2_24h["pnl_bp"] - tf_24h["pnl_bp"]
 
         status_title = "🏁 【UMM ＆ TF2BP 24時間観察 完了総括レポート】" if final else "📊 【UMM ＆ TF2BP 1時間定期レポート】"
         if interrupted:
@@ -319,36 +397,39 @@ class DryRunObservation24h:
 
         embed = {
             "title": status_title,
-            "description": f"観察経過時間: **{elapsed_hours:.2f} / 24.0 時間** | 対象銘柄: `{self.symbol}`",
+            "description": f"観察経過時間: **{elapsed_hours:.2f} / 24.0 時間** | 対象銘柄: `{self.symbol}`\n🔒 **運用方針**: **自動調整完全禁止 (FROZEN / OBSERVATION)**",
             "color": 0x2ECC71 if (self.umm.total_pnl + self.tf2bp.total_pnl) >= 0 else 0xE67E22,
             "fields": [
                 {
-                    "name": "① UMM (Unified Market Making) 成績",
+                    "name": "① UMM (Unified Market Making CSR-504)",
                     "value": (
-                        f"• 取引数: **{self.umm.total_trades} 回** (勝率: `{umm_wr:.1f}%`)\n"
-                        f"• 累計損益: **`¥{self.umm.total_pnl:+,.1f}`**\n"
-                        f"• 現在建玉: `{self.umm.position_side or 'FLAT'}` (在庫: `{self.umm.inventory_btc:+.4f} BTC`)\n"
-                        f"• パラメータ状態: `🔒 FROZEN (自動調整なし)`"
+                        f"• 1h: **`{umm_1h['pnl_bp']:+.2f} bp`** ({umm_1h['total_trades']}戦/{umm_1h['win_rate_pct']:.0f}% / ¥{umm_1h['pnl_jpy']:+,.0f})\n"
+                        f"• 24h: **`{umm_24h['pnl_bp']:+.2f} bp`** ({umm_24h['total_trades']}戦/{umm_24h['win_rate_pct']:.0f}% / ¥{umm_24h['pnl_jpy']:+,.0f})\n"
+                        f"• 建玉: `{self.umm.position_side or 'FLAT'}` (在庫: `{self.umm.inventory_btc:+.4f} BTC`)"
                     ),
-                    "inline": True,
+                    "inline": False,
                 },
                 {
-                    "name": "② TF2BP (2bp Micro Trend) 成績",
+                    "name": "② TF2BP (2bp Micro Trend CSR-499 Baseline)",
                     "value": (
-                        f"• 取引数: **{self.tf2bp.total_trades} 回** (勝率: `{tf_wr:.1f}%`)\n"
-                        f"• 累計損益: **`¥{self.tf2bp.total_pnl:+,.1f}`**\n"
-                        f"• 現在建玉: `{self.tf2bp.position_side or 'FLAT'}`\n"
-                        f"• パラメータ状態: `🔒 FROZEN (自動調整なし)`"
+                        f"• 1h: **`{tf_1h['pnl_bp']:+.2f} bp`** ({tf_1h['total_trades']}戦/{tf_1h['win_rate_pct']:.0f}% / ¥{tf_1h['pnl_jpy']:+,.0f})\n"
+                        f"• 24h: **`{tf_24h['pnl_bp']:+.2f} bp`** ({tf_24h['total_trades']}戦/{tf_24h['win_rate_pct']:.0f}% / ¥{tf_24h['pnl_jpy']:+,.0f})\n"
+                        f"• 建玉: `{self.tf2bp.position_side or 'FLAT'}`"
                     ),
-                    "inline": True,
+                    "inline": False,
                 },
                 {
-                    "name": "💡 合算パフォーマンス",
-                    "value": f"• 合算損益: **`¥{(self.umm.total_pnl + self.tf2bp.total_pnl):+,.1f}`**\n• 合算取引数: **{self.umm.total_trades + self.tf2bp.total_trades} 回**",
+                    "name": "🔬 ③ TF2BP_PEG_v2 (Model 3+1 観測レーン)",
+                    "value": (
+                        f"• 1h: **`{v2_1h['pnl_bp']:+.2f} bp`** ({v2_1h['total_trades']}戦/{v2_1h['win_rate_pct']:.0f}% / ¥{v2_1h['pnl_jpy']:+,.0f})\n"
+                        f"• 24h: **`{v2_24h['pnl_bp']:+.2f} bp`** ({v2_24h['total_trades']}戦/{v2_24h['win_rate_pct']:.0f}% / ¥{v2_24h['pnl_jpy']:+,.0f})\n"
+                        f"• 建玉: `{self.tf2bp_v2.position_side or ('PENDING' if self.tf2bp_v2.pending_order else 'FLAT')}`\n"
+                        f"• **Baseline比較差分**: 1h: **`{diff_1h_bp:+.2f} bp`** | 24h: **`{diff_24h_bp:+.2f} bp`**"
+                    ),
                     "inline": False,
                 },
             ],
-            "footer": {"text": "🏛️ Antigravity 24h Dual Strategy Dry-run Sentinel"},
+            "footer": {"text": "🏛️ Antigravity 24h Multi-Strategy Dry-run Sentinel"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.notifier.post_dryrun_multicast({"embeds": [embed]})

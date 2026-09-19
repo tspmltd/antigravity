@@ -61,6 +61,7 @@ class HourlyDryRunReporter:
         # 1. UMM & TF2BP データ (1h & 24h)
         umm = umm_tf.get("umm", {})
         tf = umm_tf.get("tf2bp", {})
+        tf_v2 = umm_tf.get("tf2bp_peg_v2", {})
 
         umm_1h = umm.get("stats_1h", {})
         umm_24h = umm.get("stats_24h", {})
@@ -85,6 +86,21 @@ class HourlyDryRunReporter:
         tf_1h_wr = tf_1h.get("win_rate_pct", 0.0)
         tf_24h_wr = tf_24h.get("win_rate_pct", (tf.get("win_trades", 0) / tf_24h_t * 100) if tf_24h_t > 0 else 0.0)
         tf_pos = tf.get("position", "FLAT")
+
+        v2_1h = tf_v2.get("stats_1h", {})
+        v2_24h = tf_v2.get("stats_24h", {})
+        v2_1h_bp = v2_1h.get("pnl_bp", 0.0)
+        v2_24h_bp = v2_24h.get("pnl_bp", tf_v2.get("total_pnl_bp", 0.0))
+        v2_1h_jpy = v2_1h.get("pnl_jpy", 0.0)
+        v2_24h_jpy = v2_24h.get("pnl_jpy", tf_v2.get("total_pnl", 0.0))
+        v2_1h_t = v2_1h.get("total_trades", 0)
+        v2_24h_t = v2_24h.get("total_trades", tf_v2.get("total_trades", 0))
+        v2_1h_wr = v2_1h.get("win_rate_pct", 0.0)
+        v2_24h_wr = v2_24h.get("win_rate_pct", (tf_v2.get("win_trades", 0) / v2_24h_t * 100) if v2_24h_t > 0 else 0.0)
+        v2_pos = tf_v2.get("position", "FLAT")
+
+        diff_1h_bp = v2_1h_bp - tf_1h_bp
+        diff_24h_bp = v2_24h_bp - tf_24h_bp
 
         umm_tf_1h_bp = umm_1h_bp + tf_1h_bp
         umm_tf_24h_bp = umm_24h_bp + tf_24h_bp
@@ -156,15 +172,18 @@ class HourlyDryRunReporter:
             "color": color,
             "fields": [
                 {
-                    "name": "① UMM ＆ TF2BP 24時間観察 (最新確定版 CSR-504/499)",
+                    "name": "① UMM ＆ TF2BP 24時間観察 ＆ TF2BP_PEG_v2 観測",
                     "value": (
-                        f"• **UMM (在庫スキューMM)** `[{umm_pos}]`:\n"
+                        f"• **UMM (在庫スキューMM CSR-504)** `[{umm_pos}]`:\n"
                         f"   • 1h: **`{umm_1h_bp:+.2f} bp`** ({umm_1h_t}戦/{umm_1h_wr:.0f}% / ¥{umm_1h_jpy:+,.0f})\n"
                         f"   • 24h: **`{umm_24h_bp:+.2f} bp`** ({umm_24h_t}戦/{umm_24h_wr:.0f}% / ¥{umm_24h_jpy:+,.0f})\n"
-                        f"• **TF2BP (2bpトレンド)** `[{tf_pos}]`:\n"
+                        f"• **TF2BP (Baseline: FROZEN CSR-499)** `[{tf_pos}]`:\n"
                         f"   • 1h: **`{tf_1h_bp:+.2f} bp`** ({tf_1h_t}戦/{tf_1h_wr:.0f}% / ¥{tf_1h_jpy:+,.0f})\n"
                         f"   • 24h: **`{tf_24h_bp:+.2f} bp`** ({tf_24h_t}戦/{tf_24h_wr:.0f}% / ¥{tf_24h_jpy:+,.0f})\n"
-                        f"• **小計**: 1h: **`{umm_tf_1h_bp:+.2f} bp`** (`¥{umm_tf_1h_jpy:+,.0f}`) | 24h: **`{umm_tf_24h_bp:+.2f} bp`** (`¥{umm_tf_24h_jpy:+,.0f}`)"
+                        f"• **🔬 TF2BP_PEG_v2 (Model 3+1 観測レーン)** `[{v2_pos}]`:\n"
+                        f"   • 1h: **`{v2_1h_bp:+.2f} bp`** ({v2_1h_t}戦/{v2_1h_wr:.0f}% / ¥{v2_1h_jpy:+,.0f}) [対Base: **`{diff_1h_bp:+.2f} bp`**]\n"
+                        f"   • 24h: **`{v2_24h_bp:+.2f} bp`** ({v2_24h_t}戦/{v2_24h_wr:.0f}% / ¥{v2_24h_jpy:+,.0f}) [対Base: **`{diff_24h_bp:+.2f} bp`**]\n"
+                        f"• **小計 (UMM+TF2BP Base)**: 1h: **`{umm_tf_1h_bp:+.2f} bp`** (`¥{umm_tf_1h_jpy:+,.0f}`) | 24h: **`{umm_tf_24h_bp:+.2f} bp`** (`¥{umm_tf_24h_jpy:+,.0f}`)"
                     ),
                     "inline": False,
                 },

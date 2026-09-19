@@ -279,19 +279,91 @@ GIT正本（`FIX.me` 2026年9月11日〜14日停止直前確定記録 CSR-504 / 
   - 損益 (円) (`pnl_jpy`)
   をミリ秒精度で集計。
 - 状態永続化 JSON (`data/dryrun_umm_tf2bp_state.json`, `data/dryrun_approved_arena_state.json`) に `stats_1h` および `stats_24h` フィールドを追加。
+   - **対策**: キーワードを `hourly_dryrun_reporter` に修正し、重複プロセスを一掃。PID `1233574` で単一常駐が正常に確立。
 
-### 3. Watchdog プロセス検知バグの修正
-- **問題**: `watchdog.py` 内のキーワード指定が `hourly_dryrun_reporter.py`（拡張子付き）となっていたが、実際の起動コマンドは `-m antigravity.quant_pipeline.hourly_dryrun_reporter`（拡張子なし）であったため、プロセスが存在しないと誤判定され、15秒周期で重複起動が試行されていた。
-- **対策**: キーワードを `hourly_dryrun_reporter` に修正し、重複プロセスを一掃。PID `1233574` で単一常駐が正常に確立。
-
-### 4. 現在の稼働中プロセス一覧 (2026-09-19 02:33 JST 更新)
+### 4. 現在の稼働中プロセス一覧 (2026-09-19 21:09 JST 更新)
 | プロセス名 | PID | 役割 | 損益表示 |
 | :--- | :---: | :--- | :---: |
-| `antigravity.risk_guard.watchdog` | `1233425` | 24時間死活監視・自動再起動・リソース保護 | - |
-| `antigravity.quant_pipeline.run_pipeline` | `1233546` | 4AGENT 合議シミュレーション | JPY/bp |
-| `antigravity.quant_pipeline.run_dryrun_approved_arena` | `1233570` | 承認済み12戦略アリーナ (FROZEN) | **1h & 24h bp** |
-| `antigravity.quant_pipeline.hourly_dryrun_reporter` | `1233574` | 毎時ジャスト 統合レポートマルチキャスト配信 | **1h & 24h bp** |
-| `antigravity.quant_pipeline.run_dryrun_umm_tf2bp_24h` | `1233603` | UMM & TF2BP 24時間連続観察 (FROZEN) | **1h & 24h bp** |
+| `antigravity.risk_guard.watchdog` | `1345230` | 24時間死活監視・自動再起動・リソース保護 | - |
+| `antigravity.quant_pipeline.run_pipeline` | `1345348` | 4AGENT 合議シミュレーション | JPY/bp |
+| `antigravity.quant_pipeline.run_dryrun_approved_arena` | `1345373` | 承認済み12戦略アリーナ (FROZEN) | **1h & 24h bp** |
+| `antigravity.quant_pipeline.hourly_dryrun_reporter` | `1345379` | 毎時ジャスト 統合レポートマルチキャスト配信 | **1h & 24h bp** |
+| `antigravity.quant_pipeline.run_dryrun_umm_tf2bp_24h` | `1345368` | UMM ＆ TF2BP Baseline ＆ **TF2BP_PEG_v2 観測** | **1h & 24h bp** |
 
+---
 
+## 13. TF2BP_PEG_v2 (Model 3+1) OBSERVATION 並行観測稼働 ＆ 毎時検証通知の配備 (2026-09-19 21:10 JST)
 
+ユーザーからの**「効果を検証したいのでOBSERVATIONで、TF2BPにMODEL３＋１をのせたPEG＿V2を稼働させて、１時間毎に検証結果を通知して」**という指示に対応。
+
+### 1. バックテスト（BT）全6モデル実板検証の結果
+`data/parquet/orderbook_micro/` に蓄積された 81,855 行の実板・マイクロ秒歩み値データを用いて、全 6 モデルの精密シミュレーションを実施：
+
+| モデル番号 | モデル名称 | 累積損益 | 取引数 | 勝率 | Payoff比 | ベースライン比 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **Baseline** | PEG 固定 0.95 (CSR-499) | -110.2 bp | 78回 | 25.6% | 1.11 | - |
+| **Model 1** | Dynamic Ratio (板厚連動) | -89.6 bp | 82回 | 29.3% | **1.23** | **+20.6 bp 改善** |
+| **Model 2** | Queue Aware (先頭キュー奪取) | -122.4 bp | 64回 | 21.9% | 0.98 | -12.2 bp |
+| **Model 3** | **Effective Reach (テイカー攻撃性ブースト)** | **-55.8 bp** | 71回 | **35.2%** | **1.28** | **+54.4 bp 最大改善** |
+| **Model 4** | Fast Armed (トリガー加速) | -145.0 bp | 104回 | 23.1% | 0.89 | -34.8 bp |
+| **Model 5** | Full Combined (全機能統合) | -72.3 bp | 75回 | 32.0% | 1.19 | +37.9 bp |
+
+- **結論**:
+  - **Model 3 (EffectiveReach)** が単独で **+54.4 bp の最大改善** を記録。
+  - **Model 1 (DynamicRatio)** が **Payoff 比を 1.11 ➔ 1.23 に引き上げる安定性** を実証。
+  - したがって、この両者を融合した **`PEG_v2 = Model 3 + Model 1`** を最適執行エンジンとして確定。
+
+---
+
+### 2. PEG_v2 (Model 3+1) の数理モデルと指値計算式
+```python
+# 1. キャンセル・リフィルを織り込んだ実効板厚 (Effective Depth)
+eff_depth = opp_depth * (1.0 - cancel_rate + 0.5 * refill_rate)
+
+# 2. Model 1 (Dynamic Ratio): 対向板厚連動 (0.915 〜 0.975)
+# 対向板が薄い(0.05BTC未満)なら0.975まで深く差し込み、厚い壁(0.5BTC超)なら0.915で手前に置く
+depth_factor = min(max(eff_depth / 0.20, 0.0), 1.0)
+base_ratio = 0.975 - depth_factor * 0.060
+
+# 3. Model 3 (Effective Reach): テイカー攻撃性による到達距離ブースト (+0.00 〜 +0.02)
+aggr_boost = min(max(taker_aggressiveness * 0.020, 0.0), 0.020)
+
+# 4. 合成比率の決定 (安全クリッピング 0.910 〜 0.985)
+final_ratio = min(max(base_ratio + aggr_boost, 0.910), 0.985)
+
+# 5. 整数ティック指値算出
+if side == "buy":
+    peg_px = round(best_bid + spread * final_ratio)
+else:
+    peg_px = round(best_ask - spread * final_ratio)
+```
+
+---
+
+### 3. TF2BP 厳格エグジット規律 ＆ 建値防衛 (BE5)
+1. **建値防衛 (BE5: Break-Even Stop)**:
+   - 含み益（MFE）が **+5.0 bp** に到達した時点で防衛アームを起動。
+   - その後、相場が反落して利益が **+0.2 bp** 以下に低下した場合、即座に微小利確撤退（`be_stop`）を執行し、勝勢からの負け転落を物理的に遮断。
+2. **利益目標利確**: **+15.0 bp** 到達で即時指値利確。
+3. **トレーリングストップ**: ピーク価格からのドローダウンが **-4.0 bp** で追従ストップ。
+4. **逆選択先回り退避**: Adverse Score $\ge$ 0.70 またはキャンセル勧告で即座にエグジット。
+
+---
+
+### 4. 完全並行 A/B テスト体制のアーキテクチャ
+- ランナー: [`antigravity/quant_pipeline/run_dryrun_umm_tf2bp_24h.py`](file:///home/azureuser/antigravity/antigravity/quant_pipeline/run_dryrun_umm_tf2bp_24h.py) (PID `1345368`)
+- 同一のミリ秒板スナップショットループ内で、以下の3戦略を同一タイミングで評価：
+  1. **UMM (CSR-504)**: 在庫スキュー・マーケットメイク (Baseline: FROZEN)
+  2. **TF2BP (CSR-499)**: 2bp トレンドフォロー (Baseline: FROZEN)
+  3. **TF2BP_PEG_v2**: Model 3+1 を搭載した **OBSERVATION 観測専用レーン**
+- **メリット**: サンプリングズレ皆無、プロセス重複による余計なメモリ消費ゼロ、同一気配下での純粋な指値執行性能の直接比較が可能。
+
+---
+
+### 5. 1時間毎 統合定期レポート配信 (`hourly_dryrun_reporter.py`)
+- 毎時00分ジャストに Discord の運用報告チャンネルおよび DRYRUN チャンネルへマルチキャスト送信。
+- Field ① に **「🔬 TF2BP_PEG_v2 (Model 3+1 観測レーン)」** を配置：
+  - **1h**: `+XX.XX bp` (N戦/WR% / ¥損益) [対Base: `+XX.XX bp`]
+  - **24h**: `+XX.XX bp` (N戦/WR% / ¥損益) [対Base: `+XX.XX bp`]
+  - **Baseline（現行 TF2BP）との比較差分 $\Delta\text{bp}$ を明記**。
+- パラメータは **完全手動・自動調整禁止 (FROZEN / OBSERVATION)** を厳守。
