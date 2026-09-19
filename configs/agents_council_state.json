@@ -1,56 +1,56 @@
 {
-  "timestamp": 1789821436422,
+  "timestamp": 1789826282660,
   "conclusions": {
     "MicrostructureAgent": {
       "agent_name": "MicrostructureAgent",
-      "timestamp": 1789821436416,
+      "timestamp": 1789826282656,
       "verdict": "SELL_PRESSURE",
-      "confidence": 0.721,
+      "confidence": 0.608,
       "primary_action": "sell",
       "metrics": {
-        "imbalance": -0.592,
-        "micro_dev": -420.7,
+        "imbalance": -0.471,
+        "micro_dev": -22.2,
         "pressure_side": "sell",
-        "pressure_score": 0.7212,
+        "pressure_score": 0.6079999999999999,
         "fake_breakout": false,
         "latency_risk": false
       },
       "parameters": {},
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "Imbalance: -0.59, MicroDev: -421円 [板圧力: SELL 強度0.72]"
+      "explanation": "Imbalance: -0.47, MicroDev: -22円 [板圧力: SELL 強度0.61]"
     },
     "TrendFollowAgent": {
       "agent_name": "TrendFollowAgent",
-      "timestamp": 1789821436416,
-      "verdict": "TREND_DOWN",
-      "confidence": 0.383,
-      "primary_action": "sell",
+      "timestamp": 1789826282656,
+      "verdict": "TREND_UP",
+      "confidence": 1.0,
+      "primary_action": "buy",
       "metrics": {
-        "trend_direction": "down",
-        "trend_strength": 0.3828,
+        "trend_direction": "up",
+        "trend_strength": 1.0,
         "regime_tag": "trend",
-        "price_delta": -957.0,
-        "price_range": 3009.0
+        "price_delta": 2600.0,
+        "price_range": 2634.0
       },
       "parameters": {},
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "レジーム: trend, トレンド: DOWN (強度: 0.38, 変動幅: ¥-957)"
+      "explanation": "レジーム: trend, トレンド: UP (強度: 1.00, 変動幅: ¥+2600)"
     },
     "DuckDBOptimizerAgent": {
       "agent_name": "DuckDBOptimizerAgent",
-      "timestamp": 1789821341746,
+      "timestamp": 1789826230505,
       "verdict": "WEIGHTS_OPTIMAL",
       "confidence": 0.5,
       "primary_action": "hold",
       "metrics": {
-        "total_snapshots": 129621,
-        "avg_mid": 12393818.8,
-        "avg_imbalance": 0.004,
-        "avg_spread": 2136.1,
-        "avg_latency_ms": 62.8,
-        "total_decisions": 96265,
+        "total_snapshots": 134161,
+        "avg_mid": 12404901.8,
+        "avg_imbalance": 0.005,
+        "avg_spread": 2127.8,
+        "avg_latency_ms": 62.5,
+        "total_decisions": 99315,
         "win_rate": 0.5,
         "profit_factor": 1.0,
         "delta_w_summary": {
@@ -76,11 +76,11 @@
       },
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "DuckDB解析完了: スナップショット 129,621件, 意思決定 96,265件, 勝率 50.0%, 平均スプレッド ¥2,136。最適スプレッド上限 ¥2,900。"
+      "explanation": "DuckDB解析完了: スナップショット 134,161件, 意思決定 99,315件, 勝率 50.0%, 平均スプレッド ¥2,128。最適スプレッド上限 ¥2,900。"
     },
     "AdverseResearchAgent": {
       "agent_name": "AdverseResearchAgent",
-      "timestamp": 1789821436416,
+      "timestamp": 1789826282656,
       "verdict": "SAFE",
       "confidence": 0.0,
       "primary_action": "hold",
@@ -91,7 +91,7 @@
         "buy_state": "NORMAL",
         "sell_state": "NORMAL",
         "episode_id": 0,
-        "total_episodes": 60,
+        "total_episodes": 0,
         "intercepted_kills": 0
       },
       "parameters": {
@@ -102,8 +102,8 @@
       "explanation": "逆選択スコア: 0.00, 状態: (B:NORMAL/S:NORMAL)"
     }
   },
-  "final_action": "exit",
-  "final_confidence": 0.022,
+  "final_action": "buy",
+  "final_confidence": 0.696,
   "size_multiplier": 1.0,
   "active_regime": "trend",
   "adverse_risk_level": "SAFE",
@@ -126,8 +126,8 @@
   },
   "strategy_directives": [
     "DuckDB最適重み適用: W_PRESSURE={'trend': 0.6, 'range': 0.4, 'high_vol': 0.7, 'low_vol': 0.3}, 許容スプレッド上限=¥2,900",
-    "トレンド判定: DOWN (強度:0.38, レジーム:trend)",
-    "板構造圧力: SELL (強度:0.72, Imbalance:-0.59)",
-    "反対圧力によるポジション手仕舞い: EXIT (確信度低: 0.02)"
+    "トレンド判定: UP (強度:1.00, レジーム:trend)",
+    "板構造圧力: SELL (強度:0.61, Imbalance:-0.47)",
+    "✅ 戦略発注合意: BUY (確信度: 0.70)"
   ]
 }

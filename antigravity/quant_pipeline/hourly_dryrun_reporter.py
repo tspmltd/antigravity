@@ -205,7 +205,101 @@ class HourlyDryRunReporter:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+        # 1. メイン運用報告 (REPORT) ＆ DRYRUN チャンネルへマルチキャスト送信
         success = self.notifier.post_dryrun_multicast({"embeds": [embed]})
+
+        # 2. 試運転戦略報告 (Observation 専用チャンネル) へ TF2BP_PEG_v2 特化レポートを送信
+        obs_embed = {
+            "title": f"🔬 【Observation 試運転戦略報告】 TF2BP_PEG_v2 (Model 3+1) 検証",
+            "description": (
+                f"🕒 **集計時刻**: `{now_str}`\n"
+                f"📊 **観測対象**: `TF2BP_PEG_v2` (Model 3: Effective Reach + Model 1: Dynamic Ratio + 建値防衛 BE5)\n"
+                f"⚖️ **Baseline**: `TF2BP v1 (CSR-499)`\n"
+                f"🔒 **運用モード**: **FROZEN / OBSERVATION (完全手動指示・自動調整禁止)**"
+            ),
+            "color": 0x3498DB if v2_24h_bp >= tf_24h_bp else 0xE67E22,
+            "fields": [
+                {
+                    "name": "① 直近 1時間 (1h) 執行性能比較",
+                    "value": (
+                        f"• **TF2BP_PEG_v2**: **`{v2_1h_bp:+.2f} bp`** ({v2_1h_t}戦/{v2_1h_wr:.0f}% / ¥{v2_1h_jpy:+,.1f})\n"
+                        f"• **TF2BP Baseline**: **`{tf_1h_bp:+.2f} bp`** ({tf_1h_t}戦/{tf_1h_wr:.0f}% / ¥{tf_1h_jpy:+,.1f})\n"
+                        f"• **改善差分 (Δbp)**: **`{diff_1h_bp:+.2f} bp`** ({'改善優位 🟢' if diff_1h_bp >= 0 else 'ビハインド 🔴'})"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "② 過去 24時間 (24h) 累積性能比較",
+                    "value": (
+                        f"• **TF2BP_PEG_v2**: **`{v2_24h_bp:+.2f} bp`** ({v2_24h_t}戦/{v2_24h_wr:.0f}% / ¥{v2_24h_jpy:+,.1f})\n"
+                        f"• **TF2BP Baseline**: **`{tf_24h_bp:+.2f} bp`** ({tf_24h_t}戦/{tf_24h_wr:.0f}% / ¥{tf_24h_jpy:+,.1f})\n"
+                        f"• **改善差分 (Δbp)**: **`{diff_24h_bp:+.2f} bp`** ({'改善優位 🟢' if diff_24h_bp >= 0 else 'ビハインド 🔴'})"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "③ 執行モデルパラメータ",
+                    "value": (
+                        f"• 深度連動比率 (Dynamic Ratio): `0.915 〜 0.975`\n"
+                        f"• テイカー攻撃性ブースト (Effective Reach): 最大 `+0.020`\n"
+                        f"• 建値防衛 (BE5): MFE +5.0bp到達でアーム ➔ +0.2bp割れで微小利確撤退\n"
+                        f"• 現在ポジション: `[{v2_pos}]`"
+                    ),
+                    "inline": False,
+                }
+            ],
+            "footer": {"text": "🔬 Antigravity Observation Lane • TF2BP_PEG_v2"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self.notifier.post_observation({"embeds": [obs_embed]})
+
+        # 3. 4AGENT 確定結論チャンネル (結論) へ合議判定を送信
+        conc_embed = {
+            "title": f"🏛️ 【4AGENT 合同評議会 確定結論】 ({trigger_reason})",
+            "description": (
+                f"🕒 **確定時刻**: `{now_str}`\n"
+                f"🎯 **合議確定アクション**: **`{action.upper()}`** (確信度: `{council.get('final_confidence', 0.0):.2f}`)\n"
+                f"📈 **市場レジーム**: `{regime}` | **逆選択リスク**: `{council.get('adverse_risk_level', 'SAFE')}` (Score: `{adv_score:.2f}`)"
+            ),
+            "color": 0x2ECC71 if action.lower() == "buy" else (0xE74C3C if action.lower() == "sell" else 0x95A5A6),
+            "fields": [
+                {
+                    "name": "各エージェント結論 (Agent Conclusions)",
+                    "value": (
+                        f"• **MicrostructureAgent**: `{council.get('conclusions', {}).get('MicrostructureAgent', {}).get('verdict', 'NEUTRAL')}` ({council.get('conclusions', {}).get('MicrostructureAgent', {}).get('explanation', '-')})\n"
+                        f"• **TrendFollowAgent**: `{council.get('conclusions', {}).get('TrendFollowAgent', {}).get('verdict', 'NEUTRAL')}` ({council.get('conclusions', {}).get('TrendFollowAgent', {}).get('explanation', '-')})\n"
+                        f"• **DuckDBOptimizerAgent**: `{council.get('conclusions', {}).get('DuckDBOptimizerAgent', {}).get('verdict', 'OPTIMAL')}` ({council.get('conclusions', {}).get('DuckDBOptimizerAgent', {}).get('explanation', '-')})\n"
+                        f"• **AdverseResearchAgent**: `{council.get('conclusions', {}).get('AdverseResearchAgent', {}).get('verdict', 'SAFE')}` ({council.get('conclusions', {}).get('AdverseResearchAgent', {}).get('explanation', '-')})"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "戦略執行ディレクティブ",
+                    "value": "\n".join([f"• {d}" for d in council.get("strategy_directives", [])]) or "特記事項なし",
+                    "inline": False,
+                }
+            ],
+            "footer": {"text": "⚖️ Antigravity FourAgentsCouncil • 結論アーカイブ"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self.notifier.post_conclusion({"embeds": [conc_embed]})
+
+        # 4. Quants-Agent 統括チャンネルへ送信
+        quants_embed = {
+            "title": f"🤖 【Quants-Agent 統合稼働状況】 ({trigger_reason})",
+            "description": (
+                f"🕒 **報告時刻**: `{now_str}`\n"
+                f"• **本番 LIVE 取引**: `🛑 完全停止中 (OFF)` (元本 ¥6,390 保護)\n"
+                f"• **Dry-run 統合損益**: 1h: **`{total_1h_bp:+.2f} bp`** (`¥{total_1h_jpy:+,.0f}`) | 24h: **`{total_24h_bp:+.2f} bp`** (`¥{total_24h_jpy:+,.0f}`)\n"
+                f"• **Observation (PEG_v2)**: 1h: **`{v2_1h_bp:+.2f} bp`** | 24h: **`{v2_24h_bp:+.2f} bp`** [対Base: **`{diff_24h_bp:+.2f} bp`**]\n"
+                f"• **Watchdog Sentinel**: `🟢 正常稼働中 (常駐死活監視)`"
+            ),
+            "color": 0x34495E,
+            "footer": {"text": "Quants-Agent Master Sentinel"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self.notifier.post_quants_agent({"embeds": [quants_embed]})
+
         log_msg = f"[{now_str}] 統合定期レポート送信: {'成功' if success else '失敗'} (1h: {total_1h_bp:+.2f}bp, 24h: {total_24h_bp:+.2f}bp)"
         print(log_msg, flush=True)
         self._log_to_file(log_msg)

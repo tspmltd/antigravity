@@ -25,6 +25,12 @@ class QuantDiscordNotifier:
         live_webhook_url: Optional[str] = None,
         dryrun_webhook_url: Optional[str] = None,
         analysis_webhook_url: Optional[str] = None,
+        observation_webhook_url: Optional[str] = None,
+        trade_webhook_url: Optional[str] = None,
+        system_webhook_url: Optional[str] = None,
+        alert_webhook_url: Optional[str] = None,
+        quants_agent_webhook_url: Optional[str] = None,
+        conclusion_webhook_url: Optional[str] = None,
     ):
         self.live_webhook_url = (
             live_webhook_url
@@ -38,6 +44,30 @@ class QuantDiscordNotifier:
         self.analysis_webhook_url = (
             analysis_webhook_url
             or os.environ.get("DISCORD_ANALYSIS_WEBHOOK_URL", "").strip()
+        )
+        self.observation_webhook_url = (
+            observation_webhook_url
+            or os.environ.get("DISCORD_OBSERVATION_WEBHOOK_URL", "").strip()
+        )
+        self.trade_webhook_url = (
+            trade_webhook_url
+            or os.environ.get("DISCORD_TRADE_WEBHOOK_URL", "").strip()
+        )
+        self.system_webhook_url = (
+            system_webhook_url
+            or os.environ.get("DISCORD_SYSTEM_WEBHOOK_URL", "").strip()
+        )
+        self.alert_webhook_url = (
+            alert_webhook_url
+            or os.environ.get("DISCORD_ALERT_WEBHOOK_URL", "").strip()
+        )
+        self.quants_agent_webhook_url = (
+            quants_agent_webhook_url
+            or os.environ.get("DISCORD_QUANTS_AGENT_WEBHOOK_URL", "").strip()
+        )
+        self.conclusion_webhook_url = (
+            conclusion_webhook_url
+            or os.environ.get("DISCORD_CONCLUSION_WEBHOOK_URL", "").strip()
         )
 
         # 送信レートリミット制御用タイムスタンプ
@@ -62,6 +92,36 @@ class QuantDiscordNotifier:
         except Exception as e:
             print(f"[QuantDiscordNotifier] ⚠️ 送信エラー ({webhook_url[:35]}...): {e}", flush=True)
             return False
+
+    def post_observation(self, payload: Dict[str, Any]) -> bool:
+        """試運転戦略報告 (Observation 専用チャンネル) へ配信"""
+        url = self.observation_webhook_url or self.dryrun_webhook_url
+        return self._post(url, payload)
+
+    def post_conclusion(self, payload: Dict[str, Any]) -> bool:
+        """4AGENT 合同評議会 確定結論チャンネルへ配信"""
+        url = self.conclusion_webhook_url or self.analysis_webhook_url
+        return self._post(url, payload)
+
+    def post_quants_agent(self, payload: Dict[str, Any]) -> bool:
+        """Quants-Agent 統括ステータスチャンネルへ配信"""
+        url = self.quants_agent_webhook_url or self.live_webhook_url
+        return self._post(url, payload)
+
+    def post_trade_report(self, payload: Dict[str, Any]) -> bool:
+        """取引報告書チャンネル (個別取引・利確・損切り) へ配信"""
+        url = self.trade_webhook_url or self.live_webhook_url
+        return self._post(url, payload)
+
+    def post_system_improvement(self, payload: Dict[str, Any]) -> bool:
+        """取引システム改善・戦略改善チャンネルへ配信"""
+        url = self.system_webhook_url or self.analysis_webhook_url
+        return self._post(url, payload)
+
+    def post_alert(self, payload: Dict[str, Any]) -> bool:
+        """緊急アラートチャンネル (リソース逼迫・急変) へ配信"""
+        url = self.alert_webhook_url or self.live_webhook_url
+        return self._post(url, payload)
 
     def post_dryrun_multicast(self, payload: Dict[str, Any]) -> bool:
         """

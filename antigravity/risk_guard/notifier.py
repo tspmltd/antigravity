@@ -44,8 +44,8 @@ class DiscordNotifier:
             trade_webhook_url
             if trade_webhook_url is not None
             else (
-                os.environ.get("DISCORD_LIVE_WEBHOOK_URL", "").strip()
-                or os.environ.get("DISCORD_TRADE_WEBHOOK_URL", "").strip()
+                os.environ.get("DISCORD_TRADE_WEBHOOK_URL", "").strip()
+                or os.environ.get("DISCORD_LIVE_WEBHOOK_URL", "").strip()
                 or self.report_webhook_url
             )
         )
@@ -67,6 +67,12 @@ class DiscordNotifier:
             if news_webhook_url is not None
             else (os.environ.get("DISCORD_NEWS_WEBHOOK_URL", "").strip() or self.report_webhook_url)
         )
+        # ⑥ 試運転戦略報告 (Observation 専用チャンネル)
+        self.observation_webhook_url = os.environ.get("DISCORD_OBSERVATION_WEBHOOK_URL", "").strip()
+        # ⑦ 結論 (4AGENT 評議会 確定結論チャンネル)
+        self.conclusion_webhook_url = os.environ.get("DISCORD_CONCLUSION_WEBHOOK_URL", "").strip()
+        # ⑧ Quants-Agent (クオンツエージェント統括ステータス)
+        self.quants_agent_webhook_url = os.environ.get("DISCORD_QUANTS_AGENT_WEBHOOK_URL", "").strip()
 
     def _get_target_url(self, target: str = "report") -> str:
         if target == "trade":
