@@ -1,56 +1,56 @@
 {
-  "timestamp": 1789829685518,
+  "timestamp": 1789829888893,
   "conclusions": {
     "MicrostructureAgent": {
       "agent_name": "MicrostructureAgent",
-      "timestamp": 1789829685490,
+      "timestamp": 1789829888884,
       "verdict": "SELL_PRESSURE",
-      "confidence": 0.565,
+      "confidence": 0.841,
       "primary_action": "sell",
       "metrics": {
-        "imbalance": -0.403,
-        "micro_dev": -689.8,
+        "imbalance": -0.689,
+        "micro_dev": -154.4,
         "pressure_side": "sell",
-        "pressure_score": 0.5648000000000001,
+        "pressure_score": 0.8411999999999998,
         "fake_breakout": false,
         "latency_risk": false
       },
       "parameters": {},
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "Imbalance: -0.40, MicroDev: -690円 [板圧力: SELL 強度0.56]"
+      "explanation": "Imbalance: -0.69, MicroDev: -154円 [板圧力: SELL 強度0.84]"
     },
     "TrendFollowAgent": {
       "agent_name": "TrendFollowAgent",
-      "timestamp": 1789829685490,
-      "verdict": "HIGH_VOL_UP",
-      "confidence": 0.312,
-      "primary_action": "buy",
+      "timestamp": 1789829888884,
+      "verdict": "HIGH_VOL_DOWN",
+      "confidence": 0.179,
+      "primary_action": "sell",
       "metrics": {
-        "trend_direction": "up",
-        "trend_strength": 0.3116,
+        "trend_direction": "down",
+        "trend_strength": 0.1788,
         "regime_tag": "high_vol",
-        "price_delta": 779.0,
-        "price_range": 4850.0
+        "price_delta": -447.0,
+        "price_range": 6482.0
       },
       "parameters": {},
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "レジーム: high_vol, トレンド: UP (強度: 0.31, 変動幅: ¥+779)"
+      "explanation": "レジーム: high_vol, トレンド: DOWN (強度: 0.18, 変動幅: ¥-447)"
     },
     "DuckDBOptimizerAgent": {
       "agent_name": "DuckDBOptimizerAgent",
-      "timestamp": 1789829566090,
+      "timestamp": 1789829708720,
       "verdict": "WEIGHTS_OPTIMAL",
       "confidence": 0.5,
       "primary_action": "hold",
       "metrics": {
-        "total_snapshots": 137173,
-        "avg_mid": 12412361.4,
+        "total_snapshots": 137267,
+        "avg_mid": 12412591.9,
         "avg_imbalance": 0.003,
         "avg_spread": 2122.5,
-        "avg_latency_ms": 62.2,
-        "total_decisions": 101531,
+        "avg_latency_ms": 62.3,
+        "total_decisions": 101570,
         "win_rate": 0.5,
         "profit_factor": 1.0,
         "delta_w_summary": {
@@ -76,11 +76,11 @@
       },
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "DuckDB解析完了: スナップショット 137,173件, 意思決定 101,531件, 勝率 50.0%, 平均スプレッド ¥2,122。最適スプレッド上限 ¥2,900。"
+      "explanation": "DuckDB解析完了: スナップショット 137,267件, 意思決定 101,570件, 勝率 50.0%, 平均スプレッド ¥2,122。最適スプレッド上限 ¥2,900。"
     },
     "AdverseResearchAgent": {
       "agent_name": "AdverseResearchAgent",
-      "timestamp": 1789829685490,
+      "timestamp": 1789829888884,
       "verdict": "SAFE",
       "confidence": 0.0,
       "primary_action": "hold",
@@ -89,17 +89,17 @@
         "adverse_score": 0.0,
         "lead_ms_estimated": 0.0,
         "buy_state": "NORMAL",
-        "sell_state": "PRE_ADVERSE",
+        "sell_state": "NORMAL",
         "episode_id": 0,
-        "total_episodes": 8,
-        "intercepted_kills": 1
+        "total_episodes": 15,
+        "intercepted_kills": 0
       },
       "parameters": {
         "min_lead_ms_threshold": 85.0
       },
       "hard_veto": false,
       "emergency_cancel": false,
-      "explanation": "逆選択スコア: 0.00, 状態: (B:NORMAL/S:PRE_ADVERSE)"
+      "explanation": "逆選択スコア: 0.00, 状態: (B:NORMAL/S:NORMAL)"
     }
   },
   "final_action": "exit",
@@ -126,8 +126,8 @@
   },
   "strategy_directives": [
     "DuckDB最適重み適用: W_PRESSURE={'trend': 0.6, 'range': 0.4, 'high_vol': 0.7, 'low_vol': 0.3}, 許容スプレッド上限=¥2,900",
-    "トレンド判定: UP (強度:0.31, レジーム:high_vol)",
-    "板構造圧力: SELL (強度:0.56, Imbalance:-0.40)",
+    "トレンド判定: DOWN (強度:0.18, レジーム:high_vol)",
+    "板構造圧力: SELL (強度:0.84, Imbalance:-0.69)",
     "反対圧力によるポジション手仕舞い: EXIT (確信度低: 0.00)"
   ]
 }

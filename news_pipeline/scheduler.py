@@ -322,6 +322,23 @@ def start_scheduler():
     )
     logger.info("  - 登録スケジュール: 毎時00分 JST (世界の株価 1%急変グラフ通知)")
 
+    # 毎日 17:30 JST: 本日の重要開示 TOP5 自動集計・サムネイル画像付きX/Discord投稿
+    def run_daily_top5_job():
+        try:
+            from news_pipeline.daily_top5_reporter import DailyTop5Reporter
+            DailyTop5Reporter().run_report(mock_if_empty=False)
+        except Exception as ex:
+            logger.warning(f"[Scheduler] DailyTop5 実行例外: {ex}")
+
+    scheduler.add_job(
+        run_daily_top5_job,
+        trigger=CronTrigger(hour=17, minute=30, timezone=JST),
+        id="job_daily_top5_1730",
+        name="DailyTop5_DisclosureReport",
+        misfire_grace_time=300
+    )
+    logger.info("  - 登録スケジュール: 毎日 17:30 JST (重要開示 TOP5 サムネイル画像付きX/Discord配信)")
+
 
     logger.info("常駐待機を開始します (Ctrl+Cで停止)...")
     try:

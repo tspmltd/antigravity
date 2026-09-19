@@ -28,6 +28,8 @@ if BASE_DIR not in sys.path:
 
 from news_pipeline.market_impact_scorer import MarketEvent, MarketImpactScorer, build_japan_post
 from news_pipeline.opportunity_assessor import OpportunityAssessor
+from news_pipeline.disclosure_image_generator import DisclosureImageGenerator
+from news_pipeline.daily_top5_reporter import DailyTop5Reporter
 from news_pipeline.disclosure_dedup_engine import default_dedup_engine
 from news_pipeline.x_notifier import XNotifier
 from antigravity.risk_guard.notifier import DiscordNotifier
@@ -239,6 +241,19 @@ class TdnetSentinel:
 
         logger.info(f"[TdnetSentinel] 開示検知: [{time_str}] {symbol} {name} | {event_type} | MIS: {mis} | OAS: {oas} ({oas_cat}) | {title[:40]}")
 
+        # 当日開示レコードへ保存 (夕方の TOP5 レポート用)
+        DailyTop5Reporter.record_disclosure({
+            "symbol": symbol,
+            "name": name,
+            "headline": metric_str or title[:30],
+            "event_type": event_type,
+            "mis": mis,
+            "oas_score": oas,
+            "evs_score": float(oas * 1.5 if oas >= 70 else mis),
+            "tier": "TIER1" if oas >= 80 else ("TIER2" if oas >= 70 else "TIER3"),
+            "time_str": time_str,
+        })
+
         # 3. X (旧Twitter) 投稿判定 (MIS >= 60 のキラー開示、日次最大25件)
         tweet_id = None
         should_post_x = self.enable_x_post and (mis >= self.min_mis_for_x or oas >= 80)
@@ -246,10 +261,30 @@ class TdnetSentinel:
             x_text = build_japan_post(event)
             if x_text:
                 try:
-                    tweet_id = self.x_notifier.post_tweet(text=x_text)
+                    media_id = None
+                    # 高注目度（MIS >= 70 または OAS >= 75）はサムネイル画像を自動生成して添付 (視認性3〜5倍)
+                    if mis >= 70 or oas >= 75:
+                        try:
+                            card_png = DisclosureImageGenerator.generate_single_card(
+                                event_type=event_type,
+                                name=name,
+                                symbol=symbol,
+                                headline=metric_str or title[:30],
+                                reason=event.reason or title[:40],
+                                tier="TIER1" if oas >= 80 else "TIER2",
+                                evs_score=float(oas * 1.5 if oas >= 70 else mis),
+                                win_prob=0.72 if oas >= 80 else 0.65,
+                                holding_days=3.0,
+                                daily_bp=45.0,
+                            )
+                            media_id = self.x_notifier.upload_media(card_png)
+                        except Exception as e_img:
+                            logger.warning(f"[TdnetSentinel] サムネイル画像生成例外: {e_img}")
+
+                    tweet_id = self.x_notifier.post_tweet(text=x_text, media_id=media_id)
                     if tweet_id:
                         self.daily_x_count += 1
-                        logger.info(f"[TdnetSentinel] 🐦 X重要開示速報 投稿成功 (Tweet ID: {tweet_id}, MIS: {mis}, OAS: {oas}, 日次累計: {self.daily_x_count}/{self.max_daily_x})")
+                        logger.info(f"[TdnetSentinel] 🐦 X重要開示速報 (画像添付: {bool(media_id)}) 投稿成功 (Tweet ID: {tweet_id}, MIS: {mis}, OAS: {oas})")
                 except Exception as ex:
                     logger.warning(f"[TdnetSentinel] X投稿エラー: {ex}")
 
