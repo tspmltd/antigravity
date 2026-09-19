@@ -41,7 +41,9 @@ class MarketEvent:
     is_scandal: bool = False              # 不祥事フラグ
     is_internal_control_flaw: bool = False # 内部統制不備
     is_arrest: bool = False               # 逮捕・捜査
-    mis: int = 0                          # 算出後MIS (0〜100)
+    mis: int = 0                          # 算出後MIS (0〜100: 危険度ブレーキ)
+    oas: int = 0                          # 算出後OAS (0〜100: 収益機会アクセル)
+    oas_category: str = "NONE"            # TOB_ARBITRAGE, ACTIVIST_FOLLOW, BUYBACK_DRIFT, etc.
 
 
 class MarketImpactScorer:
@@ -372,7 +374,19 @@ def build_japan_post(ev: MarketEvent) -> Optional[str]:
     label = impact_label(ev.mis)
     is_critical_type = ev.event_type in ["不祥事", "監査不適正", "会計不正", "上場廃止"] or label == "CRITICAL"
     icon = "🛑" if is_critical_type else "⚠️"
-    lines.append(f"{icon}市場影響度：{label}（MIS {ev.mis}）")
+
+    # OAS (機会スコア) が高得点の場合はアクセル表示を付与
+    if ev.oas == 0:
+        try:
+            from news_pipeline.opportunity_assessor import OpportunityAssessor
+            ev.oas, ev.oas_category, _ = OpportunityAssessor.calculate_oas(ev)
+        except Exception:
+            pass
+
+    if ev.oas >= 70:
+        lines.append(f"{icon}市場影響度：{label}（MIS {ev.mis} / 💎OAS {ev.oas}）")
+    else:
+        lines.append(f"{icon}市場影響度：{label}（MIS {ev.mis}）")
 
     lines.append(get_hashtags(ev.event_type))
 

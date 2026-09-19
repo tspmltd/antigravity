@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, List
 
 from .schemas import MacroImpact
 from news_pipeline.market_impact_scorer import MarketImpactScorer, MarketEvent
+from news_pipeline.opportunity_assessor import OpportunityAssessor
 from news_pipeline.pts_causal_engine import PTSFeatureRecord
 
 logger = logging.getLogger("antigravity.multi_asset.macro_impact_agent")
@@ -22,24 +23,35 @@ class MacroImpactAgent:
     """
     第2階層: MACRO Impact AGENT
     全資産共通の上位インテリジェンス。
-    TDnet・PTS・世界市場センチネルと接続し、マクロショックと資産影響度を評価する。
+    TDnet・PTS・世界市場センチネルと接続し、マクロショック (MIS) と収益機会 (OAS) を二次元評価する。
     """
 
     def __init__(self):
         self.scorer = MarketImpactScorer()
+        self.assessor = OpportunityAssessor()
         self.last_macro: Optional[MacroImpact] = None
 
     def evaluate_tdnet_event(self, event: MarketEvent) -> MacroImpact:
         """
-        東証TDnet開示イベントからMacroImpactを算出
+        東証TDnet開示イベントからMacroImpact (MIS & OAS) を算出
         """
         mis = event.mis if event.mis > 0 else self.scorer.calculate_mis(event)
         event.mis = mis
 
-        # レベル判定
-        if mis >= 85:
+        # OAS (Opportunity Assessment Score: 0〜100) 算出
+        oas, opp_type, opp_rationale = self.assessor.calculate_oas(event)
+        is_special = (oas >= 80)
+
+        # レベル & レジーム判定 (MISとOASの二次元判定)
+        if (mis >= 85) and (oas <= 30):
             level = "CRITICAL"
             regime = "RISK_OFF"
+        elif is_special:
+            level = "CRITICAL" if mis >= 70 else "WARNING"
+            regime = "SPECIAL_EVENT"
+        elif oas >= 70 and mis < 70:
+            level = "NORMAL"
+            regime = "ALPHA_ACCUMULATE"
         elif mis >= 70:
             level = "WARNING"
             regime = "RISK_OFF" if event.direction == "down" else "NEUTRAL"
@@ -49,7 +61,11 @@ class MacroImpactAgent:
 
         # 資産クラス別インパクトマップ
         asset_map = {}
-        if event.direction == "down" and mis >= 70:
+        if is_special or (oas >= 70 and event.direction == "up"):
+            asset_map["JP_STOCK"] = "BULL"
+            asset_map["FX"] = "NEUTRAL"
+            asset_map["BTC"] = "NEUTRAL"
+        elif event.direction == "down" and mis >= 70:
             asset_map["JP_STOCK"] = "BEAR"
             asset_map["FX"] = "BEAR_JPY"
             asset_map["BTC"] = "NEUTRAL"
@@ -68,7 +84,11 @@ class MacroImpactAgent:
             primary_event=f"TDnet:{event.name}({event.symbol or ''}) {event.headline_metric or event.event_type}",
             global_regime=regime,
             asset_impact_map=asset_map,
-            horizon="IMMEDIATE" if mis >= 70 else "INTRADAY",
+            horizon="IMMEDIATE" if (mis >= 70 or is_special) else "INTRADAY",
+            opportunity_score=oas,
+            opportunity_type=opp_type,
+            is_special_event=is_special,
+            rationale=opp_rationale,
             timestamp=time.time(),
             details={"source": event.source, "event_type": event.event_type},
         )
@@ -101,6 +121,17 @@ class MacroImpactAgent:
             "FX": "NEUTRAL",
         }
 
+        # OAS (PTS急変モメンタム評価)
+        if record.pts_change_pct >= 7.0:
+            oas, opp_type, opp_rationale = 75, "PTS_MOMENTUM", f"夜間PTS急騰モメンタム (+{record.pts_change_pct:.1f}%)"
+            is_special = False
+        elif record.pts_change_pct <= -7.0:
+            oas, opp_type, opp_rationale = 15, "NONE", f"夜間PTS急落リスク ({record.pts_change_pct:.1f}%)"
+            is_special = False
+        else:
+            oas, opp_type, opp_rationale = 30, "NONE", "PTS通常推移"
+            is_special = False
+
         macro = MacroImpact(
             impact_score=mis,
             level=level,
@@ -108,6 +139,10 @@ class MacroImpactAgent:
             global_regime=regime,
             asset_impact_map=asset_map,
             horizon="IMMEDIATE",
+            opportunity_score=oas,
+            opportunity_type=opp_type,
+            is_special_event=is_special,
+            rationale=opp_rationale,
             timestamp=time.time(),
             details={
                 "cis2_score": cis2_score,

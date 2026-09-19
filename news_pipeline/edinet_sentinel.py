@@ -29,6 +29,8 @@ from dotenv import load_dotenv
 from news_pipeline.x_notifier import XNotifier
 from antigravity.risk_guard.notifier import DiscordNotifier
 from news_pipeline.disclosure_dedup_engine import default_dedup_engine
+from news_pipeline.market_impact_scorer import MarketEvent
+from news_pipeline.opportunity_assessor import OpportunityAssessor
 
 load_dotenv(override=True)
 logger = logging.getLogger("news_pipeline.edinet_sentinel")
@@ -248,18 +250,30 @@ class EdinetSentinel:
         else:
             logger.info("[EdinetSentinel] X投稿スキップ (未設定または無効)")
 
-        # 2. Discord へ直接送信
+        # 2. OAS (収益機会スコア) 算出
+        ev_dummy = MarketEvent(
+            event_type="TOB" if ("TOB" in condensed or "公開買付" in raw) else ("自社株買い" if "自社株" in condensed else "大量保有"),
+            name=condensed[:10],
+            headline_metric=condensed,
+            reason=raw[:100],
+        )
+        oas, oas_cat, oas_rat = OpportunityAssessor.calculate_oas(ev_dummy)
+
+        # 3. Discord へ直接送信
         discord_success = False
         if self.enable_discord:
             try:
+                color = 0x9B59B6 if oas >= 80 else (0x2ECC71 if oas >= 70 else 0x3498DB)
+                fields = [
+                    {"name": "超凝縮要約", "value": f"**`{condensed}`** (文字数: {len(condensed)}文字)", "inline": True},
+                    {"name": "💎 収益機会 (OAS)", "value": f"**{oas_cat}** (`OAS {oas}`)", "inline": True},
+                    {"name": "X (Twitter) 配信", "value": "🐦 投稿完了" if x_success else "⚪ スキップ/待機", "inline": True},
+                ]
                 discord_success = self.discord_notifier.send_embed(
                     title=f"⚡ 【EDINET 10文字速報】{condensed}",
-                    description=f"**検知時刻**: `{jst_time} JST`\n**原文タイトル**: {raw}\n[🔗 開示・記事詳細を見る]({link})",
-                    fields=[
-                        {"name": "超凝縮要約", "value": f"**`{condensed}`** (文字数: {len(condensed)}文字)", "inline": True},
-                        {"name": "X (Twitter) 配信", "value": "🐦 投稿完了" if x_success else "⚪ スキップ/待機", "inline": True},
-                    ],
-                    color=0x3498DB,
+                    description=f"**検知時刻**: `{jst_time} JST`\n**原文タイトル**: {raw}\n*根拠: {oas_rat}*\n[🔗 開示・記事詳細を見る]({link})",
+                    fields=fields,
+                    color=color,
                     footer_text="Antigravity EDINET Flash Sentinel 📰",
                     target="report",
                 )

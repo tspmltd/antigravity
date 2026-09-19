@@ -88,6 +88,19 @@ class RegimeOrchestratorAgent:
             "FX": 0.40,
             "CASH": 0.50,
         },
+        # 第4階層連動: 未織り込みアルファ集中プレイブック
+        "SPECIAL_EVENT": {
+            "BTC": 0.10,
+            "JP_STOCK": 0.70,   # 日本株特異イベント (TOB/MBO等) に70%集中
+            "FX": 0.10,
+            "CASH": 0.10,
+        },
+        "ALPHA_ACCUMULATE": {
+            "BTC": 0.20,
+            "JP_STOCK": 0.60,   # 自社株買い・アクティビスト追随・好決算に60%配分
+            "FX": 0.20,
+            "CASH": 0.00,
+        },
     }
 
     # 各資産のデフォルト最大ポジションサイズ (BTC: 単位BTC, 日本株: 単位株, FX: 単位ロット[万通貨])
@@ -117,18 +130,36 @@ class RegimeOrchestratorAgent:
         logger.info(f"[ORCHESTRATOR] 資産ポッド登録完了: {pod.asset_class}")
 
     def evaluate_macro_regime(self, macro: MacroImpact) -> str:
-        """マクロ影響度・イベントから全体レジームを判定"""
+        """
+        マクロ影響度 (MIS: ブレーキ) × 市場機会スコア (OAS: アクセル) の二次元判定
+        ========================================================================
+        1. MIS >= 85 and OAS <= 30  -> SHOCK (純粋破滅・即時全面停止 STOP)
+        2. (MIS >= 70 or CRITICAL) and OAS >= 80 -> SPECIAL_EVENT (TOB/MBO等 特異収益機会)
+        3. MIS < 70 and OAS >= 70   -> ALPHA_ACCUMULATE (大量保有・自社株買い・上方修正)
+        4. MIS >= 70 or WARNING     -> RISK_OFF (通常のリスクオフ・防衛)
+        5. その他                   -> 指定レジーム or NEUTRAL
+        """
         self.current_macro = macro
+        mis = macro.impact_score
+        oas = getattr(macro, "opportunity_score", 0)
 
-        # 1. 致命的ショック (MIS >= 85 または CRITICAL)
-        if macro.impact_score >= 85 or macro.level == "CRITICAL":
+        # 1. 致命的ショック (危険度極大 かつ 収益機会が希薄: 上場廃止、不正会計、世界クラッシュ等)
+        if (mis >= 85 or macro.level == "CRITICAL") and oas <= 30:
             return "SHOCK"
 
-        # 2. 警戒水準 (MIS >= 70 または WARNING)
-        if macro.impact_score >= 70 or macro.level == "WARNING":
+        # 2. 超高確度アルファ / 特異イベントモード (TOB, MBO, 大規模増配・自社株買い)
+        if (mis >= 70 or macro.level == "CRITICAL" or getattr(macro, "is_special_event", False)) and oas >= 80:
+            return "SPECIAL_EVENT"
+
+        # 3. 積極アルファ蓄積モード (大量保有アクティビスト, 自社株買い, 決算サプライズ)
+        if mis < 70 and oas >= 70:
+            return "ALPHA_ACCUMULATE"
+
+        # 4. 警戒水準 (MIS >= 70 または WARNING で OAS が十分でない場合)
+        if mis >= 70 or macro.level == "WARNING":
             return "RISK_OFF"
 
-        # 3. 指定のグローバルレジーム
+        # 5. 指定のグローバルレジーム
         if macro.global_regime in self.BUDGET_RATIOS:
             return macro.global_regime
 
@@ -136,34 +167,42 @@ class RegimeOrchestratorAgent:
 
     def determine_playbook(self, macro: MacroImpact, micro_signals: Optional[Dict[str, Any]] = None) -> str:
         """
-        マクロ環境 × マイクロ構造から 5大クロスアセット・プレイブックを自動判定 (SPEC-FX-20260918-002)
-        ① CRYPTO_DOMINANT: BTC高ボラ・リスクオン
-        ② FX_MACRO_DOMINANT: CPI/FOMC/金利差イベント
-        ③ JP_EQUITY_CATALYST: 東証適時開示/PTS急変
-        ④ BALANCED_TRI_ASSET: 平常中立・分散
-        ⑤ DEFENSIVE_FX_ANCHOR: リスクオフ・急落防衛
+        マクロ環境 × マイクロ構造から プレイブックを自動判定
+        ① SPECIAL_EVENT: TOB/MBO等の確定アービトラージ
+        ② ALPHA_ACCUMULATE: アクティビスト/自社株買い蓄積
+        ③ CRYPTO_DOMINANT: BTC高ボラ・リスクオン
+        ④ FX_MACRO_DOMINANT: CPI/FOMC/金利差イベント
+        ⑤ JP_EQUITY_CATALYST: 東証適時開示/PTS急変
+        ⑥ DEFENSIVE_FX_ANCHOR: リスクオフ・急落防衛
+        ⑦ BALANCED_TRI_ASSET: 平常中立・分散
         """
-        # 1. 致命的ショックまたは強いリスクオフ
-        if macro.level == "CRITICAL" or macro.impact_score >= 85:
+        regime = self.evaluate_macro_regime(macro)
+
+        # 特異イベント・アルファ蓄積レジームはプレイブックへ直結
+        if regime in ("SPECIAL_EVENT", "ALPHA_ACCUMULATE"):
+            return regime
+
+        # 致命的ショックまたは強いリスクオフ
+        if regime == "SHOCK" or macro.level == "CRITICAL" or macro.impact_score >= 85:
             return "DEFENSIVE_FX_ANCHOR"
 
-        # 2. 為替・マクロ指標イベント (CPI/FOMC/日銀会合等)
+        # 為替・マクロ指標イベント (CPI/FOMC/日銀会合等)
         primary_lower = macro.primary_event.lower()
         if any(kw in primary_lower for kw in ["cpi", "fomc", "fed", "boj", "日銀", "雇用統計", "金利"]):
             return "FX_MACRO_DOMINANT"
 
-        # 3. 日本株適時開示・カタリスト集中
+        # 日本株適時開示・カタリスト集中
         if any(kw in primary_lower for kw in ["tdnet", "edinet", "pts", "決算", "適時開示", "tob"]):
             return "JP_EQUITY_CATALYST"
 
-        # 4. リスクオン・暗号資産モメンタム
+        # リスクオン・暗号資産モメンタム
         if macro.global_regime == "RISK_ON" or macro.level == "RISK_ON":
             return "CRYPTO_DOMINANT"
 
         if macro.level == "WARNING" or macro.impact_score >= 70:
             return "DEFENSIVE_FX_ANCHOR"
 
-        # 5. デフォルト平常
+        # デフォルト平常
         return "BALANCED_TRI_ASSET"
 
     def compute_risk_allocation(self, regime: str) -> Dict[str, float]:
@@ -190,6 +229,8 @@ class RegimeOrchestratorAgent:
         commands: Dict[str, ExecutionCommand] = {}
 
         now = time.time()
+        mis = macro.impact_score
+        oas = getattr(macro, "opportunity_score", 0)
 
         for asset_class in list(self.pods.keys()):
             allocated_risk = allocations.get(asset_class, 5000.0)
@@ -203,11 +244,39 @@ class RegimeOrchestratorAgent:
                     allocated_risk_jpy=0.0,
                     max_position_size=0.0,
                     is_halted=True,
-                    reason=f"CRITICAL MACRO SHOCK: {macro.primary_event} (MIS={macro.impact_score})",
+                    reason=f"CRITICAL MACRO SHOCK: {macro.primary_event} (MIS={mis}, OAS={oas})",
                     timestamp=now,
                 )
 
-            # B. 警戒水準時: リスク半分・建玉縮小
+            # B. 特異イベントモード (TOB/MBO等): 停止ではなく収束アービトラージ起動
+            elif regime == "SPECIAL_EVENT":
+                target_mode = "SPECIAL_EVENT" if asset_class == "JP_STOCK" else "HYBRID"
+                max_pos = round(base_max_pos * 1.5, 4) if asset_class == "JP_STOCK" else base_max_pos
+                cmd = ExecutionCommand(
+                    asset_class=asset_class,
+                    target_mode=target_mode,
+                    allocated_risk_jpy=allocated_risk,
+                    max_position_size=max_pos,
+                    is_halted=False,
+                    reason=f"SPECIAL EVENT ARBITRAGE: {macro.primary_event} (MIS={mis}, OAS={oas})",
+                    timestamp=now,
+                )
+
+            # C. 積極アルファ蓄積モード (自社株買い・アクティビスト追随)
+            elif regime == "ALPHA_ACCUMULATE":
+                target_mode = "ALPHA_ACCUMULATE" if asset_class == "JP_STOCK" else "HYBRID"
+                max_pos = round(base_max_pos * 1.2, 4) if asset_class == "JP_STOCK" else base_max_pos
+                cmd = ExecutionCommand(
+                    asset_class=asset_class,
+                    target_mode=target_mode,
+                    allocated_risk_jpy=allocated_risk,
+                    max_position_size=max_pos,
+                    is_halted=False,
+                    reason=f"ALPHA ACCUMULATE: {macro.primary_event} (MIS={mis}, OAS={oas})",
+                    timestamp=now,
+                )
+
+            # D. 警戒水準時: リスク半分・建玉縮小
             elif regime == "RISK_OFF":
                 # アセット固有インパクト判定
                 asset_dir = macro.asset_impact_map.get(asset_class, "NEUTRAL")
@@ -218,11 +287,11 @@ class RegimeOrchestratorAgent:
                     allocated_risk_jpy=allocated_risk,
                     max_position_size=round(base_max_pos * 0.5, 4),
                     is_halted=False,
-                    reason=f"WARNING REGIME: {macro.primary_event} (MIS={macro.impact_score})",
+                    reason=f"WARNING REGIME: {macro.primary_event} (MIS={mis}, OAS={oas})",
                     timestamp=now,
                 )
 
-            # C. リスクオン時
+            # E. リスクオン時
             elif regime == "RISK_ON":
                 cmd = ExecutionCommand(
                     asset_class=asset_class,
@@ -234,7 +303,7 @@ class RegimeOrchestratorAgent:
                     timestamp=now,
                 )
 
-            # D. 平常 / 中立時
+            # F. 平常 / 中立時
             else:
                 cmd = ExecutionCommand(
                     asset_class=asset_class,

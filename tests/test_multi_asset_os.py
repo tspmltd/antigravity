@@ -623,6 +623,70 @@ class TestOandaAdapterAndPlaybooks(unittest.TestCase):
         self.assertEqual(alloc_def["BTC"], 0.0)  # BTC完全遮断
         self.assertEqual(alloc_def["FX"], 40_000.0)  # 為替防衛アンカー 40%
 
+    def test_two_dimensional_arbitration_stop_vs_special_event(self):
+        """
+        MIS (ブレーキ) × OAS (アクセル) の二次元調停テスト
+        ====================================================
+        ユーザー設計要件:
+        1. MIS >= 85 and OAS <= 30 -> STOP (東証上場廃止・破滅リスク)
+        2. MIS >= 85 (or >= 70) and OAS >= 80 -> SPECIAL_EVENT_MODE (TOB・確定鞘取り起動)
+        3. MIS < 70 and OAS >= 70 -> ALPHA_ACCUMULATE (大量保有・自社株買い)
+        """
+        orch = RegimeOrchestratorAgent(total_daily_risk_budget_jpy=100_000.0)
+        jp_pod = JapanEquityPod(symbols=["6335", "9999"])
+        btc_pod = CryptoPod()
+        orch.register_pod(jp_pod)
+        orch.register_pod(btc_pod)
+
+        # ケースA: 上場廃止 (MIS 90, OAS 10) -> 全停止 STOP
+        macro_delist = MacroImpact(
+            impact_score=90,
+            level="CRITICAL",
+            primary_event="東証上場廃止決定",
+            opportunity_score=10,
+            opportunity_type="NONE",
+            is_special_event=False,
+        )
+        regime_delist = orch.evaluate_macro_regime(macro_delist)
+        self.assertEqual(regime_delist, "SHOCK")
+        cmds_delist = orch.formulate_governance_commands(macro_delist)
+        self.assertTrue(cmds_delist["JP_STOCK"].is_halted)
+        self.assertEqual(cmds_delist["JP_STOCK"].target_mode, "STOP")
+
+        # ケースB: TOB公開買付 (MIS 75, OAS 95) -> 停止ではなく SPECIAL_EVENT_MODE 起動！
+        macro_tob = MacroImpact(
+            impact_score=75,
+            level="WARNING",
+            primary_event="TOB 公開買付発表 (買付プレミアム+25%)",
+            opportunity_score=95,
+            opportunity_type="TOB_ARBITRAGE",
+            is_special_event=True,
+        )
+        regime_tob = orch.evaluate_macro_regime(macro_tob)
+        self.assertEqual(regime_tob, "SPECIAL_EVENT")
+        self.assertEqual(orch.determine_playbook(macro_tob), "SPECIAL_EVENT")
+
+        cmds_tob = orch.formulate_governance_commands(macro_tob)
+        self.assertFalse(cmds_tob["JP_STOCK"].is_halted)
+        self.assertEqual(cmds_tob["JP_STOCK"].target_mode, "SPECIAL_EVENT")
+        self.assertEqual(cmds_tob["JP_STOCK"].allocated_risk_jpy, 70_000.0)  # 日本株に70%集中配分
+        self.assertIn("SPECIAL EVENT ARBITRAGE", cmds_tob["JP_STOCK"].reason)
+
+        # ケースC: 大量保有報告書 (MIS 45, OAS 85) -> ALPHA_ACCUMULATE 起動！
+        macro_activist = MacroImpact(
+            impact_score=45,
+            level="NORMAL",
+            primary_event="エフィッシモ 大量保有報告書 買い増し",
+            opportunity_score=85,
+            opportunity_type="ACTIVIST_FOLLOW",
+        )
+        regime_act = orch.evaluate_macro_regime(macro_activist)
+        self.assertEqual(regime_act, "ALPHA_ACCUMULATE")
+        cmds_act = orch.formulate_governance_commands(macro_activist)
+        self.assertFalse(cmds_act["JP_STOCK"].is_halted)
+        self.assertEqual(cmds_act["JP_STOCK"].target_mode, "ALPHA_ACCUMULATE")
+        self.assertEqual(cmds_act["JP_STOCK"].allocated_risk_jpy, 60_000.0)  # 60%配分
+
 
 if __name__ == "__main__":
     unittest.main()

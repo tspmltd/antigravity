@@ -43,9 +43,13 @@ class MacroImpact:
     impact_score: int         # 0 〜 100 (MIS: Market Impact Score)
     level: str                # "NORMAL", "WARNING", "CRITICAL", "WIDE"
     primary_event: str        # "米CPI上振れ", "トヨタ決算サプライズ", "PTS異常急変"
-    global_regime: str        # "RISK_ON", "RISK_OFF", "STAGFLATION", "NEUTRAL"
+    global_regime: str = "NEUTRAL" # "RISK_ON", "RISK_OFF", "STAGFLATION", "NEUTRAL"
     asset_impact_map: Dict[str, str] = field(default_factory=dict) # {"JP_STOCK": "BULL", "FX": "BEAR_JPY", "BTC": "NEUTRAL"}
     horizon: str = "INTRADAY" # "IMMEDIATE" (〜15分), "INTRADAY" (当日), "SWING" (数日〜週)
+    opportunity_score: int = 0         # 0 〜 100 (OAS: Opportunity Assessment Score: 市場機会スコア)
+    opportunity_type: str = "NONE"     # "TOB_ARBITRAGE", "ACTIVIST_FOLLOW", "BUYBACK_DRIFT", "EARNINGS_SURPRISE", "PTS_MOMENTUM", "NONE"
+    is_special_event: bool = False     # OAS >= 80 かつ特異アルファイベント (TOB/MBO等)
+    rationale: str = ""                # 判定根拠
     timestamp: float = field(default_factory=time.time)
     details: Dict[str, Any] = field(default_factory=dict)
 
@@ -54,6 +58,61 @@ class MacroImpact:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MacroImpact":
+        return cls(**data)
+
+
+@dataclass
+class AlphaForecast:
+    """
+    第4階層 FORECAST AGENT 出力データモデル
+    市場未織り込みアルファ (Unpriced Alpha) の価格収束予測
+    """
+    forecast_id: str
+    event_id: str
+    asset_class: str          # "JP_STOCK", "BTC", "FX", "FUTURES"
+    symbol: str               # "7203", "FX_BTC_JPY", "USDJPY"
+    opportunity_type: str     # "TOB_ARBITRAGE", "ACTIVIST_FOLLOW", "BUYBACK_DRIFT", "EARNINGS_SURPRISE", "PTS_MOMENTUM"
+    target_price: Optional[float] = None     # 予測目標価格 (TOB買付価格・理論フェアバリュー)
+    current_price: Optional[float] = None    # 開示直後 / 現在価格
+    expected_return_bp: float = 0.0          # 期待収益率 (bp: ベーシスポイント, 例: +350.0 bp)
+    confidence: float = 0.0                  # 予測確信度 (0.0 〜 100.0)
+    time_horizon: str = "INTRADAY"           # "IMMEDIATE", "INTRADAY", "SWING"
+    unpriced_alpha_rationale: str = ""       # 市場未織り込み根拠
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AlphaForecast":
+        return cls(**data)
+
+
+@dataclass
+class AlphaStrategyPlan:
+    """
+    第4階層 STRATEGY AGENT 出力データモデル
+    収束予測に基づく具体的な自律執行プラン (PEG_v2指値・TWAP・ロット・TP/SL)
+    """
+    plan_id: str
+    forecast_id: str
+    asset_class: str
+    symbol: str
+    action: str               # "BUY", "SELL", "HOLD", "ARBITRAGE"
+    order_style: str          # "PEG_v2", "LIMIT", "AGGRESSIVE_MARKET", "TWAP"
+    target_size: float = 0.0  # 推奨発注株数 / ロット
+    target_mode: str = "SPECIAL_EVENT" # "SPECIAL_EVENT", "ALPHA_ACCUMULATE", "HYBRID"
+    max_slippage_bp: float = 5.0
+    take_profit_bp: Optional[float] = None
+    stop_loss_bp: Optional[float] = None
+    reason: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AlphaStrategyPlan":
         return cls(**data)
 
 

@@ -15,6 +15,8 @@ from .schemas import (
     OrderCommand,
     TradeReport,
     AssetPodState,
+    AlphaForecast,
+    AlphaStrategyPlan,
 )
 from .base_agent import (
     BaseMicroAgent,
@@ -24,6 +26,11 @@ from .base_agent import (
 )
 from .regime_orchestrator import RegimeOrchestratorAgent
 from .macro_impact_agent import MacroImpactAgent
+from .alpha_opportunity_engine import (
+    ForecastAgent,
+    StrategyAgent,
+    AlphaOpportunityEngine,
+)
 from .pods.japan_equity.jp_pod import JapanEquityPod
 from .pods.japan_equity.jp_micro_agent import JpMicroAgent
 from .pods.japan_equity.jp_alpha_agent import JpAlphaAgent
@@ -42,12 +49,17 @@ __all__ = [
     "OrderCommand",
     "TradeReport",
     "AssetPodState",
+    "AlphaForecast",
+    "AlphaStrategyPlan",
     "BaseMicroAgent",
     "BaseAlphaAgent",
     "BaseExecutionAgent",
     "BaseAssetPod",
     "RegimeOrchestratorAgent",
     "MacroImpactAgent",
+    "ForecastAgent",
+    "StrategyAgent",
+    "AlphaOpportunityEngine",
     "JapanEquityPod",
     "JpMicroAgent",
     "JpAlphaAgent",

@@ -27,6 +27,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from news_pipeline.market_impact_scorer import MarketEvent, MarketImpactScorer, build_japan_post
+from news_pipeline.opportunity_assessor import OpportunityAssessor
 from news_pipeline.disclosure_dedup_engine import default_dedup_engine
 from news_pipeline.x_notifier import XNotifier
 from antigravity.risk_guard.notifier import DiscordNotifier
@@ -231,11 +232,16 @@ class TdnetSentinel:
         mis = MarketImpactScorer.calculate_mis(event)
         event.mis = mis
 
-        logger.info(f"[TdnetSentinel] 開示検知: [{time_str}] {symbol} {name} | {event_type} | MIS: {mis} | {title[:40]}")
+        # OAS (Opportunity Assessment Score: 収益機会アクセル) 算出
+        oas, oas_cat, oas_rationale = OpportunityAssessor.calculate_oas(event)
+        event.oas = oas
+        event.oas_category = oas_cat
+
+        logger.info(f"[TdnetSentinel] 開示検知: [{time_str}] {symbol} {name} | {event_type} | MIS: {mis} | OAS: {oas} ({oas_cat}) | {title[:40]}")
 
         # 3. X (旧Twitter) 投稿判定 (MIS >= 60 のキラー開示、日次最大25件)
         tweet_id = None
-        should_post_x = self.enable_x_post and (mis >= self.min_mis_for_x)
+        should_post_x = self.enable_x_post and (mis >= self.min_mis_for_x or oas >= 80)
         if should_post_x and self.daily_x_count < self.max_daily_x:
             x_text = build_japan_post(event)
             if x_text:
@@ -243,7 +249,7 @@ class TdnetSentinel:
                     tweet_id = self.x_notifier.post_tweet(text=x_text)
                     if tweet_id:
                         self.daily_x_count += 1
-                        logger.info(f"[TdnetSentinel] 🐦 X重要開示速報 投稿成功 (Tweet ID: {tweet_id}, MIS: {mis}, 日次累計: {self.daily_x_count}/{self.max_daily_x})")
+                        logger.info(f"[TdnetSentinel] 🐦 X重要開示速報 投稿成功 (Tweet ID: {tweet_id}, MIS: {mis}, OAS: {oas}, 日次累計: {self.daily_x_count}/{self.max_daily_x})")
                 except Exception as ex:
                     logger.warning(f"[TdnetSentinel] X投稿エラー: {ex}")
 
@@ -251,11 +257,12 @@ class TdnetSentinel:
         if self.enable_discord and self.discord_notifier:
             try:
                 imp_label = MarketImpactScorer.get_impact_label(mis)
-                color = 0xE74C3C if mis >= 85 else (0xF39C12 if mis >= 70 else (0x3498DB if mis >= 40 else 0x95A5A6))
+                color = 0x9B59B6 if oas >= 80 else (0xE74C3C if mis >= 85 else (0xF39C12 if mis >= 70 else (0x3498DB if mis >= 40 else 0x95A5A6)))
                 fields = [
                     {"name": "🏢 銘柄", "value": f"**{name}** (`{symbol}`)", "inline": True},
                     {"name": "⏰ 発表時刻", "value": f"`{time_str}`", "inline": True},
-                    {"name": "📊 市場影響度 (MIS)", "value": f"**{imp_label}** (`MIS {mis}`)", "inline": True},
+                    {"name": "📊 影響度 (MIS)", "value": f"**{imp_label}** (`MIS {mis}`)", "inline": True},
+                    {"name": "💎 機会度 (OAS)", "value": f"**{oas_cat}** (`OAS {oas}`)", "inline": True},
                     {"name": "📌 区分 / ソース", "value": f"`{event_type}` / `{display_src}`", "inline": True},
                 ]
                 if tweet_id:
@@ -265,7 +272,7 @@ class TdnetSentinel:
 
                 self.discord_notifier.send_embed(
                     title=f"【東証適時開示】{name} ({symbol}) - {event_type}",
-                    description=f"**{title}**",
+                    description=f"**{title}**\n*根拠: {oas_rationale}*",
                     fields=fields,
                     color=color,
                     target="news",
