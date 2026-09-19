@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 
 # X & Discord Notifiers
 from news_pipeline.x_notifier import XNotifier
+from news_pipeline.x_agent import XAgent
 from antigravity.risk_guard.notifier import DiscordNotifier
 from news_pipeline.disclosure_dedup_engine import default_dedup_engine
 from news_pipeline.market_impact_scorer import MarketEvent
@@ -71,6 +72,7 @@ class EdinetSentinel:
         os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
 
         self.x_notifier = XNotifier()
+        self.x_agent = XAgent(x_notifier=self.x_notifier)
         news_wh = os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip() or os.getenv("DISCORD_TRADE_WEBHOOK", "").strip()
         self.discord_notifier = DiscordNotifier(webhook_url=news_wh)
 
@@ -230,34 +232,51 @@ class EdinetSentinel:
         is_large = "大量保有" in raw or "5%" in raw or "変更報告" in raw
         protection_str = "新規エントリー禁止" if is_tob else ("ロット上限50%縮小" if is_large else "通常運転")
 
-        # 1. X (旧Twitter) へ直接投稿 (重複統合フォーマット、日次最大4件)
-        x_success = False
-        if self.enable_x_post and self.x_notifier.is_configured():
-            if self.daily_x_count >= self.max_daily_x:
-                logger.info(f"[EdinetSentinel] 🛑 本日のEDINET X投稿上限({self.max_daily_x}件)に達したためスキップします")
-            else:
-                dedup_item["source"] = display_src
-                tweet_text = default_dedup_engine.format_x_disclosure(dedup_item, protection_str)
-                try:
-                    tweet_id = self.x_notifier.post_tweet(text=tweet_text)
-                    if tweet_id:
-                        x_success = True
-                        self.daily_x_count += 1
-                        self._save_cache()
-                        logger.info(f"[EdinetSentinel] 🐦 X重要開示速報 投稿成功 (Tweet ID: {tweet_id}, 日次累計: {self.daily_x_count}/{self.max_daily_x})")
-                except Exception as ex:
-                    logger.warning(f"[EdinetSentinel] X投稿例外: {ex}")
-        else:
-            logger.info("[EdinetSentinel] X投稿スキップ (未設定または無効)")
-
-        # 2. OAS (収益機会スコア) 算出
+        # 1. OAS (収益機会スコア) 算出
+        ev_type = "TOB" if ("TOB" in condensed or "公開買付" in raw) else ("自社株買い" if "自社株" in condensed else "大量保有")
         ev_dummy = MarketEvent(
-            event_type="TOB" if ("TOB" in condensed or "公開買付" in raw) else ("自社株買い" if "自社株" in condensed else "大量保有"),
+            event_type=ev_type,
             name=condensed[:10],
             headline_metric=condensed,
             reason=raw[:100],
         )
         oas, oas_cat, oas_rat = OpportunityAssessor.calculate_oas(ev_dummy)
+
+        # 2. X (旧Twitter) へ投稿 (X-Agent 比率管理 & 画像付きアルファ発信、日次最大4件)
+        x_success = False
+        if self.enable_x_post and self.x_notifier.is_configured():
+            if self.daily_x_count >= self.max_daily_x:
+                logger.info(f"[EdinetSentinel] 🛑 本日のEDINET X投稿上限({self.max_daily_x}件)に達したためスキップします")
+            else:
+                try:
+                    if oas >= 75 or is_large or is_tob:
+                        tier = "TIER1" if is_large else ("TIER4" if is_tob else "TIER2")
+                        evs = float(oas * 1.5)
+                        tweet_id = self.x_agent.post_alpha_candidate(
+                            event=ev_dummy,
+                            oas=oas,
+                            evs=evs,
+                            tier=tier,
+                            win_prob=0.71 if is_large else (0.98 if is_tob else 0.79),
+                            holding_days=2.8 if is_large else (58.0 if is_tob else 5.2),
+                            daily_bp=44.6 if is_large else (37.9 if is_tob else 40.4),
+                            sample_size=148 if is_large else (42 if is_tob else 230),
+                        )
+                    else:
+                        tweet_id = self.x_agent.post_news_flash(
+                            event=ev_dummy,
+                            mis=70,
+                            attach_image=False,
+                        )
+                    if tweet_id:
+                        x_success = True
+                        self.daily_x_count += 1
+                        self._save_cache()
+                        logger.info(f"[EdinetSentinel] 🐦 X-Agent 投稿成功 (Tweet ID: {tweet_id}, 日次累計: {self.daily_x_count}/{self.max_daily_x})")
+                except Exception as ex:
+                    logger.warning(f"[EdinetSentinel] X-Agent 投稿例外: {ex}")
+        else:
+            logger.info("[EdinetSentinel] X投稿スキップ (未設定または無効)")
 
         # 3. Discord へ直接送信
         discord_success = False

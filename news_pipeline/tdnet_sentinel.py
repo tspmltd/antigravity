@@ -32,6 +32,7 @@ from news_pipeline.disclosure_image_generator import DisclosureImageGenerator
 from news_pipeline.daily_top5_reporter import DailyTop5Reporter
 from news_pipeline.disclosure_dedup_engine import default_dedup_engine
 from news_pipeline.x_notifier import XNotifier
+from news_pipeline.x_agent import XAgent
 from antigravity.risk_guard.notifier import DiscordNotifier
 
 load_dotenv(override=True)
@@ -67,6 +68,7 @@ class TdnetSentinel:
         os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
 
         self.x_notifier = XNotifier()
+        self.x_agent = XAgent(x_notifier=self.x_notifier)
         news_wh = os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip() or os.getenv("DISCORD_TRADE_WEBHOOK", "").strip()
         self.discord_notifier = DiscordNotifier(webhook_url=news_wh)
 
@@ -254,39 +256,37 @@ class TdnetSentinel:
             "time_str": time_str,
         })
 
-        # 3. X (旧Twitter) 投稿判定 (MIS >= 60 のキラー開示、日次最大25件)
+        # 3. X (旧Twitter) 投稿判定 (X-Agent による比率管理・画像生成・140文字最適化)
         tweet_id = None
-        should_post_x = self.enable_x_post and (mis >= self.min_mis_for_x or oas >= 80)
+        should_post_x = self.enable_x_post and (mis >= self.min_mis_for_x or oas >= 75)
         if should_post_x and self.daily_x_count < self.max_daily_x:
-            x_text = build_japan_post(event)
-            if x_text:
-                try:
-                    media_id = None
-                    # 高注目度（MIS >= 70 または OAS >= 75）はサムネイル画像を自動生成して添付 (視認性3〜5倍)
-                    if mis >= 70 or oas >= 75:
-                        try:
-                            card_png = DisclosureImageGenerator.generate_single_card(
-                                event_type=event_type,
-                                name=name,
-                                symbol=symbol,
-                                headline=metric_str or title[:30],
-                                reason=event.reason or title[:40],
-                                tier="TIER1" if oas >= 80 else "TIER2",
-                                evs_score=float(oas * 1.5 if oas >= 70 else mis),
-                                win_prob=0.72 if oas >= 80 else 0.65,
-                                holding_days=3.0,
-                                daily_bp=45.0,
-                            )
-                            media_id = self.x_notifier.upload_media(card_png)
-                        except Exception as e_img:
-                            logger.warning(f"[TdnetSentinel] サムネイル画像生成例外: {e_img}")
-
-                    tweet_id = self.x_notifier.post_tweet(text=x_text, media_id=media_id)
-                    if tweet_id:
-                        self.daily_x_count += 1
-                        logger.info(f"[TdnetSentinel] 🐦 X重要開示速報 (画像添付: {bool(media_id)}) 投稿成功 (Tweet ID: {tweet_id}, MIS: {mis}, OAS: {oas})")
-                except Exception as ex:
-                    logger.warning(f"[TdnetSentinel] X投稿エラー: {ex}")
+            try:
+                # OAS >= 75 またはキラー案件（大量保有・TOB・自社株買い等）は【💎 アルファ候補】(20%枠: 画像付き)
+                if oas >= 75:
+                    tier = "TIER1" if oas >= 80 else "TIER2"
+                    evs = float(oas * 1.5 if oas >= 70 else mis)
+                    tweet_id = self.x_agent.post_alpha_candidate(
+                        event=event,
+                        oas=oas,
+                        evs=evs,
+                        tier=tier,
+                        win_prob=0.72 if oas >= 80 else 0.65,
+                        holding_days=2.8 if oas >= 80 else 4.0,
+                        daily_bp=45.0 if oas >= 80 else 30.0,
+                        sample_size=148 if oas >= 80 else 230,
+                    )
+                else:
+                    # 通常の重要速報 (MIS >= 60) は【📢 速報ニュース】(70%枠: 結論ファースト)
+                    tweet_id = self.x_agent.post_news_flash(
+                        event=event,
+                        mis=mis,
+                        attach_image=(mis >= 70),
+                    )
+                if tweet_id:
+                    self.daily_x_count += 1
+                    logger.info(f"[TdnetSentinel] 🐦 X-Agent 投稿成功 (Tweet ID: {tweet_id}, MIS: {mis}, OAS: {oas}, 累計: {self.daily_x_count}/{self.max_daily_x})")
+            except Exception as ex:
+                logger.warning(f"[TdnetSentinel] X-Agent 投稿エラー: {ex}")
 
         # 4. Discord 配信
         if self.enable_discord and self.discord_notifier:
