@@ -401,3 +401,69 @@ else:
 - 全12エンドポイントへの接続テスト（HTTP 204）を実施・全PASSを確認。
 - `antigravity-watchdog.service` を再起動し、全常駐プロセス（PID `1356764`〜`1356913`）を新設定で安定稼働。
 
+---
+
+## 15. 「月10万円達成」に向けたクオンツ意思決定体系（EVS × Tier構造）＆ X メディア運用（X-Agent）完全配備 (2026-09-20 00:30 JST)
+
+月10万円の利益目標を安定達成するため、市場の「ブレーキ（危険度）」である `MIS` に対し、「アクセル（収益機会）」を担う `OAS`、さらに資金拘束・回転率・勝率を加味した**第5階層 `EVS` (Expected Value Score)**、および客観的事後確率を逆引きする **DuckDB ➔ Parquet 閉ループ学習データレイク** と **X-Agent（画像付きメディア運用自動化）** を完全配備した。
+
+```mermaid
+flowchart TD
+    NEWS["NEWS Agent (TDnet / EDINET / PTS)"] --> MIS["MIS: 危険度評価 (ブレーキ)"]
+    NEWS --> OAS["OAS: 収益機会採点 (アクセル)"]
+    MIS --> EVS["第5階層 EVS 採点エンジン<br/>(期待bp × 勝率 × 資金効率 × 流動性)"]
+    OAS --> EVS
+    EVS --> DATA["HistoricalAlphaStore<br/>(DuckDB × Parquet 実績母集団)"]
+    DATA --> EVS
+    EVS --> RANK["月10万に近い順 ランキング<br/>(Tier 1: 小型×大量保有 / Tier 2: 自社株買い)"]
+    RANK --> X_AGENT["X-Agent (自律広報・配信)"]
+    X_AGENT --> POST_A["70%: 東証開示速報 (結論ファースト)"]
+    X_AGENT --> POST_B["20%: 💎アルファ候補 (1200x675 カード画像付き)"]
+    X_AGENT --> POST_C["10%: クオンツ運用実績報告"]
+    RANK --> EXEC["自律執行ポッド / ペーパートレード"]
+    EXEC --> RECORDER["AlphaTradeHistoryRecorder<br/>(Parquet 自動ダンプ・学習ループ)"]
+    RECORDER --> DATA
+```
+
+### 1. 二次元調停モデル（ブレーキ MIS × アクセル OAS）
+- **背景**: 従来の「MIS >= 85 ➔ STOP」は、TOBや自社株買いなどの最も市場の歪みが拡大した「特大の収益チャンス」を自ら放棄する致命的欠陥があった。
+- **2次元マトリクス評価**:
+  - `MIS >= 85 and OAS <= 30`: **`SHOCK/STOP`**（地政学・金融ショック、全執行即時緊急停止）
+  - `MIS >= 70 and OAS >= 80`: **`SPECIAL_EVENT`**（TOB・大型自社株買い、特別枠ロットでアクセルを踏む）
+  - `MIS < 70 and OAS >= 70`: **`ALPHA_ACCUMULATE`**（平常時アルファ蓄積）
+  - `MIS < 70 and OAS < 70`: **`NORMAL_TRADING`**（通常運転）
+
+### 2. 第5階層 EVS (Expected Value Score) と 4段階 Tier 構造
+単なる点数（OAS）ではなく、**「期待利益bp × 実現確率 × 資金効率（日次回転率） × 流動性係数 × 小型株Tier係数 × 資本効率係数」** を算出。「月10万円に近い順」で案件をランキング。
+個人投資家のエッジが最大化する**「小型株 × 需給 × 開示」**の4段階 Tier 構造を確立：
+
+| Tier | 開示イベント区分 | 発生頻度 | 平均拘束 | 実績勝率 | 日次期待bp | 評価・特徴 |
+| :---: | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Tier 1** | **大量保有報告書 (5%超新規/買増)** | 年間数千件 | **2.8日** | **73.0%** | **+44.6 bp/日** | **EVS第1位**。個人エッジ最大、最速資金回転 |
+| **Tier 2** | **自社株買い (確定的実弾買い支え)** | 高頻度 | **5.1日** | **81.7%** | **+40.4 bp/日** | **EVS第2位**。下値硬直性・高勝率 |
+| **Tier 3** | **業績上方修正 (遅延PEAD)** | 決算期集中 | **2.4日** | **65.7%** | **+38.0 bp/日** | 小型株の情報伝達遅延を突くスイング |
+| **Tier 4** | **TOB (公開買付)** | 年数十件 | 58.0日 | **97.6%** | +37.9 bp/日 | 確実だが資金拘束60日と長く資金回転が低迷 |
+
+### 3. DuckDB ➔ Parquet 閉ループ学習データレイク
+- **`data/alpha_history/baseline_historical.parquet`**: 過去2年間の実開示母集団（計732件）を初期Priorとして配備。
+- **`HistoricalAlphaStore`**: DuckDB を用いて Parquet からリアルタイムに客観的勝率・拘束日数・平均bpを逆引き集計。
+- **`AlphaTradeHistoryRecorder`**: 日本株ペーパートレードおよび開示主導ポジションの手仕舞い完了時に、`data/alpha_history/live_paper_trades.parquet` へ約定結果を自動追記。Prior を日々の実測値で永続的に自己更新。
+
+### 4. X メディア運用自動化（X-Agent ＆ 自動サムネイル画像生成）
+- **`DisclosureImageGenerator`**: Pillow による 1200x675 (16:9) 高解像度サムネイルカード生成エンジン。
+  - 単一銘柄速報カード（ネイビー×シアンのクオンツ配色、EVS/勝率/拘束日数/Tierバッジ表示）。
+  - 本日の開示 TOP5 サマリーカード（17:30 JST 自動集計用）。
+- **`X-Agent` 比率管理ガバナンス**:
+  - **70% 速報ニュース**: 結論ファースト・煽り排除・140文字圧縮（東証適時開示・EDINET）。
+  - **20% 💎 アルファ候補**: OAS >= 75 または高EVS（Tier 1/2）検知時にサムネイル画像を自動添付してポスト。
+  - **10% 運用成績報告**: 日次1〜2回の透明性定期報告。
+- **本番完全配線**:
+  - `tdnet_sentinel.py` および `edinet_sentinel.py` からの X 投稿ロジックを `XAgent` に完全統合。
+  - 毎日 17:30 JST の `daily_top5_reporter.py`（本日の開示 TOP5）を `scheduler.py` に常駐登録。
+  - 実機テストにて画像アップロード（Media ID: `2101324902439759872`）および画像付きポスト（Tweet ID: `2101324904939639104`）の着弾を確認済み。
+
+### 5. テスト検証および稼働ステータス
+- **単体テスト**: `tests/test_opportunity_assessor.py`, `tests/test_alpha_opportunity_engine.py`, `tests/test_multi_asset_os.py`, `tests/test_alpha_history_closed_loop.py` の全36テストが 100% PASS。
+- **常駐プロセス**: `antigravity-watchdog.service`（PID `1365306`）配下にて、全センチネル・クオンツエンジン・毎時レポーターが最新コードで稼働中。
+
+
