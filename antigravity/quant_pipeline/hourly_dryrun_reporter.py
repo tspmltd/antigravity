@@ -30,6 +30,8 @@ JST = timezone(timedelta(hours=9))
 UMM_TF_STATE = os.path.join(BASE_DIR, "data", "dryrun_umm_tf2bp_state.json")
 ARENA_STATE = os.path.join(BASE_DIR, "data", "dryrun_approved_arena_state.json")
 COUNCIL_STATE = os.path.join(BASE_DIR, "configs", "agents_council_state.json")
+ADVERSE_SUMMARY_STATE = os.path.join(BASE_DIR, "data", "adverse_excursion_summary.json")
+TOXIC_STATE = os.path.join(BASE_DIR, "data", "adverse_toxic_state.json")
 LOG_PATH = os.path.join(BASE_DIR, "logs", "hourly_dryrun_reporter.log")
 
 
@@ -299,6 +301,12 @@ class HourlyDryRunReporter:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.notifier.post_quants_agent({"embeds": [quants_embed]})
+
+        # 5. Adverse Agent 毎時サマリー配信 (#adverse-summary)
+        adverse_summary = self._load_json(ADVERSE_SUMMARY_STATE)
+        toxic_state = self._load_json(TOXIC_STATE)
+        if adverse_summary or toxic_state:
+            self.notifier.post_adverse_summary(adverse_summary, toxic_state)
 
         log_msg = f"[{now_str}] 統合定期レポート送信: {'成功' if success else '失敗'} (1h: {total_1h_bp:+.2f}bp, 24h: {total_24h_bp:+.2f}bp)"
         print(log_msg, flush=True)

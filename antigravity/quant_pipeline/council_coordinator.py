@@ -119,6 +119,48 @@ class FourAgentsCouncil:
         size_mult = 1.0
 
         # -------------------------------------------------------------
+        # 👑 最上位研究エージェント (Tier-0: AdverseResearchAgent): 逆選択ミリ秒防護 ＆ AE分析
+        # 「勝つシグナル探索 ↓ Adverse回避 ↓ Execution改善」の最高意思決定
+        # -------------------------------------------------------------
+        if adverse_c:
+            adv_score = float(adverse_c.metrics.get("adverse_score", 0.0))
+            adv_side = adverse_c.metrics.get("adverse_side", "none")
+            adv_lead = float(adverse_c.metrics.get("lead_ms_estimated", 0.0))
+            adv_tier = adverse_c.metrics.get("tier", "安全")
+            ae_latest = adverse_c.metrics.get("ae_latest", {})
+
+            ae_str = ""
+            if ae_latest and "ae_1s" in ae_latest:
+                ae_str = f" [AE_1s:{ae_latest.get('ae_1s')}bp, AE_3s:{ae_latest.get('ae_3s')}bp]"
+
+            # 4段階リスク制御 (0-30: 安全 / 30-60: 注意 / 60-80: 危険 / 80-100: 発注禁止)
+            if adv_score >= 80.0 or adverse_c.emergency_cancel:
+                emergency_cancel = True
+                hard_veto = True
+                adverse_level = "CRITICAL"
+                size_mult = 0.0
+                directives.append(
+                    f"👑🔴 [最上位:発注禁止] AdverseScore: {adv_score:.1f}/100 ➔ 新規遮断＆指値緊急退避発動！{ae_str}"
+                )
+            elif adv_score >= 60.0 or adverse_c.hard_veto:
+                hard_veto = True
+                adverse_level = "WARNING"
+                size_mult = 0.5  # ロット半減
+                directives.append(
+                    f"👑🟠 [最上位:危険] AdverseScore: {adv_score:.1f}/100 ➔ ロット半減＆逆張り見送り ({adv_side.upper()}側警戒){ae_str}"
+                )
+            elif adv_score >= 30.0:
+                adverse_level = "CAUTION"
+                size_mult = 0.8
+                directives.append(
+                    f"👑🟡 [最上位:注意] AdverseScore: {adv_score:.1f}/100 ➔ スプレッド厳格フィルター適用{ae_str}"
+                )
+            else:
+                adverse_level = "SAFE"
+                size_mult = 1.0
+                directives.append(f"👑🟢 [最上位:安全] AdverseScore: {adv_score:.1f}/100 ➔ 逆選択リスク極小・フル稼働許可{ae_str}")
+
+        # -------------------------------------------------------------
         # 1. 第3エージェント (DuckDB): 最適重み＆安全パラメータの取得
         # -------------------------------------------------------------
         duckdb_params = duckdb_c.parameters if duckdb_c else {}
@@ -160,25 +202,7 @@ class FourAgentsCouncil:
                 directives.append(f"板構造圧力: {p_side.upper()} (強度:{p_score:.2f}, Imbalance:{micro_c.metrics.get('imbalance', 0):+.2f})")
 
         # -------------------------------------------------------------
-        # 4. 第4エージェント (Adverse): 逆選択ミリ秒防護 (ハード拒否＆緊急退避)
-        # -------------------------------------------------------------
-        if adverse_c:
-            adv_score = float(adverse_c.metrics.get("adverse_score", 0.0))
-            adv_side = adverse_c.metrics.get("adverse_side", "none")
-            adv_lead = float(adverse_c.metrics.get("lead_ms_estimated", 0.0))
-            if adverse_c.emergency_cancel:
-                emergency_cancel = True
-                adverse_level = "CRITICAL"
-                directives.append(
-                    f"🚨 Adverse: トキシック・テイカー直撃予兆 (Lead: {adv_lead:.0f}ms) ➔ 指値緊急キャンセル＆建玉退避発動！"
-                )
-            elif adv_score >= 0.60 or adverse_c.hard_veto:
-                hard_veto = True
-                adverse_level = "WARNING"
-                directives.append(f"🛡️ Adverse: 逆選択警戒 (スコア:{adv_score:.2f}, {adv_side.upper()}側) ➔ 発注拒否 (Hard Veto)")
-
-        # -------------------------------------------------------------
-        # 5. 総合シグナルとアクションの策定
+        # 4. 総合シグナルとアクションの策定
         # -------------------------------------------------------------
         if emergency_cancel:
             final_action = "cancel"

@@ -31,6 +31,7 @@ class QuantDiscordNotifier:
         alert_webhook_url: Optional[str] = None,
         quants_agent_webhook_url: Optional[str] = None,
         conclusion_webhook_url: Optional[str] = None,
+        adverse_summary_webhook_url: Optional[str] = None,
     ):
         self.live_webhook_url = (
             live_webhook_url
@@ -68,6 +69,12 @@ class QuantDiscordNotifier:
         self.conclusion_webhook_url = (
             conclusion_webhook_url
             or os.environ.get("DISCORD_CONCLUSION_WEBHOOK_URL", "").strip()
+        )
+        self.adverse_summary_webhook_url = (
+            adverse_summary_webhook_url
+            or os.environ.get("DISCORD_ADVERSE_SUMMARY_WEBHOOK_URL", "").strip()
+            or os.environ.get("DISCORD_ANALYSIS_WEBHOOK_URL", "").strip()
+            or os.environ.get("DISCORD_QUANTS_AGENT_WEBHOOK_URL", "").strip()
         )
 
         # 送信レートリミット制御用タイムスタンプ
@@ -469,3 +476,114 @@ class QuantDiscordNotifier:
         s1 = self._post(self.analysis_webhook_url, {"embeds": [embed]})
         s2 = self._post(self.live_webhook_url, {"embeds": [embed]})
         return s1 or s2
+
+    def post_adverse_summary(self, summary: Dict[str, Any], toxic_state: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Adverse Agent 改善指示書 v1.0 準拠
+        Discord #adverse-summary 毎時定期サマリー配信
+        - AE_1s 平均
+        - AE_3s 平均
+        - Worst 10 (最悪逆行トレード)
+        - Capture Rate & Toxic Flow
+        """
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        avg_ae = summary.get("avg_ae", {})
+        worst_10 = summary.get("worst_10", [])
+        total_t = summary.get("total_tracked_trades", 0)
+
+        ae_1s_avg = avg_ae.get("ae_1s", 0.0)
+        ae_3s_avg = avg_ae.get("ae_3s", 0.0)
+        ae_100ms_avg = avg_ae.get("ae_100ms", 0.0)
+        ae_10s_avg = avg_ae.get("ae_10s", 0.0)
+
+        # 1. フィールド構築
+        fields = [
+            {
+                "name": "📊 AE (Adverse Excursion) 平均値",
+                "value": (
+                    f"• **AE_100ms 平均**: `{ae_100ms_avg:+.2f} bp`\n"
+                    f"• **AE_1s 平均**   : **`{ae_1s_avg:+.2f} bp`**\n"
+                    f"• **AE_3s 平均**   : **`{ae_3s_avg:+.2f} bp`**\n"
+                    f"• **AE_10s 平均**  : `{ae_10s_avg:+.2f} bp`\n"
+                    f"• 追跡総トレード数 : `{total_t} 回`"
+                ),
+                "inline": False,
+            }
+        ]
+
+        # 2. Capture Rate (S3) & Toxic Flow (S2)
+        cr_stats = summary.get("capture_rate_stats", {})
+        if cr_stats.get("total_completed", 0) > 0:
+            cr_val = cr_stats.get("avg_capture_rate_pct", 0.0)
+            cr_grade = cr_stats.get("grade", "要改善")
+            cr_icon = "🟢" if cr_grade == "優秀" else ("🟡" if cr_grade == "普通" else "🔴")
+            fields.append({
+                "name": f"🎯 S3. Capture Rate 分析 ({cr_icon} {cr_grade})",
+                "value": (
+                    f"• **平均 Capture Rate**: **`{cr_val:.1f}%`** (判定: **{cr_grade}**)\n"
+                    f"• 優秀(≥80%): `{cr_stats.get('excellent_count', 0)}回` | "
+                    f"普通(50-80%): `{cr_stats.get('normal_count', 0)}回` | "
+                    f"要改善(<50%): `{cr_stats.get('poor_count', 0)}回`"
+                ),
+                "inline": False,
+            })
+
+        if toxic_state:
+            t_score = toxic_state.get("toxic_score", 0.0)
+            t_level = toxic_state.get("level", "NORMAL")
+            t_desc = toxic_state.get("description", "")
+            fields.append({
+                "name": f"⚡ S2. Toxic Flow 現況 (スコア: {t_score}/100)",
+                "value": f"`{t_level}` - {t_desc}",
+                "inline": False,
+            })
+
+        # 3. Worst 10 トレード (最悪逆行)
+        if worst_10:
+            lines = []
+            for i, w in enumerate(worst_10[:10], 1):
+                tid = w.get("trade_id", f"#{i}")[:12]
+                st = w.get("strategy", "strat")[:10]
+                side = w.get("entry_side", "buy").upper()[:1]
+                ep = int(w.get("entry_price", 0))
+                mae = w.get("mae_bp", 0.0)
+                ae1 = w.get("ae_1s", "-")
+                ae3 = w.get("ae_3s", "-")
+                lines.append(f"`{i:2d}.` [{side}] **{mae:+.1f}bp** (1s:{ae1}bp, 3s:{ae3}bp) @¥{ep:,} `{st}`")
+            worst_text = "\n".join(lines)
+        else:
+            worst_text = "直近の逆行トレードはありません (正常推移)"
+
+        fields.append({
+            "name": "🚨 Worst 10 トレード (最大逆行 MAE 順)",
+            "value": worst_text[:1024],
+            "inline": False,
+        })
+
+        # 4. A1. Fill Quality & A2. Time-to-Adverse 回復率
+        fq = summary.get("fill_quality", {})
+        rec = summary.get("after_1s_recovery", {})
+        fields.append({
+            "name": "🔬 A1. 約定品質 (Fill Quality) & A2. 1秒後回復率",
+            "value": (
+                f"• Good: `{fq.get('GOOD_FILL', 0)}件` | Normal: `{fq.get('NORMAL_FILL', 0)}件` | Toxic: `{fq.get('TOXIC_FILL', 0)}件`\n"
+                f"• **1秒後(AFTER 1s) 回復率**: **`{rec.get('recovery_rate_pct', 0.0):.1f}%`** (損失拡大率: `{rec.get('loss_expansion_pct', 0.0):.1f}%`)"
+            ),
+            "inline": False,
+        })
+
+        embed = {
+            "title": "🛡️ 【Adverse Agent 毎時サマリー】 #adverse-summary",
+            "description": (
+                f"最上位研究エージェント (Tier-0) による逆選択・約定後エクスカーション定時分析\n"
+                f"集計時刻: `{now_str}`"
+            ),
+            "color": 0xE74C3C if ae_1s_avg < -1.5 else (0xF39C12 if ae_1s_avg < 0 else 0x2ECC71),
+            "fields": fields,
+            "footer": {"text": "🛡️ Chief Adverse Research Agent • #adverse-summary"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        url = self.adverse_summary_webhook_url or self.analysis_webhook_url or self.quants_agent_webhook_url
+        return self._post(url, {"embeds": [embed]})
+

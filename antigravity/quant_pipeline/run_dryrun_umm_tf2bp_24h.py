@@ -236,6 +236,15 @@ class DryRunObservation24h:
                 acc["trades"] += 1
                 log_line = f"[{name}] 📥 新規エントリー: {action.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
+                # S1. Adverse Excursion (AE) 追跡開始
+                self.adverse_agent.track_entry(
+                    trade_id=f"{name}_{acc['trades']}",
+                    side=action,
+                    entry_price=fill_price,
+                    entry_time=time.time(),
+                    strategy_name=name,
+                    meta={"reason": res.get("reason"), "spread": snap.best_ask - snap.best_bid},
+                )
 
         elif action == "post_peg":
             p_side = res.get("side", "")
@@ -249,6 +258,15 @@ class DryRunObservation24h:
             acc["trades"] += 1
             log_line = f"[{name}] 📥 PEG_v2 指値約定: {p_side.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
             self._log_to_file(log_line)
+            # S1. Adverse Excursion (AE) 追跡開始
+            self.adverse_agent.track_entry(
+                trade_id=f"{name}_{acc['trades']}",
+                side=p_side,
+                entry_price=fill_price,
+                entry_time=time.time(),
+                strategy_name=name,
+                meta={"reason": res.get("reason"), "fill_type": "maker_peg"},
+            )
 
         elif action == "cancel_pending":
             log_line = f"[{name}] 🚫 PEG_v2 待機取消: ({res.get('reason')})"

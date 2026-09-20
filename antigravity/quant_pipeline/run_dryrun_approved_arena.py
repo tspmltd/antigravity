@@ -37,6 +37,7 @@ from core.bitflyer_client import BitFlyerClient
 JST = timezone(timedelta(hours=9))
 CONFIG_PATH = os.path.join(BASE_DIR, "configs", "approved_arena_config.json")
 STATE_PATH = os.path.join(BASE_DIR, "data", "dryrun_approved_arena_state.json")
+ADVERSE_SCORE_STATE_PATH = os.path.join(BASE_DIR, "data", "adverse_score_state.json")
 LOG_PATH = os.path.join(BASE_DIR, "logs", "dryrun_approved_arena.log")
 
 
@@ -55,6 +56,8 @@ class SingleStrategyState:
         self.position_size: float = 0.001
         self.entry_price: float = 0.0
         self.entry_time: float = 0.0
+        self.be_armed: bool = False  # BE5 建値防衛アーム
+        self.mfe_bp: float = 0.0
 
         # 成績
         self.total_trades: int = 0
@@ -115,6 +118,8 @@ class SingleStrategyState:
             "stats_24h": self.get_window_stats(24.0),
             "max_dd_jpy": round(self.max_dd, 1),
             "is_halted": self.is_halted,
+            "be_armed": self.be_armed,
+            "mfe_bp": round(self.mfe_bp, 2),
             "last_action": self.last_action,
             "last_reason": self.last_reason,
         }
@@ -170,6 +175,19 @@ class ApprovedStrategyArena:
             except Exception:
                 pass
         return {}
+
+    def _get_adverse_score(self) -> float:
+        """Adverse Score (0-100) を adverse_score_state.json から取得"""
+        if os.path.exists(ADVERSE_SCORE_STATE_PATH):
+            try:
+                with open(ADVERSE_SCORE_STATE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    ts = data.get("timestamp", 0)
+                    if time.time() - ts < 60.0:
+                        return float(data.get("adverse_score", 30.0))
+            except Exception:
+                pass
+        return 30.0
 
     def _load_all_approved_strategies(self) -> Dict[str, SingleStrategyState]:
         """strategies/approved/*.py を動的ロード"""
@@ -289,23 +307,53 @@ class ApprovedStrategyArena:
             max_hold = exec_cfg.get("max_hold_sec", 1800.0)
             order_size = exec_cfg.get("order_size_btc", 0.001)
 
+            # Adverse Score 取得
+            adverse_score = self._get_adverse_score()
+
             for s in self.strategies.values():
                 if s.is_halted:
                     continue
 
+                # MM戦略判定 (IDまたは名前に mm / spread / maker / grid が含まれる戦略)
+                target_str = (s.strat_id + " " + s.name).lower()
+                is_mm = any(k in target_str for k in ["mm", "spread", "maker", "grid"])
+
                 # (A) 既存建玉のエグジット・利確・損切判定
                 if s.position:
                     hold_time = time.time() - s.entry_time
-                    # 決済価格 (BUYはBid決済、SELLはAsk決済)
+                    # 決済価格 (成行決済: BUYはBid、SELLはAsk)
                     exit_price = best_bid if s.position == "buy" else best_ask
                     pnl_per_unit = (exit_price - s.entry_price) if s.position == "buy" else (s.entry_price - exit_price)
                     current_pnl = pnl_per_unit * s.position_size
+                    entry_val = s.entry_price * s.position_size if s.entry_price > 0 else 12500.0
+                    current_pnl_bp = (current_pnl / entry_val) * 10000.0 if entry_val > 0 else 0.0
+
+                    # MFE (Maximum Favorable Excursion) 更新
+                    if current_pnl_bp > s.mfe_bp:
+                        s.mfe_bp = current_pnl_bp
+
+                    # BE5 建値防衛アーム判定: 含み益が +5.0bp 以上に到達したら発動準備
+                    if current_pnl_bp >= 5.0 and not s.be_armed:
+                        s.be_armed = True
+                        self._log_to_file(f"[{s.strat_id}] 🛡️ BE5 Armed: 含み益 +{current_pnl_bp:.2f}bp 到達 (建値撤退防衛起動)")
 
                     close_reason = None
-                    if current_pnl >= take_profit:
+                    # 1. Adverse 緊急退避 (Score >= 80: 発注禁止・即時撤退)
+                    if adverse_score >= 80.0:
+                        close_reason = f"EMERGENCY_ADVERSE_EXIT (Score: {adverse_score:.1f} >= 80, PnL: ¥{current_pnl:+.1f})"
+                    # 2. BE5 建値防衛発動: 含み益が戻って +0.2bp (微益) 以下に落ちたら即手仕舞い
+                    elif s.be_armed and current_pnl_bp <= 0.2:
+                        close_reason = f"BE5_PROFIT_DEFENSE (MFE: +{s.mfe_bp:.1f}bp -> {current_pnl_bp:+.2f}bp, 利確防衛)"
+                    # 3. テイクプロフィット (MM戦略はMaker指値決済: BUYならbest_ask, SELLならbest_bid)
+                    elif (is_mm and (((best_ask - s.entry_price if s.position == 'buy' else s.entry_price - best_bid) * s.position_size) >= take_profit)) or (current_pnl >= take_profit):
+                        if is_mm:
+                            exit_price = best_ask if s.position == "buy" else best_bid
+                            current_pnl = (exit_price - s.entry_price if s.position == "buy" else s.entry_price - exit_price) * s.position_size
                         close_reason = f"TAKE_PROFIT (+¥{current_pnl:.1f})"
+                    # 4. ストップロス
                     elif current_pnl <= -stop_loss:
                         close_reason = f"STOP_LOSS (-¥{abs(current_pnl):.1f})"
+                    # 5. タイムアウト
                     elif hold_time >= max_hold:
                         close_reason = f"TIMEOUT ({hold_time:.0f}s経過, PnL:¥{current_pnl:+.1f})"
 
@@ -322,21 +370,34 @@ class ApprovedStrategyArena:
 
                 # (C) 新規エントリーまたはシグナル決済
                 if s.position is None:
+                    # エントリー前遮断フィルター
+                    # 1. Adverse Gate (Score >= 60 は新規エントリー拒否)
+                    if adverse_score >= 60.0:
+                        continue
+                    # 2. スプレッドフィルター (スプレッドが 2500円 / 2.0bp超でワイドな時はブロック)
+                    if spread > 2500.0:
+                        continue
+
                     if sig == 1:
-                        # 買いエントリー (Ask約定)
-                        self._open_position(s, "buy", best_ask, order_size, "SIGNAL_BUY")
+                        # 買いエントリー: MM戦略はMaker指値(best_bid)、その他はAsk成行
+                        entry_p = best_bid if is_mm else best_ask
+                        self._open_position(s, "buy", entry_p, order_size, f"SIGNAL_BUY({'MAKER' if is_mm else 'TAKER'})")
                     elif sig == -1:
-                        # 売りエントリー (Bid約定)
-                        self._open_position(s, "sell", best_bid, order_size, "SIGNAL_SELL")
+                        # 売りエントリー: MM戦略はMaker指値(best_ask)、その他はBid成行
+                        entry_p = best_ask if is_mm else best_bid
+                        self._open_position(s, "sell", entry_p, order_size, f"SIGNAL_SELL({'MAKER' if is_mm else 'TAKER'})")
                 else:
                     # ドテンまたは手仕舞いシグナル
+                    hold_time = time.time() - s.entry_time
+                    exit_price = best_bid if s.position == "buy" else best_ask
+                    pnl = ((exit_price - s.entry_price) if s.position == "buy" else (s.entry_price - exit_price)) * s.position_size
+
                     if sig == 0:
-                        exit_price = best_bid if s.position == "buy" else best_ask
-                        pnl = ((exit_price - s.entry_price) if s.position == "buy" else (s.entry_price - exit_price)) * s.position_size
-                        self._close_position(s, exit_price, pnl, "SIGNAL_EXIT")
+                        # ノイズ即時損切り防止ガード:
+                        # エントリー直後 (<15s) かつ 損失中 (pnl <= 0) はノイズ微動による手仕舞いを防ぐ
+                        if hold_time >= 15.0 or pnl > 0:
+                            self._close_position(s, exit_price, pnl, "SIGNAL_EXIT")
                     elif (s.position == "buy" and sig == -1) or (s.position == "sell" and sig == 1):
-                        exit_price = best_bid if s.position == "buy" else best_ask
-                        pnl = ((exit_price - s.entry_price) if s.position == "buy" else (s.entry_price - exit_price)) * s.position_size
                         self._close_position(s, exit_price, pnl, "SIGNAL_REVERSE")
 
             # 4. コンソール進捗表示 (上位3戦略の表示)
@@ -347,7 +408,7 @@ class ApprovedStrategyArena:
 
             now_str = now.strftime("%H:%M:%S")
             print(
-                f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | "
+                f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | Adv: {adverse_score:4.1f} | "
                 f"🥇 {top1.strat_id[:10]}: {top1.total_pnl_bp:+.1f}bp (¥{top1.total_pnl:+,.0f}) | "
                 f"🥈 {top2.strat_id[:10]}: {top2.total_pnl_bp:+.1f}bp (¥{top2.total_pnl:+,.0f}) | "
                 f"🥉 {top3.strat_id[:10]}: {top3.total_pnl_bp:+.1f}bp (¥{top3.total_pnl:+,.0f})",
@@ -370,6 +431,8 @@ class ApprovedStrategyArena:
         s.entry_price = price
         s.position_size = size
         s.entry_time = time.time()
+        s.be_armed = False
+        s.mfe_bp = 0.0
         s.total_trades += 1
         s.last_action = f"OPEN_{side.upper()}"
         s.last_reason = reason
@@ -411,6 +474,8 @@ class ApprovedStrategyArena:
         s.position = None
         s.entry_price = 0.0
         s.entry_time = 0.0
+        s.be_armed = False
+        s.mfe_bp = 0.0
 
     def _persist_state(self, ltp: float, spread: float, sorted_strats: List[SingleStrategyState]):
         try:

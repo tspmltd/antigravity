@@ -466,4 +466,86 @@ flowchart TD
 - **単体テスト**: `tests/test_opportunity_assessor.py`, `tests/test_alpha_opportunity_engine.py`, `tests/test_multi_asset_os.py`, `tests/test_alpha_history_closed_loop.py` の全36テストが 100% PASS。
 - **常駐プロセス**: `antigravity-watchdog.service`（PID `1365306`）配下にて、全センチネル・クオンツエンジン・毎時レポーターが最新コードで稼働中。
 
+---
+
+## 16. Adverse Agent 最上位研究エージェント昇格 ＆ 指示書 v1.0 完全実装 (2026-09-20 12:30 JST)
+
+「勝つシグナル探索 ↓ Adverse回避 ↓ Execution改善」の最高意思決定秩序に基づき、**AdverseResearchAgent を最上位研究エージェント (Chief Research Agent / Tier-0)** へ昇格し、指示書 v1.0 の全指標（Priority S, A, B, C）を完全実装・統合。
+
+### 1. 実装機能一覧 (Priority S, A, B, C)
+
+| 区分 | 項目名 | 主な指標・測定内容 | 目的・出力形式 |
+| :---: | :--- | :--- | :--- |
+| **S1** | **Adverse Excursion (AE)** | `ae_100ms`, `ae_500ms`, `ae_1s`, `ae_3s`, `ae_10s`, `ae_30s` (bp) | 約定後のミリ秒逆行を精密追跡。`{"entry_price": 12718515, "ae_100ms": -0.8, ...}` |
+| **S2** | **Toxic Flow 分析** | `imbalance`, `ofi`, `taker_buy`, `taker_sell`, `cancel_rate`, `refill_rate`, `depth_1,3,5` | `Toxic Score` (0〜100)。危険例 (imb -0.8, taker急増, cancel急増, refill消失 ➔ 92〜96点) |
+| **S3** | **Capture Rate 分析** | `capture_rate = (実現bp / 理論スプレッドbp) * 100%` | MM最重要指標。80%以上: **優秀**, 50〜80%: **普通**, 50%未満: **要改善** |
+| **A1** | **Fill Quality 分析** | `entry_side`, `entry_price`, `mid_price`, `micro_price`, `queue_rank_estimate` | 約定を3分類: `GOOD_FILL` (1s後プラス), `NORMAL_FILL`, `TOXIC_FILL` (1s後 < -1.5bp) |
+| **A2** | **Time-to-Adverse** | `0-250ms`, `250-500ms`, `500-1000ms`, `1-2s`, `2-5s`, `5s+` | Grace Period 最適化。AFTER 1s 回復率 vs 損失拡大率 |
+| **A3** | **4レジーム別分析** | `trend_high_vol`, `trend_low_vol`, `range_high_vol`, `range_low_vol` | 各レジームの `MAE`, `MFE`, `勝率`, `期待値 (bp)` |
+| **B1** | **Latency 分析** | `latency_ms`, `spread`, `ae_1s`, `realized_pnl` | 50ms以下, 50-80ms, 80-120ms (サイズ半減), 120ms以上 (停止) |
+| **B2** | **Inventory 分析** | `inventory`, `holding_time`, `pnl` | 在庫保有時間と逆選択の関係を追跡 |
+| **C1** | **Agent 責任分析** | 戦略別 (`UMM`, `SpreadCaptureMM`, `TF2BP`, `PEG_v2`, `MicroTrend`, etc.) | 戦略別の逆選択発生率・AE比較 |
+
+### 2. Discord #adverse-summary 毎時自動配信
+- `HourlyDryRunReporter` に統合。毎時00分ジャストに:
+  - `AE_1s 平均`, `AE_3s 平均`, `AE_100ms 平均`
+  - `Worst 10` (最大逆行トレード TOP10)
+  - `Capture Rate 判定 (優秀/普通/要改善)`
+  - `Toxic Flow 現況 (Toxic Score)`
+  - `Fill Quality & 1秒後回復率`
+  を Embed 形式で `#adverse-summary` へマルチキャスト自動配信。
+
+### 3. テスト全PASS検証
+- `tests/test_adverse_excursion.py`, `tests/test_adverse_full_suite.py`, `tests/test_adverse_score_synthesis.py` の全8テストが 100% PASS。
+
+---
+
+## 17. Adverse Agent 最終成果物（Adverse Score 5大構成比率）＆ 最終アーキテクチャ (2026-09-20 12:40 JST)
+
+「**どう勝つか**」ではなく「**どんな時に食われるか**」を統計的に解剖し、次の大きなブレイクスルーを生み出す最上位ゲートキーパーとしての最終アーキテクチャを確立。
+
+### 1. 最終成果物: 統合 Adverse Score (0〜100)
+Adverse Agent は毎 Tick、以下の5大要素（重み固定）を合成して 0〜100 の **`Adverse Score`** を出力する。
+
+| 構成要素 | 比率 | 評価内容・数理モデル |
+| :--- | :---: | :--- |
+| **① AE (Adverse Excursion)** | **30%** | 直近約定後の逆行度合 (`ae_1s`, `ae_3s`, `mae_bp`)。損失拡大局面でスコア急騰 |
+| **② Toxic Flow** | **25%** | `ToxicFlowAnalyzer` (不均衡, Taker急増, cancel急増, refill消失, 板薄) |
+| **③ Capture Loss** | **20%** | 理論スプレッドに対する取りこぼし率 ($\text{capture\_rate} < 50\%$ で高スコア) |
+| **④ Latency** | **15%** | 取引所RTT・受信遅延 (<50ms=0点, 50-80ms=0〜40点, 80-120ms=40〜80点, ≥120ms=100点) |
+| **⑤ Inventory** | **10%** | 在庫保有量 $\times$ 滞留時間 (5分以上スタックで逆選択脆弱性100点) |
+
+### 2. 出力判定レンジ（4段階ガバナンス）
+
+| スコア範囲 | 判定 | コード | 執行アクション・防衛ディレクティブ |
+| :---: | :---: | :---: | :--- |
+| **0 〜 30** | 🟢 **安全** | `SAFE` | **フル稼働許可**。逆選択リスク極小、Maker/Taker通常執行 |
+| **30 〜 60** | 🟡 **注意** | `CAUTION` | **スプレッド厳格フィルター適用**。スプレッド収縮時のみエントリー |
+| **60 〜 80** | 🟠 **危険** | `WARNING` | **ロット半減 (Size 0.5x)**。逆張り指値見送り、順張りのみ限定 |
+| **80 〜 100** | 🔴 **発注禁止** | `HARD_VETO` | **新規発注完全遮断** ＆ **待機指値の即時緊急退避 (Cancel)** |
+
+### 3. 最終アーキテクチャ・パイプライン
+
+```mermaid
+flowchart TD
+    STRATS["シグナル探索レイヤー<br/>• Trend Agent<br/>• MM Agent<br/>• MeanRev Agent<br/>• Scalp Agent"] --> ADVERSE["👑 最上位ゲートキーパー (Adverse Agent)<br/>• 30% AE + 25% Toxic + 20% Capture + 15% Latency + 10% Inventory"]
+    
+    ADVERSE --> SCORE["Adverse Score (0〜100)"]
+    
+    SCORE --> GATE{"Safety Gate<br/>(4段階リスク制御)"}
+    
+    GATE -- "80-100: 発注禁止" --> HALT["🚫 新規発注完全遮断 & 指値緊急退避"]
+    GATE -- "60-80: 危険" --> HALVE["⚠️ ロット半減 (0.5x) & 逆張り禁止"]
+    GATE -- "30-60: 注意" --> STRICT["⚖️ 厳格スプレッドフィルター"]
+    GATE -- "0-30: 安全" --> ALLOW["🟢 フル稼働 (1.0x)"]
+    
+    ALLOW --> EXEC["執行改善レイヤー (Execution)<br/>(PEG_v2: Model 3+1 / BE5建値防衛)"]
+    STRICT --> EXEC
+    HALVE --> EXEC
+```
+
+- **状態永続化**: [`data/adverse_score_state.json`](file:///home/azureuser/antigravity/data/adverse_score_state.json) に毎秒アトミック保存。
+- **常駐反映**: `antigravity-watchdog.service` をリロードし、最新コードで安定稼働中。
+
+
 
