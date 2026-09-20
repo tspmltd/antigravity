@@ -802,45 +802,62 @@ class QuantDiscordNotifier:
 
     def post_alpha_vs_adverse(self, alpha_stats: Dict[str, Any]) -> bool:
         """
-        #alpha-vs-adverse 日次定期配信
-        Signal Score vs Adverse Score (アルファ対逆選択の剥落分析)
+        #alpha-vs-adverse 日次/毎時定期配信
+        Signal Score × Adverse Score × 実損益 (3軸比較 ＆ 司令塔統計証明)
         """
         now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
-        avg_sig = alpha_stats.get("avg_signal_confidence", 0.65)
-        avg_adv = alpha_stats.get("avg_adverse_score", 32.5)
-        alpha_retention_pct = alpha_stats.get("alpha_retention_pct", 72.0)
-        loss_by_adverse_bp = alpha_stats.get("loss_by_adverse_bp", 3.2)
+        corr = alpha_stats.get("correlation_analysis", {})
+        r_val = corr.get("pearson_r", -0.23)
+        beta_val = corr.get("slope_beta_bp_per_score", -0.06)
+        r2_val = corr.get("r_squared", 0.05)
+        quad = alpha_stats.get("quadrant_matrix", {})
+        comm = alpha_stats.get("commander_certification", {})
+
+        q1 = quad.get("Q1_SweetSpot", {})
+        q2 = quad.get("Q2_ToxicTrap", {})
+        q3 = quad.get("Q3_Noise", {})
+        q4 = quad.get("Q4_Suicide", {})
 
         fields = [
             {
-                "name": "⚖️ Signal Score vs Adverse Score 総合バランス",
+                "name": "📊 3軸4象限マトリクス (Signal × Adverse ➔ 実損益)",
                 "value": (
-                    f"• **平均 Signal 確信度**: `{avg_sig:.2f}` (シグナル予測力)\n"
-                    f"• **平均 Adverse Score**: `{avg_adv:.1f} / 100` (逆選択遭遇度)\n"
-                    f"• **アルファ残存率 (Alpha Retention)**: **`{alpha_retention_pct:.1f}%`**\n"
-                    f"• **逆選択による推定剥落損失**: **`-`**`{loss_by_adverse_bp:.2f} bp`"
+                    f"```\n"
+                    f"象限 (Quadrant)               | 件数 | 勝率  | 期待値(bp)\n"
+                    f"-----------------------------|------|-------|-----------\n"
+                    f"Q1 理想勝利 (高Sig × 低Adv)   | {q1.get('count',0):4d} | {q1.get('win_rate_pct',0.0):4.1f}% | {q1.get('expected_pnl_bp',0.0):+8.2f}bp 🟢\n"
+                    f"Q2 逆選択罠 (高Sig × 高Adv)   | {q2.get('count',0):4d} | {q2.get('win_rate_pct',0.0):4.1f}% | {q2.get('expected_pnl_bp',0.0):+8.2f}bp 🔴\n"
+                    f"Q3 ノイズ   (低Sig × 低Adv)   | {q3.get('count',0):4d} | {q3.get('win_rate_pct',0.0):4.1f}% | {q3.get('expected_pnl_bp',0.0):+8.2f}bp ⚪\n"
+                    f"Q4 即死領域 (低Sig × 高Adv)   | {q4.get('count',0):4d} | {q4.get('win_rate_pct',0.0):4.1f}% | {q4.get('expected_pnl_bp',0.0):+8.2f}bp 💀\n"
+                    f"```"
                 ),
                 "inline": False,
             },
             {
-                "name": "💡 逆選択解剖インサイト",
+                "name": "🔬 Adverse Score ↓ 実損益 統計的相関検定",
                 "value": (
-                    "• **アルファが食われるメカニズム**: シグナル発生直後に板が急変（imbalance逆転・テイカー急襲）した場合、勝率が約28%低下。\n"
-                    "• **Adverse Gateの効果**: Adverse Score ≥ 60 でのエントリー遮断により、月間換算約 `+140bp` のアルファ剥落を未然防御中。"
+                    f"• **ピアソン相関係数 (r)**: **`{r_val:.3f}`** (負の相関: スコア上昇で損益悪化)\n"
+                    f"• **回帰スロープ (β)**: **`{beta_val:+.3f} bp/pt`** (1pt悪化ごとに失われる損益)\n"
+                    f"• **決定係数 (R²)**: `{r2_val:.3f}` | 総検証トレード: `{alpha_stats.get('total_completed_trades', 0)} 件`"
                 ),
+                "inline": False,
+            },
+            {
+                "name": comm.get("title", "👑 【司令塔認定】"),
+                "value": comm.get("summary", ""),
                 "inline": False,
             }
         ]
 
         embed = {
-            "title": "⚔️ 【Alpha vs Adverse 日次剥落分析】 #alpha-vs-adverse",
+            "title": "⚔️ 【Alpha vs Adverse 3軸剥落分析】 #alpha-vs-adverse",
             "description": (
-                f"予測シグナル(アルファ)が取引所マイクロストラクチャー(逆選択)にどれだけ侵食されたかの定時解剖\n"
+                f"高Signal ＆ 低Adverse だけが勝つアーキテクチャの統計的実証\n"
                 f"集計時刻: `{now_str}`"
             ),
-            "color": 0x9B59B6,
+            "color": 0x9B59B6 if comm.get("is_certified") else 0x34495E,
             "fields": fields,
-            "footer": {"text": "⚔️ Alpha vs Adverse Research Lab • #alpha-vs-adverse"},
+            "footer": {"text": "⚔️ Chief Adverse Commander Lab • #alpha-vs-adverse"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
