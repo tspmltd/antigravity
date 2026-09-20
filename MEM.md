@@ -547,5 +547,40 @@ flowchart TD
 - **状態永続化**: [`data/adverse_score_state.json`](file:///home/azureuser/antigravity/data/adverse_score_state.json) に毎秒アトミック保存。
 - **常駐反映**: `antigravity-watchdog.service` をリロードし、最新コードで安定稼働中。
 
+---
+
+## 18. AGENT報告に基づく承認済み12戦略 抜本修繕 (2026-09-20)
+
+### 1. 根本課題とAGENT報告の分析
+承認済み12戦略が Dry-run アリーナで大幅マイナス（累計数千bpの損失）に沈んでいた根本原因を、各AGENT（DuckDB, Adverse, Microstructure）の報告を突き合わせて特定:
+1. **スプレッド負けの構造的欠陥**:
+   - DuckDB報告: bitFlyerの平均スプレッドは **¥2,126（約1.7〜2.0bp）**。
+   - `MicroSpreadMM` は `spread_multiplier: 0.5`（約5bp）しか利益目標がなく、毎トレードでスプレッドを全額食われていた。
+   - アリーナ内で唯一プラス（+5.95bp）を堅持していた `SpreadCaptureMM`（`strat_cbcd5aed`）は、**`min_spread_pct: 0.0025` (25bp確保)** という厳格フィルターを持っていた。
+2. **大局トレンド逆張りによる踏み抜かれ（ナイフキャッチ）**:
+   - `GridMM` や `RsiMeanReversion` が、強烈な下降トレンドの最安値でロングを拾い、大逆行（Adverse Excursion）を被っていた。
+3. **ノイズ過敏エグジット**:
+   - `InventorySkewMM` は `trend_slope` の過敏な `exit_guard` でエントリー直後に即死手仕舞いを繰り返していた。
+   - `EmaTrend` は狭小レンジ相場でダマシの往復ビンタを食らっていた。
+
+### 2. 12戦略の抜本修繕仕様
+
+| 戦略カテゴリ | 対象戦略ファイル | 修繕前 (旧欠陥) | AGENT報告に基づく修繕後 (新仕様) |
+| :--- | :--- | :--- | :--- |
+| **MicroSpreadMM** | `strat_4d3f2c9f_approved.py`<br>`strat_a5d8ae20_approved.py` | `spread_multiplier: 0.5`<br>`min_spread: なし`<br>数秒で即時手仕舞い | • `min_spread_pct: 0.0020` (最低20bpスプレッド確保)<br>• `spread_multiplier: 1.2`<br>• **100EMA 大局トレンド判定** (下降トレンド逆張り買い、上昇トレンド逆張り売りを完全遮断) |
+| **GridMM** | `strat_1ac224f3_approved.py`<br>`strat_6e5a6296_approved.py`<br>`strat_92a1dffd_approved.py` | 1.8σ逆張り<br>トレンド保護なし<br>0.1%で微損切り | • `bb_std: 2.0` (2.0σ外側に安全化)<br>• `min_spread_pct: 0.0020` (最低20bpスプレッド確保)<br>• **100EMA 大局トレンド判定** (順張り方向のみグリッド指値を展開) |
+| **InventorySkewMM** | `strat_de08146e_approved.py` | 過敏な `exit_guard`<br>即死損切り | • `min_spread_pct: 0.0025` (最低25bp確保)<br>• `spread_multiplier: 1.2`<br>• 100EMA大局トレンド整合<br>• 即死ガードを廃止し、正規の中央回帰利確へ |
+| **RsiMeanReversion** | `strat_7e09696a_approved.py`<br>`strat_a2a6d745_approved.py`<br>*(strat_9ca5d130は反映済)* | 1.6σ / 35-65<br>トレンド逆張りで踏み上げ | • `rsi_oversold: 32` / `rsi_overbought: 68`<br>• `max_slope: 0.0004` (急激な傾き時の逆張り完全ブロック)<br>• **100EMA 大局トレンド判定** (逆行エントリー完全遮断) |
+| **EmaTrend** | `strat_efd3fab8_approved.py` | 単純EMAクロス<br>レンジ相場で往復ビンタ | • **ボリンジャーバンド幅によるレンジ検出** (狭小レンジ騙しブレイクを排除)<br>• `min_divergence_pct: 0.0006` (最低6bpのモメンタム乖離)<br>• 100EMAマクロトレンド方向一致 |
+| **MicroTrendOrderFlow** | `micro_trend_order_flow_approved.py` | 2bp初動<br>反対フロー即死損切り | • `min_mom_pct: 0.0004` (4bp初動に引き上げ、スプレッドを克服)<br>• 100EMA大局トレンド整合<br>• 反対フローエグジットの感度緩和 (ノイズ損切りを防止) |
+
+### 3. アリーナランナー統合 (4AGENT合議との直接連動)
+[`run_dryrun_approved_arena.py`](file:///home/azureuser/antigravity/antigravity/quant_pipeline/run_dryrun_approved_arena.py) に以下を直結:
+1. `agents_council_state.json` の `active_regime`（trend / range / high_vol）を毎サイクル参照。
+2. `active_regime == "trend"` 時: 逆張り平均回帰（RsiMeanReversion）のエントリーをブロック。
+3. `active_regime == "range"` 時: 順張りトレンド（EmaTrend, MicroTrend）のエントリーをブロック。
+4. DuckDB 最適許容スプレッド（`max_spread_jpy: 2900`）および Adverse Gate（60/80）による多重防衛。
+
+
 
 

@@ -38,6 +38,7 @@ JST = timezone(timedelta(hours=9))
 CONFIG_PATH = os.path.join(BASE_DIR, "configs", "approved_arena_config.json")
 STATE_PATH = os.path.join(BASE_DIR, "data", "dryrun_approved_arena_state.json")
 ADVERSE_SCORE_STATE_PATH = os.path.join(BASE_DIR, "data", "adverse_score_state.json")
+COUNCIL_STATE_PATH = os.path.join(BASE_DIR, "configs", "agents_council_state.json")
 LOG_PATH = os.path.join(BASE_DIR, "logs", "dryrun_approved_arena.log")
 
 
@@ -189,6 +190,19 @@ class ApprovedStrategyArena:
                 pass
         return 30.0
 
+    def _get_council_state(self) -> Dict[str, Any]:
+        """4AGENT評議会合議ステートを configs/agents_council_state.json から取得"""
+        if os.path.exists(COUNCIL_STATE_PATH):
+            try:
+                with open(COUNCIL_STATE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    ts = data.get("timestamp", 0) / 1000.0
+                    if time.time() - ts < 60.0:
+                        return data
+            except Exception:
+                pass
+        return {}
+
     def _load_all_approved_strategies(self) -> Dict[str, SingleStrategyState]:
         """strategies/approved/*.py を動的ロード"""
         strat_dict = {}
@@ -308,15 +322,23 @@ class ApprovedStrategyArena:
             order_size = exec_cfg.get("order_size_btc", 0.001)
 
             # Adverse Score 取得
+            # Adverse Score & 4AGENT評議会合議ステート取得
             adverse_score = self._get_adverse_score()
+            council_state = self._get_council_state()
+            active_regime = council_state.get("active_regime", "normal")
+            adverse_risk_level = council_state.get("adverse_risk_level", "SAFE")
+            final_confidence = council_state.get("final_confidence", 1.0)
+            max_spread_allowed = float(council_state.get("applied_weights", {}).get("max_spread_jpy", 2900.0))
 
             for s in self.strategies.values():
                 if s.is_halted:
                     continue
 
-                # MM戦略判定 (IDまたは名前に mm / spread / maker / grid が含まれる戦略)
+                # 戦略タイプ分類
                 target_str = (s.strat_id + " " + s.name).lower()
                 is_mm = any(k in target_str for k in ["mm", "spread", "maker", "grid"])
+                is_trend = any(k in target_str for k in ["trend", "ema", "order_flow"])
+                is_reversion = any(k in target_str for k in ["rsi", "reversion", "mean"])
 
                 # (A) 既存建玉のエグジット・利確・損切判定
                 if s.position:
@@ -338,8 +360,8 @@ class ApprovedStrategyArena:
                         self._log_to_file(f"[{s.strat_id}] 🛡️ BE5 Armed: 含み益 +{current_pnl_bp:.2f}bp 到達 (建値撤退防衛起動)")
 
                     close_reason = None
-                    # 1. Adverse 緊急退避 (Score >= 80: 発注禁止・即時撤退)
-                    if adverse_score >= 80.0:
+                    # 1. Adverse 緊急退避 (Score >= 80 または合議HALT: 発注禁止・即時撤退)
+                    if adverse_score >= 80.0 or adverse_risk_level == "HALT":
                         close_reason = f"EMERGENCY_ADVERSE_EXIT (Score: {adverse_score:.1f} >= 80, PnL: ¥{current_pnl:+.1f})"
                     # 2. BE5 建値防衛発動: 含み益が戻って +0.2bp (微益) 以下に落ちたら即手仕舞い
                     elif s.be_armed and current_pnl_bp <= 0.2:
@@ -370,12 +392,24 @@ class ApprovedStrategyArena:
 
                 # (C) 新規エントリーまたはシグナル決済
                 if s.position is None:
-                    # エントリー前遮断フィルター
-                    # 1. Adverse Gate (Score >= 60 は新規エントリー拒否)
-                    if adverse_score >= 60.0:
+                    # エントリー前遮断フィルター (AGENT合議報告に基づく統合防衛)
+                    # 1. Adverse Gate (Score >= 60 または合議DANGERは新規エントリー拒否)
+                    if adverse_score >= 60.0 or adverse_risk_level in ["HALT", "DANGER"]:
                         continue
-                    # 2. スプレッドフィルター (スプレッドが 2500円 / 2.0bp超でワイドな時はブロック)
-                    if spread > 2500.0:
+
+                    # 2. DuckDB 最適スプレッドフィルター (超過時は見送り)
+                    if spread > min(2500.0, max_spread_allowed):
+                        continue
+
+                    # 3. レジーム・戦略タイプ整合性フィルター (AGENT合議知見)
+                    # トレンド相場中: 逆張り平均回帰(RSI)はエントリー禁止 (ナイフキャッチ防止)
+                    if active_regime == "trend" and is_reversion:
+                        continue
+                    # レンジ相場中: 順張りトレンド(EMA, MicroTrend)はエントリー禁止 (ダマシ往復ビンタ防止)
+                    if active_regime == "range" and is_trend:
+                        continue
+                    # 4. 確信度フィルター (合議確信度が0.45未満の極小時は見送り)
+                    if final_confidence < 0.45:
                         continue
 
                     if sig == 1:
