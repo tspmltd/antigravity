@@ -581,6 +581,27 @@ flowchart TD
 3. `active_regime == "range"` 時: 順張りトレンド（EmaTrend, MicroTrend）のエントリーをブロック。
 4. DuckDB 最適許容スプレッド（`max_spread_jpy: 2900`）および Adverse Gate（60/80）による多重防衛。
 
+---
 
+## 19. Adverse Agent 改善指示書 v1.0 完全配線 ＆ アリーナ12戦略・24hランナー統合 (2026-09-20)
 
+### 1. 配線完了の背景
+「Adverse Agent 改善指示書 v1.0」で策定された最上位研究エージェント仕様（S1〜C1）が、仮想約定を実行する実運用ループ（12戦略アリーナ `run_dryrun_approved_arena.py` および 24時間観察ランナー `run_dryrun_umm_tf2bp_24h.py`）に完全にフック・結線された。
+これにより「1. 勝つシグナル探索 ↓ 2. Adverse回避 ↓ 3. Execution改善」のアーキテクチャが全戦略で実相場稼働した。
+
+### 2. 配線・実装項目一覧
+
+| 指示書項目 | 仕様 | 実装モジュール・配線箇所 | 動作・アウトプット |
+| :--- | :--- | :--- | :--- |
+| **S1. Adverse Excursion (AE)** | 約定後 100ms, 500ms, 1s, 3s, 10s, 30s の逆行幅(bp)をミリ秒測定 | `adverse_excursion.py`<br>`run_dryrun_approved_arena.py`<br>`run_dryrun_umm_tf2bp_24h.py` | • 新規約定時に `track_entry` で登録<br>• 毎Tickの `on_tick` でミリ秒経過判定<br>• `adverse_excursion_records.jsonl` に保存 |
+| **S2. Toxic Flow 分析** | imbalance, OFI, taker buy/sell, cancel_rate, refill_rate, 板厚 ➔ Toxic Score (0-100) | `toxic_flow_analyzer.py`<br>`agents/adverse_agent.py` | • 危険例（imbalance -0.8, taker急増, cancel急増, refill消失）で Toxic Score 急騰<br>• Toxic Score >= 75 または方向別急変時に新規発注を即座に事前遮断 |
+| **S3. Capture Rate 分析** | 実現bp / 理論スプレッドbp<br>80%以上:優秀 / 50-80%:普通 / 50%未満:要改善 | `adverse_excursion.py`<br>`on_close` フック | • ポジション手仕舞い時に `on_close` で Capture Rate 確定<br>• `adverse_excursion_summary.json` に平均 Capture Rate 統計を出力 |
+| **C1. Agent責任分析** | 戦略別の逆選択責任分析<br>(UMM, SpreadCaptureMM, TF2BP, PEG_v2, MicroTrend, Scalping) | 全エントリーの `strategy_name` タグ付与 | • 12戦略すべておよびUMM/TF2BP/PEG_v2の約定データを戦略名別に分類集計<br>• どの戦略が一番食われているかを統計解剖 |
+| **最終成果物統合 Adverse Score** | 30% AE + 25% Toxic + 20% Capture + 15% Latency + 10% Inventory | `adverse_score_engine.py`<br>`data/adverse_score_state.json` | • 0-30: 安全（フル稼働）<br>• 30-60: 注意（スプレッド厳格化）<br>• 60-80: 危険（エントリー禁止・ロット半減）<br>• 80-100: 発注禁止（指値緊急退避） |
+
+### 3. 動作検証結果
+- `venv/bin/python -m unittest discover -s tests -p "test_adverse_*.py"`: 全8テスト 100% PASS
+- `venv/bin/python -m unittest tests/test_repaired_12_strategies.py`: 全3テスト 100% PASS
+- `AdverseExcursionTracker.on_close` 結合テスト: Capture Rate 80.0% / Grade: 優秀 判定 PASS
+- `adverse_score_state.json`, `adverse_toxic_state.json`: リアルタイム更新確認済
 

@@ -325,6 +325,24 @@ class AdverseExcursionTracker:
                 r.record_exit(exit_price, now, realized_pnl_bp, theory_spread_bp)
                 break
 
+    def on_close(
+        self,
+        trade_id: str,
+        exit_price: float,
+        pnl_bp: float = 0.0,
+        exit_reason: str = "",
+        theory_spread_bp: Optional[float] = None,
+    ):
+        """トレード決済時のフック (Capture Rate 計算とサマリー永続化)"""
+        self.record_exit(
+            trade_id=trade_id,
+            exit_price=exit_price,
+            exit_time=time.time(),
+            realized_pnl_bp=pnl_bp,
+            theory_spread_bp=theory_spread_bp,
+        )
+        self._persist_latest_and_summary()
+
     def on_tick(
         self,
         current_price: float,

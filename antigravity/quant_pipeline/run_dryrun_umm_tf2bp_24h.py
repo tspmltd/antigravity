@@ -237,13 +237,18 @@ class DryRunObservation24h:
                 log_line = f"[{name}] 📥 新規エントリー: {action.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
                 # S1. Adverse Excursion (AE) 追跡開始
+                theory_spread_bp = ((snap.best_ask - snap.best_bid) / snap.mid_price) * 10000.0 if snap.mid_price > 0 else 2.0
                 self.adverse_agent.track_entry(
                     trade_id=f"{name}_{acc['trades']}",
                     side=action,
                     entry_price=fill_price,
                     entry_time=time.time(),
                     strategy_name=name,
-                    meta={"reason": res.get("reason"), "spread": snap.best_ask - snap.best_bid},
+                    meta={
+                        "reason": res.get("reason"),
+                        "spread": snap.best_ask - snap.best_bid,
+                        "theoretical_spread_bp": theory_spread_bp,
+                    },
                 )
 
         elif action == "post_peg":
@@ -259,13 +264,18 @@ class DryRunObservation24h:
             log_line = f"[{name}] 📥 PEG_v2 指値約定: {p_side.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
             self._log_to_file(log_line)
             # S1. Adverse Excursion (AE) 追跡開始
+            theory_spread_bp = ((snap.best_ask - snap.best_bid) / snap.mid_price) * 10000.0 if snap.mid_price > 0 else 2.0
             self.adverse_agent.track_entry(
                 trade_id=f"{name}_{acc['trades']}",
                 side=p_side,
                 entry_price=fill_price,
                 entry_time=time.time(),
                 strategy_name=name,
-                meta={"reason": res.get("reason"), "fill_type": "maker_peg"},
+                meta={
+                    "reason": res.get("reason"),
+                    "fill_type": "maker_peg",
+                    "theoretical_spread_bp": theory_spread_bp,
+                },
             )
 
         elif action == "cancel_pending":
@@ -286,6 +296,17 @@ class DryRunObservation24h:
                 pnl_bp = (pnl / order_val) * 10000.0 if order_val > 0 else 0.0
                 log_line = f"[{name}] 📤 エグジット/キャンセル ({action}): PnL: {pnl:+.1f}円 ({pnl_bp:+.2f}bp) @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
+
+                # S3. Capture Rate 分析 ＆ AE 終了 (UMM, TF2BP, PEG_v2)
+                trade_id = f"{name}_{acc['trades']}"
+                theory_spread_bp = ((snap.best_ask - snap.best_bid) / snap.mid_price) * 10000.0 if snap.mid_price > 0 else 2.0
+                self.adverse_agent.on_close(
+                    trade_id=trade_id,
+                    exit_price=fill_price,
+                    pnl_bp=pnl_bp,
+                    exit_reason=res.get("reason", action),
+                    theory_spread_bp=theory_spread_bp,
+                )
 
     def _persist_state(self, snap: OrderbookMicroSnapshot, elapsed_sec: float):
         try:

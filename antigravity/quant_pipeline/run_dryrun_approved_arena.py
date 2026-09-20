@@ -31,6 +31,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from antigravity.quant_pipeline.quant_discord_notifier import QuantDiscordNotifier
+from antigravity.quant_pipeline.adverse_excursion import AdverseExcursionTracker
+from antigravity.quant_pipeline.toxic_flow_analyzer import ToxicFlowAnalyzer
 from core.dataloader import DataLoader
 from core.bitflyer_client import BitFlyerClient
 
@@ -38,6 +40,7 @@ JST = timezone(timedelta(hours=9))
 CONFIG_PATH = os.path.join(BASE_DIR, "configs", "approved_arena_config.json")
 STATE_PATH = os.path.join(BASE_DIR, "data", "dryrun_approved_arena_state.json")
 ADVERSE_SCORE_STATE_PATH = os.path.join(BASE_DIR, "data", "adverse_score_state.json")
+TOXIC_STATE_PATH = os.path.join(BASE_DIR, "data", "adverse_toxic_state.json")
 COUNCIL_STATE_PATH = os.path.join(BASE_DIR, "configs", "agents_council_state.json")
 LOG_PATH = os.path.join(BASE_DIR, "logs", "dryrun_approved_arena.log")
 
@@ -59,6 +62,7 @@ class SingleStrategyState:
         self.entry_time: float = 0.0
         self.be_armed: bool = False  # BE5 建値防衛アーム
         self.mfe_bp: float = 0.0
+        self.current_trade_id: Optional[str] = None  # Adverse 追跡用トレードID
 
         # 成績
         self.total_trades: int = 0
@@ -149,6 +153,8 @@ class ApprovedStrategyArena:
         # インフラ
         self.client = BitFlyerClient(enable_real_trading=False)
         self.notifier = QuantDiscordNotifier()
+        self.adverse_tracker = AdverseExcursionTracker(save_dir=os.path.join(BASE_DIR, "data"))
+        self.toxic_analyzer = ToxicFlowAnalyzer()
 
         # 戦略ローダー
         self.strategies: Dict[str, SingleStrategyState] = self._load_all_approved_strategies()
@@ -189,6 +195,16 @@ class ApprovedStrategyArena:
             except Exception:
                 pass
         return 30.0
+
+    def _get_toxic_state(self) -> Dict[str, Any]:
+        """Toxic Flow 状態を adverse_toxic_state.json から取得"""
+        if os.path.exists(TOXIC_STATE_PATH):
+            try:
+                with open(TOXIC_STATE_PATH, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
 
     def _get_council_state(self) -> Dict[str, Any]:
         """4AGENT評議会合議ステートを configs/agents_council_state.json から取得"""
@@ -288,6 +304,14 @@ class ApprovedStrategyArena:
             spread = best_ask - best_bid
             now = datetime.now()
 
+            # S1. Adverse Excursion のリアルタイム Tick 更新 (100ms, 500ms, 1s, 3s, 10s, 30s)
+            self.adverse_tracker.on_tick(
+                current_price=ltp,
+                timestamp=time.time(),
+                best_bid=best_bid,
+                best_ask=best_ask,
+            )
+
             # 2. ローリング1分足の更新
             last_time = self.df_history["timestamp"].iloc[-1]
             if hasattr(last_time, "minute") and last_time.minute == now.minute:
@@ -321,9 +345,11 @@ class ApprovedStrategyArena:
             max_hold = exec_cfg.get("max_hold_sec", 1800.0)
             order_size = exec_cfg.get("order_size_btc", 0.001)
 
-            # Adverse Score 取得
-            # Adverse Score & 4AGENT評議会合議ステート取得
+            # Adverse Score & Toxic State & 4AGENT評議会合議ステート取得
             adverse_score = self._get_adverse_score()
+            toxic_state = self._get_toxic_state()
+            toxic_score = float(toxic_state.get("toxic_score", 0.0))
+            toxic_side = toxic_state.get("side", "none")
             council_state = self._get_council_state()
             active_regime = council_state.get("active_regime", "normal")
             adverse_risk_level = council_state.get("adverse_risk_level", "SAFE")
@@ -397,29 +423,37 @@ class ApprovedStrategyArena:
                     if adverse_score >= 60.0 or adverse_risk_level in ["HALT", "DANGER"]:
                         continue
 
-                    # 2. DuckDB 最適スプレッドフィルター (超過時は見送り)
+                    # 2. S2. Toxic Flow 危険例遮断 (Toxic Score >= 75 または方向別Toxic急変)
+                    if toxic_score >= 75.0:
+                        continue
+                    if sig == 1 and (toxic_side == "buy" or adverse_risk_level == "CAUTION_BUY"):
+                        continue
+                    if sig == -1 and (toxic_side == "sell" or adverse_risk_level == "CAUTION_SELL"):
+                        continue
+
+                    # 3. DuckDB 最適スプレッドフィルター (超過時は見送り)
                     if spread > min(2500.0, max_spread_allowed):
                         continue
 
-                    # 3. レジーム・戦略タイプ整合性フィルター (AGENT合議知見)
+                    # 4. レジーム・戦略タイプ整合性フィルター (AGENT合議知見)
                     # トレンド相場中: 逆張り平均回帰(RSI)はエントリー禁止 (ナイフキャッチ防止)
                     if active_regime == "trend" and is_reversion:
                         continue
                     # レンジ相場中: 順張りトレンド(EMA, MicroTrend)はエントリー禁止 (ダマシ往復ビンタ防止)
                     if active_regime == "range" and is_trend:
                         continue
-                    # 4. 確信度フィルター (合議確信度が0.45未満の極小時は見送り)
+                    # 5. 確信度フィルター (合議確信度が0.45未満の極小時は見送り)
                     if final_confidence < 0.45:
                         continue
 
                     if sig == 1:
                         # 買いエントリー: MM戦略はMaker指値(best_bid)、その他はAsk成行
                         entry_p = best_bid if is_mm else best_ask
-                        self._open_position(s, "buy", entry_p, order_size, f"SIGNAL_BUY({'MAKER' if is_mm else 'TAKER'})")
+                        self._open_position(s, "buy", entry_p, order_size, f"SIGNAL_BUY({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
                     elif sig == -1:
                         # 売りエントリー: MM戦略はMaker指値(best_ask)、その他はBid成行
                         entry_p = best_ask if is_mm else best_bid
-                        self._open_position(s, "sell", entry_p, order_size, f"SIGNAL_SELL({'MAKER' if is_mm else 'TAKER'})")
+                        self._open_position(s, "sell", entry_p, order_size, f"SIGNAL_SELL({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
                 else:
                     # ドテンまたは手仕舞いシグナル
                     hold_time = time.time() - s.entry_time
@@ -442,7 +476,7 @@ class ApprovedStrategyArena:
 
             now_str = now.strftime("%H:%M:%S")
             print(
-                f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | Adv: {adverse_score:4.1f} | "
+                f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | Adv: {adverse_score:4.1f} | Tox: {toxic_score:4.1f} | "
                 f"🥇 {top1.strat_id[:10]}: {top1.total_pnl_bp:+.1f}bp (¥{top1.total_pnl:+,.0f}) | "
                 f"🥈 {top2.strat_id[:10]}: {top2.total_pnl_bp:+.1f}bp (¥{top2.total_pnl:+,.0f}) | "
                 f"🥉 {top3.strat_id[:10]}: {top3.total_pnl_bp:+.1f}bp (¥{top3.total_pnl:+,.0f})",
@@ -460,7 +494,7 @@ class ApprovedStrategyArena:
         except Exception as e:
             pass
 
-    def _open_position(self, s: SingleStrategyState, side: str, price: float, size: float, reason: str):
+    def _open_position(self, s: SingleStrategyState, side: str, price: float, size: float, reason: str, spread: float = 2000.0, adverse_score: float = 30.0):
         s.position = side
         s.entry_price = price
         s.position_size = size
@@ -470,7 +504,26 @@ class ApprovedStrategyArena:
         s.total_trades += 1
         s.last_action = f"OPEN_{side.upper()}"
         s.last_reason = reason
-        self._log_to_file(f"[{s.strat_id}] 📥 新規約定: {side.upper()} @ ¥{price:,.0f} ({reason})")
+
+        # S1. Adverse Excursion 追跡開始 (100ms, 500ms, 1s, 3s, 10s, 30s)
+        trade_id = f"{s.strat_id}_{int(s.entry_time * 1000)}"
+        s.current_trade_id = trade_id
+        theoretical_spread_bp = (spread / price) * 10000.0 if price > 0 else 2.0
+        self.adverse_tracker.track_entry(
+            trade_id=trade_id,
+            side=side,
+            entry_price=price,
+            entry_time=s.entry_time,
+            strategy_name=s.name,  # UMM, SpreadCaptureMM, MicroTrend, GridMM 等
+            meta={
+                "strat_id": s.strat_id,
+                "strategy": s.name,
+                "theoretical_spread_bp": theoretical_spread_bp,
+                "adverse_score": adverse_score,
+                "reason": reason,
+            }
+        )
+        self._log_to_file(f"[{s.strat_id}] 📥 新規約定: {side.upper()} @ ¥{price:,.0f} ({reason}) | Adv:{adverse_score:.1f}")
 
     def _close_position(self, s: SingleStrategyState, price: float, pnl: float, reason: str):
         s.total_pnl += pnl
@@ -500,6 +553,16 @@ class ApprovedStrategyArena:
         dd = s.peak_pnl - s.total_pnl
         if dd > s.max_dd:
             s.max_dd = dd
+
+        # S3 & C1. Adverse Excursion 完了 & Capture Rate 計算 & 永続化
+        if s.current_trade_id:
+            self.adverse_tracker.on_close(
+                trade_id=s.current_trade_id,
+                exit_price=price,
+                pnl_bp=pnl_bp,
+                exit_reason=reason,
+            )
+            s.current_trade_id = None
 
         s.last_action = f"CLOSE_{s.position.upper()}"
         s.last_reason = reason

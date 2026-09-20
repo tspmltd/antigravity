@@ -91,6 +91,8 @@ class AdverseResearchAgent:
         self.bus.subscribe("orderbook_micro", self.on_orderbook)
         self.bus.subscribe("order_filled", self._on_order_filled_event)
         self.bus.subscribe("trade_entry", self._on_order_filled_event)
+        self.bus.subscribe("order_closed", self._on_order_closed_event)
+        self.bus.subscribe("trade_close", self._on_order_closed_event)
 
     def track_entry(
         self,
@@ -111,6 +113,23 @@ class AdverseResearchAgent:
             meta=meta,
         )
 
+    def on_close(
+        self,
+        trade_id: str,
+        exit_price: float,
+        pnl_bp: float = 0.0,
+        exit_reason: str = "",
+        theory_spread_bp: Optional[float] = None,
+    ):
+        """トレード決済時のフック (Capture Rate 計算とサマリー永続化)"""
+        return self.excursion_tracker.on_close(
+            trade_id=trade_id,
+            exit_price=exit_price,
+            pnl_bp=pnl_bp,
+            exit_reason=exit_reason,
+            theory_spread_bp=theory_spread_bp,
+        )
+
     def _on_order_filled_event(self, event_data: Dict[str, Any]):
         """EventBus からの約定通知ハンドラ"""
         if not isinstance(event_data, dict):
@@ -128,6 +147,24 @@ class AdverseResearchAgent:
                 entry_time=entry_time,
                 strategy_name=strategy_name,
                 meta=event_data,
+            )
+
+    def _on_order_closed_event(self, event_data: Dict[str, Any]):
+        """EventBus からの決済通知ハンドラ"""
+        if not isinstance(event_data, dict):
+            return
+        trade_id = str(event_data.get("trade_id", ""))
+        exit_price = float(event_data.get("exit_price", event_data.get("price", 0.0)))
+        pnl_bp = float(event_data.get("pnl_bp", 0.0))
+        exit_reason = str(event_data.get("reason", ""))
+        theory_spread_bp = event_data.get("theory_spread_bp")
+        if trade_id:
+            self.on_close(
+                trade_id=trade_id,
+                exit_price=exit_price,
+                pnl_bp=pnl_bp,
+                exit_reason=exit_reason,
+                theory_spread_bp=theory_spread_bp,
             )
 
     def on_orderbook(self, snap: OrderbookMicroSnapshot):
