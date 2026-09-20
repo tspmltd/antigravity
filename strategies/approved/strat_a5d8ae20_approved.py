@@ -7,13 +7,13 @@ class CustomStrategy(BaseStrategy):
         default_params = {
             "spread_multiplier": 1.2,
             "atr_period": 14,
-            "min_spread_pct": 0.0020,  # AGENT報告: 最低20bp確保でスプレッド負けを完全防止
+            "min_spread_pct": 0.00020,  # 2.0bp確保 (0.00020 = 0.02% ≒ ¥2,500、平均スプレッド2,126円を克服)
             "vol_filter_threshold": 1.3
         }
         if parameters:
             default_params.update(parameters)
         super().__init__(name=name, version=version, parameters=default_params)
-        self.hypothesis = "AGENT報告修繕: 20bp最低スプレッド確保＋100EMA大局トレンド逆張り遮断型MM。"
+        self.hypothesis = "AGENT報告修繕: 2.0bp最低スプレッド確保＋100EMA大局トレンド逆張り遮断型MM。"
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()

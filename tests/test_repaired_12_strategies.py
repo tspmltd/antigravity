@@ -61,7 +61,7 @@ class TestRepaired12Strategies(unittest.TestCase):
             inst = mod.CustomStrategy()
             params = getattr(inst, "parameters", {})
             min_spread = params.get("min_spread_pct", 0.0)
-            self.assertGreaterEqual(min_spread, 0.0020, f"{mf} must require min_spread_pct >= 0.0020 (20bp)")
+            self.assertGreaterEqual(min_spread, 0.00020, f"{mf} must require min_spread_pct >= 0.00020 (2.0bp)")
 
     def test_reversion_strategies_have_ema_trend_filter(self):
         """RsiMeanReversion が大局トレンドフィルターを持っていること"""

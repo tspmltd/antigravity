@@ -7,13 +7,13 @@ class CustomStrategy(BaseStrategy):
         default_params = {
             "spread_multiplier": 1.2,
             "atr_period": 14,
-            "min_spread_pct": 0.0025,  # 0.25% (コスト0.14%をカバー)
+            "min_spread_pct": 0.00025,  # 2.5bp確保 (0.00025 = 0.025% ≒ ¥3,100、Lightning FX平均スプレッド2,126円をカバー)
             "vol_filter_threshold": 1.3
         }
         if parameters:
             default_params.update(parameters)
         super().__init__(name=name, version=version, parameters=default_params)
-        self.hypothesis = "手数料カバー型スプレッドキャプチャMM＋ボラ急増回避。"
+        self.hypothesis = "2.5bp確保型スプレッドキャプチャMM＋ボラ急増回避。"
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()

@@ -8,13 +8,13 @@ class CustomStrategy(BaseStrategy):
             "trend_period": 20,
             "skew_factor": 0.3,
             "spread_multiplier": 1.2,
-            "min_spread_pct": 0.0025,  # 最低25bpスプレッド確保
+            "min_spread_pct": 0.00025,  # 最低2.5bpスプレッド確保 (0.00025 = 0.025% ≒ ¥3,100)
             "vol_filter_threshold": 1.3
         }
         if parameters:
             default_params.update(parameters)
         super().__init__(name=name, version=version, parameters=default_params)
-        self.hypothesis = "AGENT報告修繕: Avellaneda-Stoikovスキュー＋25bp確保＋100EMA逆張り遮断。"
+        self.hypothesis = "AGENT報告修繕: Avellaneda-Stoikovスキュー＋2.5bp確保＋100EMA逆張り遮断。"
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()

@@ -603,5 +603,33 @@ flowchart TD
 - `venv/bin/python -m unittest discover -s tests -p "test_adverse_*.py"`: 全8テスト 100% PASS
 - `venv/bin/python -m unittest tests/test_repaired_12_strategies.py`: 全3テスト 100% PASS
 - `AdverseExcursionTracker.on_close` 結合テスト: Capture Rate 80.0% / Grade: 優秀 判定 PASS
-- `adverse_score_state.json`, `adverse_toxic_state.json`: リアルタイム更新確認済
+---
 
+## 20. 最優先検証事項是正 ＆ #spread-gate-validation 実装 (2026-09-20)
+
+### 1. スプレッドスケール誤認（20bp ➔ 2.0bp）の是正
+ユーザー指摘: `0.0020 = 20bp = 0.20%`（約24,000円幅）では平常スプレッド（約1.7〜2.0bp ≒ 約2,126円）で実質取引不能に陥る重大欠陥を是正。
+- `MicroSpreadMM` (`strat_4d3f2c9f`, `strat_a5d8ae20`): `0.0020` ➔ **`0.00020` (2.0bp ≒ ¥2,500)**
+- `GridMM` (`strat_1ac224f3`, `strat_6e5a6296`, `strat_92a1dffd`): `0.0020` ➔ **`0.00020` (2.0bp)**
+- `InventorySkewMM` (`strat_de08146e`): `0.0025` ➔ **`0.00025` (2.5bp ≒ ¥3,100)**
+- `SpreadCaptureMM` (`strat_cbcd5aed`): `0.0025` ➔ **`0.00025` (2.5bp)**
+
+### 2. 新Discordチャンネル `#spread-gate-validation` 毎時監視エンジン
+[`spread_gate_tracker.py`](file:///home/azureuser/antigravity/antigravity/quant_pipeline/spread_gate_tracker.py) を新規配備し、アリーナランナーに組み込み:
+1. **総シグナル数 (total_signals)**
+2. **通過数 (passed_signals)**
+3. **Gate突破率 (pass_rate_pct)**: **理想 20〜40%** / **危険 1%以下** (取引不能)
+4. **平均Spread / 最大Spread** (円 & bp)
+5. **ゲート別遮断内訳**: Adverse Gate, Toxic Flow Gate, Spread Gate, Regime Gate, Confidence Gate
+毎時ジャストに Discord へ自動配信。
+
+### 3. Adverse Score 妥当性検証表 (単調性判定)
+[`adverse_excursion.py`](file:///home/azureuser/antigravity/antigravity/quant_pipeline/adverse_excursion.py) のサマリーに Score 帯別（0-20, 20-40, 40-60, 60-80, 80-100）の検証テーブルを新設:
+- 測定: 件数, 勝率, 期待値(bp), AE_1s(bp), Capture Rate
+- 成功条件: **Score上昇 ↓ 期待値悪化 (単調減少)** を判定し Discord `#adverse-summary` へ出力。
+
+### 4. PEG_v2 専用対比検証 (Baseline vs PEG_v2)
+5大項目（AE_1s, AE_3s, Capture Rate, Toxic Score, Adverse Score）を直接対比し、**「方向予測が上手いのではなく、食われにくい」**ことの客観的証明レポートを自動生成・配信。
+
+### 5. 新Discordチャンネル `#alpha-vs-adverse` 日次剥落分析
+Signal Score (アルファ) vs Adverse Score (逆選択) の相関・侵食度合い（Alpha Retention 率）を定期解剖するレポーターを新設。

@@ -33,6 +33,7 @@ if BASE_DIR not in sys.path:
 from antigravity.quant_pipeline.quant_discord_notifier import QuantDiscordNotifier
 from antigravity.quant_pipeline.adverse_excursion import AdverseExcursionTracker
 from antigravity.quant_pipeline.toxic_flow_analyzer import ToxicFlowAnalyzer
+from antigravity.quant_pipeline.spread_gate_tracker import SpreadGateTracker
 from core.dataloader import DataLoader
 from core.bitflyer_client import BitFlyerClient
 
@@ -155,6 +156,7 @@ class ApprovedStrategyArena:
         self.notifier = QuantDiscordNotifier()
         self.adverse_tracker = AdverseExcursionTracker(save_dir=os.path.join(BASE_DIR, "data"))
         self.toxic_analyzer = ToxicFlowAnalyzer()
+        self.spread_gate_tracker = SpreadGateTracker(save_path=os.path.join(BASE_DIR, "data", "spread_gate_stats.json"))
 
         # 戦略ローダー
         self.strategies: Dict[str, SingleStrategyState] = self._load_all_approved_strategies()
@@ -312,6 +314,9 @@ class ApprovedStrategyArena:
                 best_ask=best_ask,
             )
 
+            # #spread-gate-validation 検証用 スプレッド記録
+            self.spread_gate_tracker.record_tick_spread(spread, ltp)
+
             # 2. ローリング1分足の更新
             last_time = self.df_history["timestamp"].iloc[-1]
             if hasattr(last_time, "minute") and last_time.minute == now.minute:
@@ -418,42 +423,55 @@ class ApprovedStrategyArena:
 
                 # (C) 新規エントリーまたはシグナル決済
                 if s.position is None:
-                    # エントリー前遮断フィルター (AGENT合議報告に基づく統合防衛)
-                    # 1. Adverse Gate (Score >= 60 または合議DANGERは新規エントリー拒否)
-                    if adverse_score >= 60.0 or adverse_risk_level in ["HALT", "DANGER"]:
-                        continue
+                    if sig in (1, -1):
+                        # エントリー前遮断フィルター (AGENT合議報告に基づく統合防衛)
+                        # 1. Adverse Gate (Score >= 60 または合議DANGERは新規エントリー拒否)
+                        if adverse_score >= 60.0 or adverse_risk_level in ["HALT", "DANGER"]:
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="adverse_gate")
+                            continue
 
-                    # 2. S2. Toxic Flow 危険例遮断 (Toxic Score >= 75 または方向別Toxic急変)
-                    if toxic_score >= 75.0:
-                        continue
-                    if sig == 1 and (toxic_side == "buy" or adverse_risk_level == "CAUTION_BUY"):
-                        continue
-                    if sig == -1 and (toxic_side == "sell" or adverse_risk_level == "CAUTION_SELL"):
-                        continue
+                        # 2. S2. Toxic Flow 危険例遮断 (Toxic Score >= 75 または方向別Toxic急変)
+                        if toxic_score >= 75.0:
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="toxic_flow_gate")
+                            continue
+                        if sig == 1 and (toxic_side == "buy" or adverse_risk_level == "CAUTION_BUY"):
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="toxic_flow_gate")
+                            continue
+                        if sig == -1 and (toxic_side == "sell" or adverse_risk_level == "CAUTION_SELL"):
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="toxic_flow_gate")
+                            continue
 
-                    # 3. DuckDB 最適スプレッドフィルター (超過時は見送り)
-                    if spread > min(2500.0, max_spread_allowed):
-                        continue
+                        # 3. DuckDB 最適スプレッドフィルター (超過時は見送り)
+                        if spread > min(2500.0, max_spread_allowed):
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="spread_gate")
+                            continue
 
-                    # 4. レジーム・戦略タイプ整合性フィルター (AGENT合議知見)
-                    # トレンド相場中: 逆張り平均回帰(RSI)はエントリー禁止 (ナイフキャッチ防止)
-                    if active_regime == "trend" and is_reversion:
-                        continue
-                    # レンジ相場中: 順張りトレンド(EMA, MicroTrend)はエントリー禁止 (ダマシ往復ビンタ防止)
-                    if active_regime == "range" and is_trend:
-                        continue
-                    # 5. 確信度フィルター (合議確信度が0.45未満の極小時は見送り)
-                    if final_confidence < 0.45:
-                        continue
+                        # 4. レジーム・戦略タイプ整合性フィルター (AGENT合議知見)
+                        # トレンド相場中: 逆張り平均回帰(RSI)はエントリー禁止 (ナイフキャッチ防止)
+                        if active_regime == "trend" and is_reversion:
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="regime_gate")
+                            continue
+                        # レンジ相場中: 順張りトレンド(EMA, MicroTrend)はエントリー禁止 (ダマシ往復ビンタ防止)
+                        if active_regime == "range" and is_trend:
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="regime_gate")
+                            continue
 
-                    if sig == 1:
-                        # 買いエントリー: MM戦略はMaker指値(best_bid)、その他はAsk成行
-                        entry_p = best_bid if is_mm else best_ask
-                        self._open_position(s, "buy", entry_p, order_size, f"SIGNAL_BUY({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
-                    elif sig == -1:
-                        # 売りエントリー: MM戦略はMaker指値(best_ask)、その他はBid成行
-                        entry_p = best_ask if is_mm else best_bid
-                        self._open_position(s, "sell", entry_p, order_size, f"SIGNAL_SELL({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
+                        # 5. 確信度フィルター (合議確信度が0.45未満の極小時は見送り)
+                        if final_confidence < 0.45:
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="confidence_gate")
+                            continue
+
+                        # 全ゲート突破！
+                        self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=True)
+
+                        if sig == 1:
+                            # 買いエントリー: MM戦略はMaker指値(best_bid)、その他はAsk成行
+                            entry_p = best_bid if is_mm else best_ask
+                            self._open_position(s, "buy", entry_p, order_size, f"SIGNAL_BUY({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
+                        elif sig == -1:
+                            # 売りエントリー: MM戦略はMaker指値(best_ask)、その他はBid成行
+                            entry_p = best_ask if is_mm else best_bid
+                            self._open_position(s, "sell", entry_p, order_size, f"SIGNAL_SELL({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
                 else:
                     # ドテンまたは手仕舞いシグナル
                     hold_time = time.time() - s.entry_time
@@ -474,9 +492,11 @@ class ApprovedStrategyArena:
             top2 = sorted_strats[1] if len(sorted_strats) > 1 else top1
             top3 = sorted_strats[2] if len(sorted_strats) > 2 else top1
 
+            gate_stats = self.spread_gate_tracker.get_window_stats(3600.0)
+            gate_rate = gate_stats["pass_rate_pct"]
             now_str = now.strftime("%H:%M:%S")
             print(
-                f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | Adv: {adverse_score:4.1f} | Tox: {toxic_score:4.1f} | "
+                f" [{now_str}] | LTP: ¥{ltp:10,.0f} | Spr: ¥{spread:5,.0f} | Adv: {adverse_score:4.1f} | Tox: {toxic_score:4.1f} | Gate: {gate_rate:4.1f}% | "
                 f"🥇 {top1.strat_id[:10]}: {top1.total_pnl_bp:+.1f}bp (¥{top1.total_pnl:+,.0f}) | "
                 f"🥈 {top2.strat_id[:10]}: {top2.total_pnl_bp:+.1f}bp (¥{top2.total_pnl:+,.0f}) | "
                 f"🥉 {top3.strat_id[:10]}: {top3.total_pnl_bp:+.1f}bp (¥{top3.total_pnl:+,.0f})",

@@ -549,6 +549,75 @@ class AdverseExcursionTracker:
                     "toxic_fill_rate": round(toxic_cnt / ag_n * 100.0, 1),
                 }
 
+        # 9. Adverse Score 帯別 妥当性分析テーブル (ユーザー指示書要求)
+        # Score帯: 0-20, 20-40, 40-60, 60-80, 80-100
+        # 測定項目: 件数, 勝率(%), 期待値(bp), AE_1s(bp), CaptureRate(%)
+        # 成功条件: Score上昇 -> 期待値悪化 (単調性判定)
+        score_bins = [
+            ("0-20", 0.0, 20.0),
+            ("20-40", 20.0, 40.0),
+            ("40-60", 40.0, 60.0),
+            ("60-80", 60.0, 80.0),
+            ("80-100", 80.0, 100.0),
+        ]
+        score_validation_table = {}
+        expected_pnls = []
+
+        for label, low, high in score_bins:
+            bin_records = []
+            for r in records:
+                score = 30.0
+                if r.meta and "adverse_score" in r.meta:
+                    score = float(r.meta["adverse_score"])
+                elif r.fill_quality == "TOXIC_FILL":
+                    score = 75.0
+                elif r.fill_quality == "GOOD_FILL":
+                    score = 15.0
+
+                if (low <= score < high) or (high == 100.0 and score >= high):
+                    bin_records.append(r)
+
+            b_count = len(bin_records)
+            if b_count > 0:
+                completed = [r for r in bin_records if r.realized_pnl_bp is not None]
+                win_cnt = sum(1 for r in completed if r.realized_pnl_bp > 0)
+                win_rate = round(win_cnt / len(completed) * 100.0, 1) if completed else 0.0
+                exp_pnl = round(sum(r.realized_pnl_bp for r in completed) / len(completed), 2) if completed else 0.0
+                ae_1s_vals = [r.excursions["ae_1s"] for r in bin_records if r.excursions.get("ae_1s") is not None]
+                avg_ae1 = round(sum(ae_1s_vals) / len(ae_1s_vals), 2) if ae_1s_vals else 0.0
+                cr_vals = [r.capture_rate for r in bin_records if r.capture_rate is not None]
+                avg_cr = round(sum(cr_vals) / len(cr_vals), 1) if cr_vals else 0.0
+
+                expected_pnls.append(exp_pnl)
+                score_validation_table[label] = {
+                    "count": b_count,
+                    "completed_count": len(completed),
+                    "win_rate_pct": win_rate,
+                    "expected_pnl_bp": exp_pnl,
+                    "avg_ae_1s": avg_ae1,
+                    "avg_capture_rate": avg_cr,
+                }
+            else:
+                score_validation_table[label] = {
+                    "count": 0,
+                    "completed_count": 0,
+                    "win_rate_pct": 0.0,
+                    "expected_pnl_bp": 0.0,
+                    "avg_ae_1s": 0.0,
+                    "avg_capture_rate": 0.0,
+                }
+
+        # 単調性判定: 有効なbinで期待値が単調減少しているか
+        valid_exp = [score_validation_table[k]["expected_pnl_bp"] for k, _, _ in score_bins if score_validation_table[k]["completed_count"] >= 3]
+        is_monotonic = True
+        if len(valid_exp) >= 2:
+            for i in range(len(valid_exp) - 1):
+                if valid_exp[i] < valid_exp[i + 1]:
+                    is_monotonic = False
+                    break
+        else:
+            is_monotonic = None  # データ蓄積中
+
         return {
             "total_tracked_trades": n,
             "avg_ae": avg_ae,
@@ -562,6 +631,11 @@ class AdverseExcursionTracker:
             "latency_stats": latency_stats,
             "capture_rate_stats": cr_stats,
             "agent_attribution": agent_attribution,
+            "score_validation": {
+                "table": score_validation_table,
+                "is_monotonic_decline": is_monotonic,
+                "status": "VALIDATED" if is_monotonic is True else ("ACCUMULATING" if is_monotonic is None else "CHECK_REQUIRED"),
+            },
             "latest_record": records[-1].to_standard_dict() if records else {},
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }

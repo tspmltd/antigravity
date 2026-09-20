@@ -9,7 +9,7 @@ class CustomStrategy(BaseStrategy):
             "bb_period": 20,
             "bb_std": 2.0,  # 2.0σへ安全化
             "max_bandwidth_pct": 0.018,
-            "min_spread_pct": 0.0020,  # 最低20bpスプレッド確保
+            "min_spread_pct": 0.00020,  # 最低2.0bpスプレッド確保 (0.00020 = 0.02% ≒ ¥2,500)
         }
         if parameters:
             default_params.update(parameters)
