@@ -7,6 +7,7 @@ Antigravity Quant Discord Notifier
 3. 分析・重み更新サーバー (研究: DuckDB集計結果・ΔW重み更新推奨・戦略承認)
 """
 import os
+from antigravity.discord_mute import discord_muted
 import time
 import json
 import urllib.request
@@ -92,6 +93,8 @@ class QuantDiscordNotifier:
         self._min_dryrun_interval_sec: float = 5.0  # Dry-runのスパム抑止インターバル
 
     def _post(self, webhook_url: str, payload: Dict[str, Any]) -> bool:
+        if discord_muted():
+            return False
         if not webhook_url or not webhook_url.startswith("http"):
             return False
         try:

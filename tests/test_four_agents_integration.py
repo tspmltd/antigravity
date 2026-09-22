@@ -182,33 +182,25 @@ class TestFourAgentsIntegration(unittest.TestCase):
         self.adverse_agent.on_orderbook(snap2)
 
         adv_c = self.adverse_agent.get_latest_conclusion()
-        self.assertTrue(adv_c.emergency_cancel or adv_c.hard_veto)
+        self.assertTrue(adv_c.metrics.get("avoidance_on"))
+        self.assertFalse(adv_c.hard_veto)
+        self.assertFalse(adv_c.emergency_cancel)
 
-        # 評議会合議判定の策定
+        # 評議会は研究メモを載せるが、Adverse では発注を止めない
         verdict = self.council.deliberate()
-        self.assertTrue(verdict.emergency_cancel_active or verdict.hard_veto_active)
+        self.assertFalse(verdict.hard_veto_active)
+        self.assertFalse(verdict.emergency_cancel_active)
+        self.assertEqual(verdict.adverse_risk_level, "ON")
 
-        # FusionEngine に反映
+        # 装置 ON でも Fusion は注文を動かさない（研究フラグ）
         self.fusion_engine.latest_adverse = {
             "adverse_side": "buy",
-            "adverse_score": 0.85,
-            "cancel_recommendation": True,
+            "adverse_score": 28.0,
+            "avoidance_on": True,
             "lead_ms_estimated": 95.0,
         }
         dec = self.fusion_engine.evaluate()
-        self.assertEqual(dec.action, "cancel")
-        self.assertEqual(dec.size_multiplier, 0.0)
-
-        # Simulator に反映 ➔ ポジションが緊急解消されること
-        res = self.simulator.feed_signal(
-            {"action": "cancel", "final_confidence": 1.0},
-            current_price=11999800.0,
-            best_bid=11999500.0,
-            best_ask=12000500.0,
-        )
-        self.assertIsNotNone(res)
-        self.assertEqual(self.simulator.position_side, None)
-        self.assertEqual(res["reason"], "ADVERSE_EMERGENCY_CANCEL")
+        self.assertNotEqual(dec.action, "cancel")
 
     def test_03_duckdb_weights_hot_reloads_in_fusion_engine(self):
         """DuckDBエージェントが重みを更新した際、FusionEngineが無停止ホットリロードすることを検証"""

@@ -36,9 +36,8 @@ from ..adverse_score_engine import AdverseScoreEngine
 
 class AdverseResearchAgent:
     """
-    【最上位研究エージェント (Chief Research Agent / Tier-0)】
-    Adverse Selection 専門防御・逆選択エクスカーション (AE) 研究エージェント
-    - 勝つシグナル探索より上位に位置し、逆選択回避を統括
+    【研究員】Adverse Selection の感知と分析。発注の門番ではない。
+    出力はエピソードごとの ON/OFF。スコア帯では注文を止めない。
     - S1. Adverse Excursion (AE_100ms〜30s) のリアルタイム測定・分析
     - S2. Toxic Flow (Toxic Score 0-100) のリアルタイム採点
     - S3. Capture Rate 分析・管理
@@ -49,9 +48,12 @@ class AdverseResearchAgent:
     def __init__(
         self,
         bus: EventBus,
-        min_lead_ms_threshold: float = 85.0,  # 取引所RTT(85ms)以上の先回りリードタイム
-        depletion_ratio_threshold: float = 0.40,  # 最良気配が40%以下に急減
-        toxic_taker_threshold: float = 0.50,  # Taker成行の偏り閾値
+        min_lead_ms_threshold: float = 85.0,  # 研究用: 確認リードが RTT 以上か
+        depletion_ratio_threshold: float = 0.50,  # tip ≤ baseline×この比 かつ絶対減少で枯渇候補
+        toxic_taker_threshold: float = 0.015,  # 旧0.50は窓成行量と単位不一致で confirm=0 だった
+        min_arm_tip: float = 0.08,  # これ未満の tip では PRE に入らない
+        min_abs_drop: float = 0.05,  # fire に必要な絶対減少量 (BTC); 比だけだと薄い板で誤爆
+        max_episode_age_ms: float = 2500.0,
         save_dir: str = "/home/azureuser/antigravity/data",
     ):
         self.bus = bus
@@ -59,6 +61,10 @@ class AdverseResearchAgent:
         self.min_lead_ms_threshold = min_lead_ms_threshold
         self.depletion_ratio_threshold = depletion_ratio_threshold
         self.toxic_taker_threshold = toxic_taker_threshold
+        self.min_arm_tip = min_arm_tip
+        self.min_abs_drop = min_abs_drop
+        self.max_episode_age_ms = max_episode_age_ms
+        self.device_version = "episode_sm_v2"
 
         # S1. Adverse Excursion 分析器の統合
         self.excursion_tracker = AdverseExcursionTracker(save_dir=save_dir)
@@ -85,7 +91,26 @@ class AdverseResearchAgent:
         # 統計カウンタ
         self.total_episodes = 0
         self.intercepted_kills = 0
+        self.confirmed_episodes = 0
+        self.false_episodes = 0
+        self.cooldown_until_buy = 0.0
+        self.cooldown_until_sell = 0.0
+        self.taker_seen_buy = False
+        self.taker_seen_sell = False
+        self.cum_opp_taker_buy = 0.0
+        self.cum_opp_taker_sell = 0.0
+        self.lead_ms_buy = 0.0
+        self.lead_ms_sell = 0.0
         self.estimated_lead_ms_history: List[float] = []
+        self.latest_state = {
+            "avoidance_on": False,
+            "adverse_score": 0.0,
+            "cancel_recommendation": False,
+            "adverse_side": "none",
+        }
+        self._last_device_write = 0.0
+        self._last_toxic_write = 0.0
+        self._device_sig = None
 
         # EventBus購読
         self.bus.subscribe("orderbook_micro", self.on_orderbook)
@@ -273,24 +298,43 @@ class AdverseResearchAgent:
             micro_dev=snap.micro_dev,
         )
         total_adverse_score = unified_score_res["adverse_score"]
-        tier = unified_score_res["tier"]  # 安全 / 注意 / 危険 / 発注禁止
+        tier = unified_score_res["tier"]
+        avoidance_on = bool(buy_res.get("avoidance_on") or sell_res.get("avoidance_on"))
+        if buy_res.get("avoidance_on") and not sell_res.get("avoidance_on"):
+            adverse_side = "buy"
+            lead_ms_est = buy_res.get("lead_ms", 0.0)
+            active_episode_id = self.episode_id_buy
+        elif sell_res.get("avoidance_on"):
+            adverse_side = "sell"
+            lead_ms_est = sell_res.get("lead_ms", 0.0)
+            active_episode_id = self.episode_id_sell
 
         adverse_state = {
             "timestamp": snap.timestamp,
-            "agent_rank": "CHIEF_RESEARCH_AGENT",  # 最上位研究エージェント
+            "agent_rank": "RESEARCH_AGENT",
             "adverse_side": adverse_side,
-            "adverse_score": total_adverse_score,  # 0〜100
+            "adverse_score": total_adverse_score,
+            "research_score": total_adverse_score,
+            "avoidance_on": avoidance_on,
             "tier": tier,
             "tier_code": unified_score_res["tier_code"],
             "toxic_score": toxic_score,
             "toxic_level": toxic_dominant["level"],
-            "cancel_recommendation": cancel_recommendation or (total_adverse_score >= 80.0),
+            "cancel_recommendation": False,
             "lead_ms_estimated": round(lead_ms_est, 1),
             "episode_id": active_episode_id,
             "buy_state": self.state_buy,
             "sell_state": self.state_sell,
             "total_episodes": self.total_episodes,
+            "confirmed_episodes": self.confirmed_episodes,
+            "false_episodes": self.false_episodes,
+            "confirm_rate": (
+                round(self.confirmed_episodes / self.total_episodes, 4)
+                if self.total_episodes > 0
+                else None
+            ),
             "intercepted_kills": self.intercepted_kills,
+            "device_version": self.device_version,
             "ae_latest": ae_latest,
             "ae_summary": ae_summary,
             "toxic_dominant": toxic_dominant,
@@ -299,28 +343,19 @@ class AdverseResearchAgent:
 
         self.latest_state = adverse_state
         self.bus.publish("adverse_research_state", adverse_state)
+        self._persist_device_state(adverse_state)
 
-        # 結論の策定 (4AGENT 統一: 最上位研究エージェント)
-        # 0-30: 安全 / 30-60: 注意 / 60-80: 危険 / 80-100: 発注禁止
-        hard_veto = (total_adverse_score >= 60.0)
-        emergency_cancel = cancel_recommendation or (total_adverse_score >= 80.0)
-
-        if emergency_cancel or total_adverse_score >= 80.0:
-            verdict = "ADVERSE_CRITICAL_CANCEL"
-            primary_action = "cancel"
-            explanation = f"🔴 [発注禁止] AdverseScore: {total_adverse_score}/100 ➔ 新規遮断＆指値緊急退避 (Toxic:{toxic_score:.0f})"
-        elif total_adverse_score >= 60.0:
-            verdict = "ADVERSE_WARNING_VETO"
-            primary_action = "veto"
-            explanation = f"🟠 [危険] AdverseScore: {total_adverse_score}/100 ➔ ロット半減・逆張り見送り ({adverse_side.upper()}側警戒)"
-        elif total_adverse_score >= 30.0:
-            verdict = "ADVERSE_CAUTION"
-            primary_action = "caution"
-            explanation = f"🟡 [注意] AdverseScore: {total_adverse_score}/100 ➔ 厳格スプレッドフィルター適用"
+        if avoidance_on:
+            verdict = "ADVERSE_ON"
+            primary_action = "avoid_on"
+            explanation = (
+                f"ON side={adverse_side} episode={active_episode_id} "
+                f"lead_ms={lead_ms_est:.0f} research_score={total_adverse_score:.0f}"
+            )
         else:
-            verdict = "SAFE"
-            primary_action = "allow"
-            explanation = f"🟢 [安全] AdverseScore: {total_adverse_score}/100 ➔ 逆選択リスク極小・通常稼働許可"
+            verdict = "ADVERSE_OFF"
+            primary_action = "avoid_off"
+            explanation = f"OFF research_score={total_adverse_score:.0f} episodes={self.total_episodes}"
 
         if ae_latest and "ae_1s" in ae_latest:
             explanation += f" [AE_1s: {ae_latest['ae_1s']:+.1f}bp]"
@@ -335,9 +370,11 @@ class AdverseResearchAgent:
             confidence=round(adverse_score, 3),
             primary_action=primary_action,
             metrics={
-                "agent_rank": "CHIEF_RESEARCH_AGENT",
+                "agent_rank": "RESEARCH_AGENT",
+                "avoidance_on": avoidance_on,
                 "adverse_side": adverse_side,
-                "adverse_score": adverse_score,
+                "adverse_score": total_adverse_score,
+                "research_score": total_adverse_score,
                 "lead_ms_estimated": lead_ms_est,
                 "buy_state": self.state_buy,
                 "sell_state": self.state_sell,
@@ -348,8 +385,8 @@ class AdverseResearchAgent:
                 "ae_summary": ae_summary,
             },
             parameters={"min_lead_ms_threshold": self.min_lead_ms_threshold},
-            hard_veto=hard_veto,
-            emergency_cancel=emergency_cancel,
+            hard_veto=False,
+            emergency_cancel=False,
             explanation=explanation,
         )
         self.latest_conclusion = conclusion
@@ -360,6 +397,28 @@ class AdverseResearchAgent:
         return getattr(self, "latest_conclusion", None)
 
 
+    def _confirm_threshold(self, baseline: float) -> float:
+        """窓成行量に合わせた confirm 閾値。絶対下限 + baseline 比の小さい方。"""
+        return max(self.toxic_taker_threshold, min(0.08, baseline * 0.20))
+
+    def _end_episode(self, side: str, now_ts: float) -> None:
+        if side == "buy":
+            if not self.taker_seen_buy and self.state_buy in ("DEPLETING", "NO_REFILL", "OPP_TAKER"):
+                self.false_episodes += 1
+            self.state_buy = "NORMAL"
+            self.cooldown_until_buy = now_ts + 0.5
+            self.taker_seen_buy = False
+            self.cum_opp_taker_buy = 0.0
+            self.lead_ms_buy = 0.0
+        else:
+            if not self.taker_seen_sell and self.state_sell in ("DEPLETING", "NO_REFILL", "OPP_TAKER"):
+                self.false_episodes += 1
+            self.state_sell = "NORMAL"
+            self.cooldown_until_sell = now_ts + 0.5
+            self.taker_seen_sell = False
+            self.cum_opp_taker_sell = 0.0
+            self.lead_ms_sell = 0.0
+
     def _evaluate_side(
         self,
         side: str,
@@ -369,115 +428,161 @@ class AdverseResearchAgent:
         imbalance: float,
         now_ts: float,
     ) -> Dict[str, Any]:
-        """
-        片側の板崩壊エピソード判定 (CSR-408 / CSR-113 準拠)
+        """片側エピソード v2。
+        fire = tip 比枯渇 AND 絶対減少。confirm = エピソード内累積反対成行。
+        cancel_recommended は常に False（研究専用・執行非接続）。
         """
         is_buy = (side == "buy")
         cur_state = self.state_buy if is_buy else self.state_sell
         baseline = self.tip_baseline_buy if is_buy else self.tip_baseline_sell
         ep_start = self.episode_start_ts_buy if is_buy else self.episode_start_ts_sell
+        cooldown_until = self.cooldown_until_buy if is_buy else self.cooldown_until_sell
+        off = {"score": 0.0, "cancel_recommended": False, "lead_ms": 0.0, "avoidance_on": False}
 
-        score = 0.0
-        cancel_recommended = False
-        lead_ms = 0.0
-
-        # 1. NORMAL -> PRE_ADVERSE (tipのベースライン記録)
         if cur_state == "NORMAL":
-            if tip_depth > 0.05:
+            if now_ts < cooldown_until:
+                return off
+            if tip_depth >= self.min_arm_tip:
                 if is_buy:
                     self.tip_baseline_buy = tip_depth
                     self.state_buy = "PRE_ADVERSE"
                 else:
                     self.tip_baseline_sell = tip_depth
                     self.state_sell = "PRE_ADVERSE"
+            return off
 
-        # 2. PRE_ADVERSE -> DEPLETING (板の急激な枯渇・Rising edge でエピソード開始)
-        elif cur_state == "PRE_ADVERSE":
-            if baseline > 0 and tip_depth <= baseline * self.depletion_ratio_threshold:
-                # 枯渇開始
+        if cur_state == "PRE_ADVERSE":
+            # tip が腕を解くほど薄く、かつ fire 条件未達 → アーム解除（ノイズ）
+            if tip_depth < self.min_arm_tip * 0.5 and (
+                baseline <= 0
+                or tip_depth > baseline * self.depletion_ratio_threshold
+                or (baseline - tip_depth) < self.min_abs_drop
+            ):
+                if is_buy:
+                    self.state_buy = "NORMAL"
+                    self.tip_baseline_buy = 0.0
+                else:
+                    self.state_sell = "NORMAL"
+                    self.tip_baseline_sell = 0.0
+                return off
+
+            drop = baseline - tip_depth if baseline > 0 else 0.0
+            fire = (
+                baseline >= self.min_arm_tip
+                and tip_depth <= baseline * self.depletion_ratio_threshold
+                and drop >= self.min_abs_drop
+            )
+            if fire:
                 if is_buy:
                     self.state_buy = "DEPLETING"
                     self.episode_start_ts_buy = now_ts
                     self.episode_id_buy += 1
+                    self.taker_seen_buy = False
+                    self.cum_opp_taker_buy = 0.0
+                    self.lead_ms_buy = 0.0
                 else:
                     self.state_sell = "DEPLETING"
                     self.episode_start_ts_sell = now_ts
                     self.episode_id_sell += 1
+                    self.taker_seen_sell = False
+                    self.cum_opp_taker_sell = 0.0
+                    self.lead_ms_sell = 0.0
                 self.total_episodes += 1
-                score = 0.60
-            elif tip_depth > baseline * 1.2:
-                # 板が厚くなった場合はベースライン更新
+                self.intercepted_kills += 1
+                return {"score": 1.0, "cancel_recommended": False, "lead_ms": 0.0, "avoidance_on": True}
+            if baseline > 0 and tip_depth > baseline * 1.2:
                 if is_buy:
                     self.tip_baseline_buy = tip_depth
                 else:
                     self.tip_baseline_sell = tip_depth
+            return off
 
-        # 3. DEPLETING / NO_REFILL / OPP_TAKER
-        elif cur_state in ("DEPLETING", "NO_REFILL", "OPP_TAKER"):
-            age_ms = (now_ts - ep_start) * 1000.0
+        if cur_state in ("DEPLETING", "NO_REFILL", "OPP_TAKER"):
+            age_ms = max(0.0, (now_ts - ep_start) * 1000.0) if ep_start > 0 else 0.0
+            if age_ms > self.max_episode_age_ms or (baseline > 0 and tip_depth >= baseline * 0.90):
+                self._end_episode(side, now_ts)
+                return off
 
-            # 安全弁: エピソード最大存続時間 (2.5秒超えで自動リセット: CSR-113)
-            if age_ms > 2500.0:
+            if is_buy:
+                self.cum_opp_taker_buy += max(0.0, float(opp_taker_vol or 0.0))
+                cum = self.cum_opp_taker_buy
+                seen = self.taker_seen_buy
+            else:
+                self.cum_opp_taker_sell += max(0.0, float(opp_taker_vol or 0.0))
+                cum = self.cum_opp_taker_sell
+                seen = self.taker_seen_sell
+
+            lead_ms = self.lead_ms_buy if is_buy else self.lead_ms_sell
+            thr = self._confirm_threshold(baseline)
+            if (not seen) and cum >= thr:
+                lead_ms = age_ms
+                self.confirmed_episodes += 1
+                self.estimated_lead_ms_history.append(lead_ms)
                 if is_buy:
-                    self.state_buy = "NORMAL"
-                else:
-                    self.state_sell = "NORMAL"
-                return {"score": 0.0, "cancel_recommended": False, "lead_ms": 0.0}
-
-            # トキシック成行の加速判定
-            toxic_surge = opp_taker_vol >= self.toxic_taker_threshold
-            dev_adverse = micro_dev <= -100.0  # 不利方向への乖離
-            imb_adverse = imbalance <= -0.20
-
-            raw_score = 0.50
-            if toxic_surge:
-                raw_score += 0.25
-            if dev_adverse:
-                raw_score += 0.15
-            if imb_adverse:
-                raw_score += 0.10
-
-            score = min(1.0, raw_score)
-
-            # RTT (85ms) 以上の先回り可能時間がある場合、即時キャンセル推奨
-            lead_ms = max(0.0, 150.0 - (age_ms % 150.0))
-            if score >= 0.70 and lead_ms >= self.min_lead_ms_threshold:
-                cancel_recommended = True
-                self.intercepted_kills += 1
-
-            # 状態遷移
-            if toxic_surge:
-                if is_buy:
+                    self.taker_seen_buy = True
+                    self.lead_ms_buy = lead_ms
                     self.state_buy = "OPP_TAKER"
                 else:
+                    self.taker_seen_sell = True
+                    self.lead_ms_sell = lead_ms
                     self.state_sell = "OPP_TAKER"
             elif tip_depth <= 0.01:
                 if is_buy:
                     self.state_buy = "NO_REFILL"
                 else:
                     self.state_sell = "NO_REFILL"
+            return {"score": 1.0, "cancel_recommended": False, "lead_ms": lead_ms, "avoidance_on": True}
 
-            # 板が完全に回復（baselineの90%以上）した場合は解除
-            if tip_depth >= baseline * 0.90:
-                if is_buy:
-                    self.state_buy = "NORMAL"
-                else:
-                    self.state_sell = "NORMAL"
+        return off
 
-        return {
-            "score": score,
-            "cancel_recommended": cancel_recommended,
-            "lead_ms": lead_ms,
-        }
+    def _persist_device_state(self, state: Dict[str, Any]) -> None:
+        sig = (
+            bool(state.get("avoidance_on")),
+            state.get("adverse_side", "none"),
+            state.get("episode_id", 0),
+            state.get("confirmed_episodes", 0),
+            state.get("false_episodes", 0),
+        )
+        now = time.time()
+        changed = sig != self._device_sig
+        if not changed and now - self._last_device_write < 1.0:
+            return
+        try:
+            target_path = os.path.join(self.save_dir, "adverse_device_state.json")
+            tmp_path = target_path + ".tmp"
+            payload = {
+                "timestamp": now,
+                "device_version": self.device_version,
+                "avoidance_on": sig[0],
+                "adverse_side": sig[1],
+                "episode_id": sig[2],
+                "total_episodes": state.get("total_episodes", 0),
+                "confirmed_episodes": state.get("confirmed_episodes", 0),
+                "false_episodes": state.get("false_episodes", 0),
+                "confirm_rate": state.get("confirm_rate"),
+                "research_score": state.get("research_score", 0.0),
+                "lead_ms_estimated": state.get("lead_ms_estimated", 0.0),
+            }
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp_path, target_path)
+            self._last_device_write = now
+            self._device_sig = sig
+        except Exception:
+            pass
 
     def _persist_toxic_state(self, toxic_data: Dict[str, Any]):
-        """S2. Toxic Flow 状態のアトミック保存"""
+        """S2. Toxic Flow 状態のアトミック保存。1秒に1回。"""
+        now = time.time()
+        if now - self._last_toxic_write < 1.0:
+            return
         try:
             target_path = os.path.join(self.save_dir, "adverse_toxic_state.json")
             tmp_path = target_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(toxic_data, f, indent=2, ensure_ascii=False)
             os.replace(tmp_path, target_path)
-        except Exception as e:
+            self._last_toxic_write = now
+        except Exception:
             pass
 

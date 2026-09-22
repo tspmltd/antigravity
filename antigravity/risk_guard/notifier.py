@@ -1,4 +1,5 @@
 import os
+from antigravity.discord_mute import discord_muted
 import sys
 import json
 import urllib.request
@@ -90,6 +91,8 @@ class DiscordNotifier:
         return bool(url and url.startswith("http"))
 
     def _post_payload(self, payload: Dict[str, Any], webhook_url: str, max_retries: int = 3) -> bool:
+        if discord_muted():
+            return False
         if not webhook_url or not webhook_url.startswith("http"):
             return False
         headers = {

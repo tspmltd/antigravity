@@ -15,8 +15,8 @@ status() {
     echo "  🚀 Antigravity Autonomous Fleet 稼働状況"
     echo "=========================================================="
     
-    echo -n "1. 取引エンジン (-m antigravity)        : "
-    PID_ENG=$(pgrep -f "antigravity.runtime.runner|-m antigravity" | grep -v "$$" | head -n 1 || true)
+    echo -n "1. 取引エンジン (runtime)               : "
+    PID_ENG=$(pgrep -f "antigravity\.runtime\.runner|-m antigravity([[:space:]]|$)" | grep -v "$$" | head -n 1 || true)
     if [ -n "$PID_ENG" ]; then
         echo "🟢 RUNNING (PID: $PID_ENG)"
     else
@@ -58,7 +58,7 @@ start() {
     echo "[Fleet] 全サービス起動シーケンスを開始します..."
     
     # 1. 取引エンジン
-    PID_ENG=$(pgrep -f "antigravity.runtime.runner|-m antigravity" | grep -v "$$" | head -n 1 || true)
+    PID_ENG=$(pgrep -f "antigravity\.runtime\.runner|-m antigravity([[:space:]]|$)" | grep -v "$$" | head -n 1 || true)
     if [ -z "$PID_ENG" ]; then
         echo "[Fleet] 取引エンジンを起動中..."
         nohup "$VENV_PYTHON" -u -m antigravity --symbol FX_BTC_JPY >> "$DIR/antigravity.log" 2>&1 &
@@ -96,7 +96,7 @@ start() {
 stop() {
     echo "[Fleet] 全サービス停止中..."
     "$DIR/scripts/run_watchdog.sh" stop || true
-    pkill -f "antigravity.runtime.runner|-m antigravity" || true
+    pkill -f "antigravity\.runtime\.runner|-m antigravity([[:space:]]|$)" || true
     pkill -f "run_autonomous_daemon.py" || true
     pkill -f "news_pipeline/scheduler.py" || true
     sleep 2

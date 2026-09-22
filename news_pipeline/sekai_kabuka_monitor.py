@@ -9,6 +9,11 @@
 
 import os
 import io
+import sys
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from antigravity.discord_mute import discord_muted
 import json
 import logging
 from datetime import datetime
@@ -186,6 +191,8 @@ class SekaiKabukaMonitor:
 
     def send_discord_alert(self, movers: List[Dict[str, Any]], chart_image: bytes) -> bool:
         """Discord Webhook にグラフ画像付き Embed を送信"""
+        if discord_muted():
+            return False
         if not self.webhook_url:
             logger.error("[SekaiKabuka] Discord Webhook URL が未設定です。")
             return False

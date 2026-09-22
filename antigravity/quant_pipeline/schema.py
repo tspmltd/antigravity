@@ -43,6 +43,8 @@ class OrderbookMicroSnapshot:
     taker_aggressiveness: float     # taker_vol / depth
     cancel_rate: float = 0.0        # 直近キャンセル率
     refill_rate: float = 0.0        # 直近再配置率
+    last_sell_price: float = 0.0    # この更新で買い板を削った最安の約定
+    last_buy_price: float = 0.0     # この更新で売り板を削った最高の約定
 
 
 @dataclass

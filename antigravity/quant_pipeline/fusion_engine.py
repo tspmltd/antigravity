@@ -137,24 +137,12 @@ class SignalFusionEngine:
 
         intended_action = "buy" if t_dir == "up" or (t_dir == "neutral" and p_side == "buy") else "sell"
 
-        # Adverse Selection 防御: エントリー方向に対して板の急変・崩落予兆がある場合
+        # 微細構造の逆選択スコアは確信度の補正だけに使う。数量ゼロにはしない。
         if intended_action == adverse_side and adverse_score > 0.0:
             penalty = max(0.0, 1.0 - (adverse_score * 0.8))
             final_confidence *= penalty
-            if adverse_warning or adverse_score >= 0.60:
-                size_mult = 0.0  # 逆行トラップを検知してエントリー完全遮断
 
-        # ADVERSE 専門エージェントからの直接ハード拒否権 (Hard Veto Gate & Cancel)
-        adv_side = self.latest_adverse.get("adverse_side", "none")
-        adv_score = float(self.latest_adverse.get("adverse_score", 0.0))
-        adv_cancel = bool(self.latest_adverse.get("cancel_recommendation", False))
-        if adv_cancel:
-            size_mult = 0.0
-            final_confidence = 0.0
-            adverse_warning = True
-        elif (intended_action == adv_side and adv_score >= 0.70):
-            size_mult = 0.0  # 発注を完全に拒否
-            final_confidence = 0.0
+        # Adverse は研究メモのみ。融合の数量・アクションは動かさない。
 
         # マクロ急変ショック連携 (外部センチネルからの急変状態)
         try:
@@ -177,11 +165,9 @@ class SignalFusionEngine:
             size_mult *= 0.50          # 通信遅延時はロット半減
 
         # 4. 最終アクション決定
-        if adv_cancel:
-            action = "cancel"  # 逆選択直撃による緊急退避・指値キャンセル
-        elif final_confidence >= self.confidence_threshold and size_mult > 0.0:
+        if final_confidence >= self.confidence_threshold and size_mult > 0.0:
             action = intended_action
-        elif final_confidence >= 0.20 and not adverse_warning:
+        elif final_confidence >= 0.20:
             action = "hold"
         else:
             action = "exit"

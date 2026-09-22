@@ -185,6 +185,18 @@ class ApprovedStrategyArena:
                 pass
         return {}
 
+    def _avoidance_on(self) -> bool:
+        path = os.path.join(BASE_DIR, "data", "adverse_device_state.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if time.time() - float(data.get("timestamp", 0)) < 5.0:
+                    return bool(data.get("avoidance_on", False))
+            except Exception:
+                pass
+        return False
+
     def _get_adverse_score(self) -> float:
         """Adverse Score (0-100) を adverse_score_state.json から取得"""
         if os.path.exists(ADVERSE_SCORE_STATE_PATH):
@@ -391,11 +403,9 @@ class ApprovedStrategyArena:
                         self._log_to_file(f"[{s.strat_id}] 🛡️ BE5 Armed: 含み益 +{current_pnl_bp:.2f}bp 到達 (建値撤退防衛起動)")
 
                     close_reason = None
-                    # 1. Adverse 緊急退避 (Score >= 80 または合議HALT: 発注禁止・即時撤退)
-                    if adverse_score >= 80.0 or adverse_risk_level == "HALT":
-                        close_reason = f"EMERGENCY_ADVERSE_EXIT (Score: {adverse_score:.1f} >= 80, PnL: ¥{current_pnl:+.1f})"
-                    # 2. BE5 建値防衛発動: 含み益が戻って +0.2bp (微益) 以下に落ちたら即手仕舞い
-                    elif s.be_armed and current_pnl_bp <= 0.2:
+                    # Adverse は研究フラグのみ。建玉は戦略ルールで閉じる。
+                    # 1. BE5 建値防衛発動: 含み益が戻って +0.2bp (微益) 以下に落ちたら即手仕舞い
+                    if s.be_armed and current_pnl_bp <= 0.2:
                         close_reason = f"BE5_PROFIT_DEFENSE (MFE: +{s.mfe_bp:.1f}bp -> {current_pnl_bp:+.2f}bp, 利確防衛)"
                     # 3. テイクプロフィット (MM戦略はMaker指値決済: BUYならbest_ask, SELLならbest_bid)
                     elif (is_mm and (((best_ask - s.entry_price if s.position == 'buy' else s.entry_price - best_bid) * s.position_size) >= take_profit)) or (current_pnl >= take_profit):
@@ -424,11 +434,7 @@ class ApprovedStrategyArena:
                 # (C) 新規エントリーまたはシグナル決済
                 if s.position is None:
                     if sig in (1, -1):
-                        # エントリー前遮断フィルター (AGENT合議報告に基づく統合防衛)
-                        # 1. Adverse Gate (Score >= 60 または合議DANGERは新規エントリー拒否)
-                        if adverse_score >= 60.0 or adverse_risk_level in ["HALT", "DANGER"]:
-                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="adverse_gate")
-                            continue
+                        # Adverse は研究フラグのみ。新規エントリーは止めない。
 
                         # 2. S2. Toxic Flow 危険例遮断 (Toxic Score >= 75 または方向別Toxic急変)
                         if toxic_score >= 75.0:

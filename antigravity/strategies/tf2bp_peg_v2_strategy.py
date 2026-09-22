@@ -43,7 +43,7 @@ class TF2BP_PEG_v2_Strategy:
             "reverse_noise_max": 0.25,      # 逆方向ノイズ上限
             "order_size_btc": 0.001,        # 基本ロット
             "max_hold_sec": 1200.0,         # 最大保有秒数 (20分)
-            "max_wait_ticks": 15,           # PEG指値の最長待ち時間 (約30秒)
+            "max_wait_sec": 30.0,           # PEG指値の最長待ち時間
         }
         if parameters:
             self.params.update(parameters)
@@ -124,6 +124,7 @@ class TF2BP_PEG_v2_Strategy:
         refill_rate: float = 0.0,
         adverse_score: float = 0.0,
         cancel_recommendation: bool = False,
+        avoidance_on: bool = False,
     ) -> Dict[str, Any]:
         """
         1 Tick ごとの戦略評価 & 約定・エグジット判定
@@ -143,9 +144,13 @@ class TF2BP_PEG_v2_Strategy:
         # 1. 指値待機中 (PENDING) の約定・キャンセル判定
         # -------------------------------------------------------------
         if self.pending_order:
-            self.pending_order["wait_ticks"] += 1
             p_side = self.pending_order["side"]
             p_price = self.pending_order["price"]
+            created = self.pending_order.get("created_at")
+            if not created:
+                created = now
+                self.pending_order["created_at"] = now
+            waited = now - float(created)
 
             # 約定判定 (相手気配が自分の指値にタッチしたか)
             filled = False
@@ -171,8 +176,8 @@ class TF2BP_PEG_v2_Strategy:
                 }
 
             # 逆選択スコア急騰または待機タイムアウトによる注文キャンセル
-            if adverse_score >= 0.65 or self.pending_order["wait_ticks"] >= self.params["max_wait_ticks"]:
-                reason = f"PEG_V2_CANCEL (Wait:{self.pending_order['wait_ticks']}t, Adv:{adverse_score:.2f})"
+            if waited >= float(self.params["max_wait_sec"]):
+                reason = f"PEG_V2_CANCEL (Wait:{waited:.1f}s)"
                 self.pending_order = None
                 return {"action": "cancel_pending", "reason": reason}
 
@@ -203,8 +208,7 @@ class TF2BP_PEG_v2_Strategy:
                 trail_stop_price = self.peak_price * (1.0 - self.params["trail_stop_bp"] * 0.0001)
 
                 # (A) 逆選択退避
-                if cancel_recommendation or adverse_score >= 0.70:
-                    return {"action": "cancel", "reason": f"ADVERSE_EVACUATE (Adv:{adverse_score:.2f})", "pnl": pnl}
+                # Adverse は研究フラグのみ。
 
                 # (B) BE5 建値防衛エグジット (MFE 5bp到達後、利益が0.2bp以下に反落したら即時微小利確撤退)
                 if self.be_armed and pnl_bp <= 0.2:
@@ -233,8 +237,7 @@ class TF2BP_PEG_v2_Strategy:
                 target_price = self.entry_price * (1.0 - self.params["target_bp"] * 0.0001)
                 trail_stop_price = self.peak_price * (1.0 + self.params["trail_stop_bp"] * 0.0001)
 
-                if cancel_recommendation or adverse_score >= 0.70:
-                    return {"action": "cancel", "reason": f"ADVERSE_EVACUATE (Adv:{adverse_score:.2f})", "pnl": pnl}
+                # Adverse は研究フラグのみ。
 
                 if self.be_armed and pnl_bp <= 0.2:
                     return {"action": "exit", "reason": f"BE5_STOP (MFE:{self.peak_mfe_bp:.1f}bp後 建値防衛)", "pnl": max(0.0, pnl)}
@@ -264,8 +267,7 @@ class TF2BP_PEG_v2_Strategy:
         flow_sum = sum(self.flow_history)
         noise_ratio = len([f for f in self.flow_history if (f < 0 if mom_bp > 0 else f > 0)]) / len(self.flow_history)
 
-        if adverse_score >= 0.60:
-            return {"action": "hold", "reason": f"ADVERSE_VETO (Adv:{adverse_score:.2f})"}
+        # Adverse は研究フラグのみ。
 
         # 買いシグナル検知 ➔ PEG_v2 指値算出
         if mom_bp >= self.params["micro_mom_bp"] and flow_sum >= 2.0 and noise_ratio <= self.params["reverse_noise_max"]:
@@ -281,7 +283,6 @@ class TF2BP_PEG_v2_Strategy:
             self.pending_order = {
                 "side": "buy",
                 "price": peg_px,
-                "wait_ticks": 0,
                 "created_at": now,
             }
             return {
@@ -305,7 +306,6 @@ class TF2BP_PEG_v2_Strategy:
             self.pending_order = {
                 "side": "sell",
                 "price": peg_px,
-                "wait_ticks": 0,
                 "created_at": now,
             }
             return {

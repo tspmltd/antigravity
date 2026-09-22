@@ -1,4 +1,5 @@
 import os
+from antigravity.discord_mute import discord_muted
 import sys
 import json
 import urllib.request
@@ -823,6 +824,8 @@ class DiscordNotifier:
 
     def _post_payload(self, payload: Dict[str, Any], webhook_url: Optional[str] = None) -> bool:
         """Webhook URLへJSONペイロードをPOST"""
+        if discord_muted():
+            return False
         url = webhook_url or self.report_webhook_url
         if not url:
             return False

@@ -23,7 +23,7 @@ from typing import Dict, Any, Optional
 from .event_bus import EventBus
 from .parquet_logger import ParquetBatchLogger
 from .schema import OrderbookMicroSnapshot
-from .ingestion import MarketDataIngestion
+from .ingestion import MarketDataIngestion, LiveBoardFeed
 from .quant_discord_notifier import QuantDiscordNotifier
 from .agents.adverse_agent import AdverseResearchAgent
 from ..strategies.umm_strategy import UMMStrategy
@@ -75,9 +75,12 @@ class DryRunObservation24h:
         self.umm_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
         self.tf2bp_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
         self.tf2bp_v2_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        self.umm_bid = None
+        self.umm_ask = None
 
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        self._restore_ledger()
 
     def _load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
@@ -98,7 +101,7 @@ class DryRunObservation24h:
         print("=" * 80)
         print(f"対象銘柄          : {self.symbol}")
         print(f"観測期間          : {self.duration_sec / 3600:.1f} 時間 (86,400 秒)")
-        print(f"サンプリング間隔  : {self.interval_sec} 秒")
+        print("入力              : 板と約定のプッシュ（2秒待ちなし）")
         print(f"Discord レポート  : {self.discord_report_sec / 60:.0f} 分ごと")
         print(f"パラメータ制御    : 🔒 自動調整禁止 (完全手動指示・固定パラメータ)")
         print(f"UMM パラメータ    : {self.umm.params}")
@@ -118,6 +121,10 @@ class DryRunObservation24h:
         signal.signal(signal.SIGTERM, _sig_handler)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)  # SIGHUP は無視して常駐継続
 
+        self.feed = LiveBoardFeed(self.ingestion)
+        self.feed.start()
+        self._last_status_print = 0.0
+
         try:
             while True:
                 now = time.time()
@@ -128,14 +135,15 @@ class DryRunObservation24h:
                     self._send_discord_summary_report(final=True)
                     break
 
-                self.step_count += 1
-                snap = self.ingestion.poll_once()
+                snap = self.feed.get(0.5)
+                if snap is not None:
+                    self.step_count += 1
 
                 if snap:
                     # 1. Adverse 判定の取得
-                    adv_state = self.adverse_agent.latest_state
+                    adv_state = self.adverse_agent.latest_state or {}
                     adv_score = adv_state.get("adverse_score", 0.0)
-                    cancel_rec = adv_state.get("cancel_recommendation", False)
+                    adv_on = bool(adv_state.get("avoidance_on", False))
 
                     # 2. UMM 戦略評価
                     umm_res = self.umm.on_tick(
@@ -144,7 +152,7 @@ class DryRunObservation24h:
                         best_ask=snap.best_ask,
                         imbalance=snap.imbalance,
                         adverse_score=adv_score,
-                        cancel_recommendation=cancel_rec,
+                        avoidance_on=adv_on,
                     )
                     self._process_strategy_action("UMM", self.umm, umm_res, snap)
 
@@ -156,7 +164,9 @@ class DryRunObservation24h:
                         taker_vol_bid=snap.taker_volume_bid,
                         taker_vol_ask=snap.taker_volume_ask,
                         adverse_score=adv_score,
-                        cancel_recommendation=cancel_rec,
+                        avoidance_on=adv_on,
+                        bid_depth_1=snap.bid_depth_1,
+                        ask_depth_1=snap.ask_depth_1,
                     )
                     self._process_strategy_action("TF2BP", self.tf2bp, tf2bp_res, snap)
 
@@ -173,7 +183,7 @@ class DryRunObservation24h:
                         cancel_rate=snap.cancel_rate,
                         refill_rate=snap.refill_rate,
                         adverse_score=adv_score,
-                        cancel_recommendation=cancel_rec,
+                        avoidance_on=adv_on,
                     )
                     self._process_strategy_action("TF2BP_PEG_v2", self.tf2bp_v2, tf2bp_v2_res, snap)
 
@@ -190,21 +200,19 @@ class DryRunObservation24h:
                     tf_pos_str = f"{self.tf2bp.position_side.upper() if self.tf2bp.position_side else 'FLAT'} ({self.tf2bp.total_pnl_bp:+.1f}bp)"
                     tf_v2_pos_str = f"{self.tf2bp_v2.position_side.upper() if self.tf2bp_v2.position_side else 'FLAT'} ({self.tf2bp_v2.total_pnl_bp:+.1f}bp)"
 
-                    print(
-                        f" [{time_str}] | {snap.mid_price:12,.0f} | ¥{spread_val:5,.0f} | {adv_str:7} | "
-                        f"{umm_pos_str:15} | {tf_pos_str:15} | PEG_v2:{tf_v2_pos_str}",
-                        flush=True
-                    )
-
-                    # 状態ファイル保存 (アトミック)
-                    self._persist_state(snap, elapsed_sec)
+                    if now - self._last_status_print >= 1.0:
+                        print(
+                            f" [{time_str}] | {snap.mid_price:12,.0f} | ¥{spread_val:5,.0f} | {adv_str:7} | "
+                            f"{umm_pos_str:15} | {tf_pos_str:15} | PEG_v2:{tf_v2_pos_str}",
+                            flush=True
+                        )
+                        self._persist_state(snap, elapsed_sec)
+                        self._last_status_print = now
 
                     # 定期 Discord レポート
                     if now - self.last_report_time >= self.discord_report_sec:
                         self._send_discord_summary_report(final=False)
                         self.last_report_time = now
-
-                time.sleep(self.interval_sec)
 
         except KeyboardInterrupt:
             print("\n[24hRunner] ユーザー中断を受信しました。")
@@ -215,6 +223,8 @@ class DryRunObservation24h:
             self._log_to_file(f"[FATAL_ERROR] {e}\n{traceback.format_exc()}")
             self._send_discord_summary_report(final=True, interrupted=True)
         finally:
+            if getattr(self, "feed", None) is not None:
+                self.feed.stop()
             self.logger.stop()
             print("✅ 24時間観察ログおよび Parquet 保存を完了しました。")
 
@@ -229,9 +239,34 @@ class DryRunObservation24h:
         else:
             acc = self.tf2bp_account
 
+        umm_fill_price = None
+        if name == "UMM" and not strat.position_side:
+            if action == "quote":
+                self.umm_bid = res.get("bid_quote")
+                self.umm_ask = res.get("ask_quote")
+                side, px = type(strat).maker_fill(
+                    self.umm_bid,
+                    self.umm_ask,
+                    getattr(snap, "last_sell_price", 0.0),
+                    getattr(snap, "last_buy_price", 0.0),
+                    snap.taker_volume_bid,
+                    snap.taker_volume_ask,
+                )
+                if side:
+                    action = side
+                    umm_fill_price = px
+            else:
+                self.umm_bid = None
+                self.umm_ask = None
+
         if action in ("buy", "sell"):
             if not strat.position_side:
-                fill_price = snap.best_ask if action == "buy" else snap.best_bid
+                if umm_fill_price is not None:
+                    fill_price = umm_fill_price
+                elif name == "TF2BP":
+                    fill_price = float(res.get("entry_price") or snap.mid_price)
+                else:
+                    fill_price = snap.best_ask if action == "buy" else snap.best_bid
                 strat.record_trade(action, fill_price, 0.0)
                 acc["trades"] += 1
                 log_line = f"[{name}] 📥 新規エントリー: {action.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
@@ -284,7 +319,10 @@ class DryRunObservation24h:
 
         elif action in ("exit", "cancel"):
             if strat.position_side:
-                fill_price = snap.best_bid if strat.position_side == "buy" else snap.best_ask
+                if name == "TF2BP":
+                    fill_price = float(snap.mid_price)
+                else:
+                    fill_price = snap.best_bid if strat.position_side == "buy" else snap.best_ask
                 pnl = res.get("expected_pnl", res.get("pnl", 0.0))
                 strat.record_trade(action, fill_price, pnl, mid_price=snap.mid_price)
                 acc["pnl"] += pnl
@@ -307,6 +345,71 @@ class DryRunObservation24h:
                     exit_reason=res.get("reason", action),
                     theory_spread_bp=theory_spread_bp,
                 )
+
+
+    def _ledger_rows(self, strat: Any):
+        cutoff = time.time() - 48 * 3600.0
+        rows = []
+        for t in getattr(strat, "trades_history", []) or []:
+            try:
+                ts = float(t.get("ts", 0))
+            except (TypeError, ValueError):
+                continue
+            if ts < cutoff:
+                continue
+            rows.append({
+                "ts": ts,
+                "side": t.get("side"),
+                "exit_side": t.get("exit_side"),
+                "fill_price": t.get("fill_price"),
+                "pnl_jpy": t.get("pnl_jpy", 0),
+                "pnl_bp": t.get("pnl_bp", 0),
+                "is_win": bool(t.get("is_win", False)),
+            })
+        return rows[-2000:]
+
+    def _apply_ledger(self, state: Dict[str, Any]) -> None:
+        mapping = {
+            "umm": self.umm,
+            "tf2bp": self.tf2bp,
+            "tf2bp_peg_v2": self.tf2bp_v2,
+        }
+        for key, strat in mapping.items():
+            block = state.get(key) or {}
+            rows = []
+            for t in block.get("trades") or []:
+                if not isinstance(t, dict):
+                    continue
+                try:
+                    ts = float(t.get("ts"))
+                except (TypeError, ValueError):
+                    continue
+                rows.append({
+                    "ts": ts,
+                    "side": t.get("side"),
+                    "exit_side": t.get("exit_side"),
+                    "fill_price": t.get("fill_price"),
+                    "pnl_jpy": float(t.get("pnl_jpy") or 0),
+                    "pnl_bp": float(t.get("pnl_bp") or 0),
+                    "is_win": bool(t.get("is_win", False)),
+                })
+            strat.trades_history = rows
+            if "total_trades" in block:
+                strat.total_trades = int(block.get("total_trades") or 0)
+                strat.win_trades = int(block.get("win_trades") or 0)
+                strat.total_pnl = float(block.get("total_pnl") or 0)
+                strat.total_pnl_bp = float(block.get("total_pnl_bp") or 0)
+
+    def _restore_ledger(self) -> None:
+        if not os.path.exists(STATE_PATH):
+            return
+        try:
+            with open(STATE_PATH, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            return
+        if isinstance(state, dict):
+            self._apply_ledger(state)
 
     def _persist_state(self, snap: OrderbookMicroSnapshot, elapsed_sec: float):
         try:
@@ -336,6 +439,7 @@ class DryRunObservation24h:
                     "params": self.umm.params,
                     "frozen": self.umm.frozen_mode,
                     "user_directive": self.umm.last_user_directive,
+                    "trades": self._ledger_rows(self.umm),
                 },
                 "tf2bp": {
                     "position": self.tf2bp.position_side or "FLAT",
@@ -348,6 +452,7 @@ class DryRunObservation24h:
                     "params": self.tf2bp.params,
                     "frozen": self.tf2bp.frozen_mode,
                     "user_directive": self.tf2bp.last_user_directive,
+                    "trades": self._ledger_rows(self.tf2bp),
                 },
                 "tf2bp_peg_v2": {
                     "position": self.tf2bp_v2.position_side or ("PENDING" if self.tf2bp_v2.pending_order else "FLAT"),
@@ -361,6 +466,7 @@ class DryRunObservation24h:
                     "params": self.tf2bp_v2.params,
                     "frozen": self.tf2bp_v2.frozen_mode,
                     "user_directive": self.tf2bp_v2.last_user_directive,
+                    "trades": self._ledger_rows(self.tf2bp_v2),
                 },
             }
             tmp = f"{STATE_PATH}.tmp"
@@ -397,7 +503,7 @@ class DryRunObservation24h:
                 },
                 {
                     "name": "② TF2BP (2bp Micro Trend - CSR-499 Baseline: FROZEN)",
-                    "value": f"• 初動閾値: `{self.tf2bp.params['micro_mom_bp']} bp` | 目標: `{self.tf2bp.params['target_bp']} bp` | トレール: `{self.tf2bp.params['trail_stop_bp']} bp`\n• 逆ノイズ上限: `{self.tf2bp.params['reverse_noise_max']*100:.0f}%` | ロット: `{self.tf2bp.params['order_size_btc']} BTC`",
+                    "value": f"• 10秒足 / 買いのみ / 入口 {self.tf2bp.params['thr']} / P2 {self.tf2bp.params['p2_min']} / 出口 {self.tf2bp.params['exit']}\n• 紙上成行は中値 | ロット: `{self.tf2bp.params['order_size_btc']} BTC`",
                     "inline": False,
                 },
                 {

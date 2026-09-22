@@ -132,12 +132,7 @@ class SafetyGate:
         if fake_bo:
             return False, "板のフェイクブレイク検知 (Fake Breakout Guard)"
 
-        # 4.1. Adverse Selection (逆選択・急激な逆行予兆) 先回り遮断
-        adverse_flag = bool(signal.get("adverse_warning_flag", False))
-        adverse_side = signal.get("adverse_risk_side", "none")
-        adverse_score = float(signal.get("adverse_risk_score", 0.0))
-        if action == adverse_side and (adverse_flag or adverse_score >= 0.60):
-            return False, f"Adverse Selection 逆行先回り遮断 (スコア: {adverse_score:.2f}, Micro-Price/板厚崩落検知)"
+        # 4.1. Adverse は研究フラグ。SafetyGate では新規を止めない。
 
         required_conf = self.config.warning_shock_min_confidence if shock.shock_active else self.config.min_confidence
         if confidence < required_conf:

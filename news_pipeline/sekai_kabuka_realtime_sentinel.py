@@ -20,6 +20,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from antigravity.discord_mute import discord_muted
+
 import time
 import json
 import logging
@@ -612,6 +614,8 @@ class RealtimeMoverSentinel:
         chart_image: bytes
     ) -> bool:
         """Discord Webhook へリアルタイム急変速報を送信"""
+        if discord_muted():
+            return False
         if not self.webhook_url:
             logger.error("[Sentinel] Webhook URL未設定")
             return False
@@ -686,6 +690,8 @@ class RealtimeMoverSentinel:
 
     def send_release_alert(self, reason: str) -> bool:
         """Discord Webhook へ防護自動解除の通知を送信"""
+        if discord_muted():
+            return False
         if not self.webhook_url:
             return False
 

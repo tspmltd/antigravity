@@ -40,6 +40,7 @@ class AdverseScoreEngine:
     ):
         self.save_dir = save_dir
         self.state_file = os.path.join(self.save_dir, "adverse_score_state.json")
+        self._last_state_write = 0.0
         os.makedirs(self.save_dir, exist_ok=True)
 
     def calculate_adverse_score(
@@ -207,10 +208,14 @@ class AdverseScoreEngine:
         return result
 
     def _persist_state(self, state_data: Dict[str, Any]):
+        now = time.time()
+        if now - self._last_state_write < 1.0:
+            return
         try:
             tmp = self.state_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(state_data, f, indent=2, ensure_ascii=False)
             os.replace(tmp, self.state_file)
+            self._last_state_write = now
         except Exception:
             pass

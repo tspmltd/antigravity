@@ -27,19 +27,16 @@ class MicrostructureAgent:
         pressure_side = "none"
         pressure_score = 0.0
 
-        if imb >= 0.20 and taker_buy >= taker_sell:
+        if imb >= 0.20 and taker_buy > taker_sell and taker_buy >= 0.01:
             pressure_side = "buy"
             # Imbalanceの強さとTaker攻撃性を合成
             raw_score = imb * 1.2 + (snap.taker_aggressiveness * 0.4)
             pressure_score = min(1.0, max(0.0, raw_score))
-        elif imb <= -0.20 and taker_sell >= taker_buy:
+        elif imb <= -0.20 and taker_sell > taker_buy and taker_sell >= 0.01:
             pressure_side = "sell"
             raw_score = abs(imb) * 1.2 + (snap.taker_aggressiveness * 0.4)
             pressure_score = min(1.0, max(0.0, raw_score))
-        elif abs(imb) >= 0.40:
-            # Taker約定がなくとも板厚が極端に偏っている場合
-            pressure_side = "buy" if imb > 0 else "sell"
-            pressure_score = min(1.0, abs(imb))
+        # imb 単独では pressure を立てない（成行確認なしは観測のみ）
 
         # 2. フェイクブレイク判定 (cancel率が高く、Taker継続性がないだまし)
         fake_breakout = (snap.cancel_rate >= 0.55 and snap.taker_aggressiveness < 0.15)
@@ -47,21 +44,21 @@ class MicrostructureAgent:
         # 3. レイテンシーリスク判定 (API遅延が閾値超え)
         latency_risk = (snap.latency_ms >= self.latency_threshold_ms)
 
-        # 4. Adverse Selection (逆選択・急激な逆行リスク) の先回り予兆判定
+        # 4. Adverse Selection 予兆 — 研究フラグ。執行 veto には使わない
         adverse_side = "none"
         adverse_score = 0.0
         adverse_warning = False
 
-        # 買いへの逆選択リスク (下落崩落の予兆)
+        # 買いへの逆選択リスク (下落崩落の予兆) — tip+成行の両方が必要
         adverse_buy_factors = []
         if snap.micro_dev <= -150.0:
             adverse_buy_factors.append(min(1.0, abs(snap.micro_dev) / 800.0) * 0.4)
         if snap.bid_depth_1 < max(0.001, snap.ask_depth_1 * 0.6):
-            adverse_buy_factors.append(0.3)
+            adverse_buy_factors.append(0.25)
         if imb <= -0.15:
-            adverse_buy_factors.append(min(1.0, abs(imb)) * 0.3)
-        if taker_sell > taker_buy:
-            adverse_buy_factors.append(0.2)
+            adverse_buy_factors.append(min(1.0, abs(imb)) * 0.2)
+        if taker_sell > taker_buy and taker_sell >= 0.01:
+            adverse_buy_factors.append(0.35)
 
         raw_adverse_buy = sum(adverse_buy_factors)
 
@@ -70,23 +67,26 @@ class MicrostructureAgent:
         if snap.micro_dev >= 150.0:
             adverse_sell_factors.append(min(1.0, abs(snap.micro_dev) / 800.0) * 0.4)
         if snap.ask_depth_1 < max(0.001, snap.bid_depth_1 * 0.6):
-            adverse_sell_factors.append(0.3)
+            adverse_sell_factors.append(0.25)
         if imb >= 0.15:
-            adverse_sell_factors.append(min(1.0, abs(imb)) * 0.3)
-        if taker_buy > taker_sell:
-            adverse_sell_factors.append(0.2)
+            adverse_sell_factors.append(min(1.0, abs(imb)) * 0.2)
+        if taker_buy > taker_sell and taker_buy >= 0.01:
+            adverse_sell_factors.append(0.35)
 
         raw_adverse_sell = sum(adverse_sell_factors)
 
-        if raw_adverse_buy >= 0.50 and raw_adverse_buy > raw_adverse_sell:
-            adverse_side = "buy"  # 買い手にとっての逆選択 (直後に急落)
+        # 成行確認が無い adverse は warning 不可
+        buy_confirmed = taker_sell >= 0.01
+        sell_confirmed = taker_buy >= 0.01
+
+        if raw_adverse_buy >= 0.50 and raw_adverse_buy > raw_adverse_sell and buy_confirmed:
+            adverse_side = "buy"
             adverse_score = min(1.0, round(raw_adverse_buy, 3))
             adverse_warning = (raw_adverse_buy >= 0.65)
-        elif raw_adverse_sell >= 0.50 and raw_adverse_sell > raw_adverse_buy:
-            adverse_side = "sell"  # 売り手にとっての逆選択 (直後に踏み上げ急騰)
+        elif raw_adverse_sell >= 0.50 and raw_adverse_sell > raw_adverse_buy and sell_confirmed:
+            adverse_side = "sell"
             adverse_score = min(1.0, round(raw_adverse_sell, 3))
             adverse_warning = (raw_adverse_sell >= 0.65)
-
         micro_state = {
             "timestamp": snap.timestamp,
             "pressure_side": pressure_side,
@@ -102,17 +102,16 @@ class MicrostructureAgent:
         self.latest_state = micro_state
         self.bus.publish("micro_state", micro_state)
 
-        # 結論の策定 (4AGENT 統一インターフェース)
+        # 結論の策定 (研究表示。hard_veto は常に False — cancel_rate 誤警報で執行遮断しない)
         verdict = "NEUTRAL"
         primary_action = "hold"
-        hard_veto = fake_breakout
         explanation = f"Imbalance: {snap.imbalance:+.2f}, MicroDev: {snap.micro_dev:+.0f}円"
 
         if fake_breakout:
-            verdict = "FAKE_BREAKOUT_AVOID"
-            primary_action = "veto"
-            explanation += " [警告: 板だましキャンセル多発・エントリー遮断]"
-        elif pressure_score >= 0.30:
+            verdict = "FAKE_BREAKOUT_OBSERVE"
+            primary_action = "hold"
+            explanation += " [観測: cancel高・taker弱]"
+        elif pressure_score >= 0.30 and pressure_side != "none":
             verdict = f"{pressure_side.upper()}_PRESSURE"
             primary_action = pressure_side
             explanation += f" [板圧力: {pressure_side.upper()} 強度{pressure_score:.2f}]"
@@ -130,9 +129,12 @@ class MicrostructureAgent:
                 "pressure_score": pressure_score,
                 "fake_breakout": fake_breakout,
                 "latency_risk": latency_risk,
+                "adverse_risk_side": adverse_side,
+                "adverse_risk_score": adverse_score,
+                "adverse_warning": adverse_warning,
             },
             parameters={},
-            hard_veto=hard_veto,
+            hard_veto=False,
             emergency_cancel=False,
             explanation=explanation,
         )

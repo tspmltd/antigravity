@@ -659,6 +659,37 @@ Signal Score (アルファ) vs Adverse Score (逆選択) の相関・侵食度�
   - Adverse Score が上昇するほど、実損益（PnL）が統計的に有意に悪化する。
 - **回帰スロープ**: **`β = -0.056 bp / pt`**
   - Adverse Score が 10pt 悪化するごとに、トレード損益が平均 `0.56 bp` 侵食される。
-- **司令塔認定 (Commander Certified)**:
-  - 「高Signalでも高Adverseは勝率0%、期待値が2倍以上悪化する」という事実が実トレードにより証明され、Adverse Gate による遮断がトレード収益性の絶対的防壁であることが統計的に立証された。
+- **司令塔認定 (Commander Certified)** — **§22 で撤回**。当時は p 値ゲート無しの緩い認定だった。
+
+---
+
+## 22. 装置精度破綻の診断と個別改修 (2026-09-22)
+
+### 背景
+ユーザー指摘: ANTIGRAVITY はプラットフォーム枠はあるが、**個別装置の精度がひどく使えない**。
+実測: Adverse fire 多数 / confirm **0**、Toxic は taker=0 なのに cancel で警報、司令塔認定は **p≈0.91 で certified=True**（虚偽）。
+
+### 執行からの切断（研究専用）
+- `cancel_recommendation` / `hard_veto` / `emergency_cancel` を Adverse 経路で常時 False
+- UMM / TF2BP / PEG / Fusion / Arena は `avoidance_on` で退避・遮断しない
+- Dry-run は戦略ルールのみで entry/exit
+
+### 6装置の見直し改修
+| # | 装置 | 版 | 要点 |
+| :--- | :--- | :--- | :--- |
+| 1 | Adverse episode SM | `episode_sm_v2` | arm tip≥0.08、比枯渇＋絶対減少で fire、累積反対成行で confirm、false 計上 |
+| 2 | Toxic Flow | `toxic_v2` | 反対成行が主信号。成行なしは score≤35（cancel 単独警報禁止） |
+| 3 | 司令塔認定 | 統計ゲート | n≥30, r<-0.25, **p<0.05**, 象限 n≥10, Q1>Q2。現状 **未認定** (`p_ge_0.05`) |
+| 4 | DuckDB Optimizer | — | データ0で `INSUFFICIENT_DATA`（`WEIGHTS_OPTIMAL` 廃止） |
+| 5 | Microstructure | — | imb 単独 pressure 廃止、`hard_veto` 常時 False |
+| 6 | TrendFollow | — | サンプル不足は `WARMUP` / hold |
+
+### テスト
+- `tests/test_adverse_episode_sm_v2.py`
+- `tests/test_toxic_flow_v2.py`
+- 既存 `test_four_agents_integration` (test_01 / test_02) OK
+
+### 運用メモ
+- これは「嘘をつかない計測」への復旧段階。confirm 率が揃うまで装置を執行・採用判定に使わない。
+- LIVE 実発注は引き続き OFF（`ENABLE_REAL_TRADING=false`）。
 

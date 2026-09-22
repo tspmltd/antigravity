@@ -318,9 +318,18 @@ class WatchdogSentinel:
         except Exception as ex:
             return f"(ログ読み取り失敗: {ex})"
 
+    def fleet_stopped(self) -> bool:
+        return os.path.exists(os.path.join(self.base_dir, "data", "FLEET_STOPPED.flag"))
+
     def check_and_recover_services(self):
         """全サービスのプロセス死活およびログ更新ハートビートを診断"""
         now = time.time()
+        if self.fleet_stopped():
+            if not getattr(self, "_fleet_stop_noted", False):
+                print("[Watchdog] FLEET_STOPPED.flag があるため、停止中のサービスは再起動しません", flush=True)
+                self._fleet_stop_noted = True
+            return
+        self._fleet_stop_noted = False
 
         for svc_id, svc in self.services.items():
             # 旧来の単体逆張りLIVEエンジンは廃止

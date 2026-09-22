@@ -6,7 +6,12 @@ Discord Webhook 送信モジュール (notifier.py)
 """
 
 import os
+import sys
 import time
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from antigravity.discord_mute import discord_muted
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -55,6 +60,8 @@ class DiscordNotifier:
         最大3回リトライ、429レートリミット待機に対応。
         """
         target_url = webhook_url or self.webhook_url
+        if discord_muted():
+            return False
         if not target_url:
             logger.error("[Notifier] Webhook URLが設定されていません。")
             return False

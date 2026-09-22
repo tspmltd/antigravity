@@ -99,11 +99,24 @@ class AlphaVsAdverseAnalyzer:
         # 2. 3軸 4象限マトリクス (Signal × Adverse)
         quadrants = self._calculate_quadrants(data_points)
 
-        # 3. 司令塔認定判定 (Commander Certification)
-        # 条件: r < -0.25 (負の相関) かつ Q1(高Sig・低Adv) の期待値が Q2(高Sig・高Adv) を上回る
+        # 3. 司令塔認定判定 — 統計ゲート必須（p・n・象限件数）。緩い r だけでは認定しない。
         q1_pnl = quadrants["Q1_SweetSpot"]["expected_pnl_bp"]
         q2_pnl = quadrants["Q2_ToxicTrap"]["expected_pnl_bp"]
-        is_commander_certified = (corr_r < -0.15) and (q1_pnl > q2_pnl)
+        q1_n = quadrants["Q1_SweetSpot"]["count"]
+        q2_n = quadrants["Q2_ToxicTrap"]["count"]
+        min_n = 30
+        gate_fails = []
+        if n < min_n:
+            gate_fails.append(f"n<{min_n}")
+        if not (corr_r < -0.25):
+            gate_fails.append("r_not_lt_-0.25")
+        if p_value >= 0.05:
+            gate_fails.append("p_ge_0.05")
+        if q1_n < 10 or q2_n < 10:
+            gate_fails.append("quadrant_n_low")
+        if not (q1_pnl > q2_pnl):
+            gate_fails.append("q1_not_gt_q2")
+        is_commander_certified = len(gate_fails) == 0
 
         result = {
             "timestamp": int(time.time() * 1000),
@@ -116,18 +129,17 @@ class AlphaVsAdverseAnalyzer:
                 "slope_beta_bp_per_score": round(slope, 3),  # 1スコア上昇あたりの損益悪化(bp)
                 "intercept": round(intercept, 2),
                 "p_value_estimate": round(p_value, 4),
-                "relationship": "NEGATIVE_CORRELATION (Score上昇で損益悪化)" if corr_r < -0.15 else "WEAK_OR_NEUTRAL",
+                "relationship": "NEGATIVE_CORRELATION (Score上昇で損益悪化)" if corr_r < -0.25 and p_value < 0.05 else "WEAK_OR_UNPROVEN",
             },
             "quadrant_matrix": quadrants,
             "commander_certification": {
                 "is_certified": is_commander_certified,
-                "title": "👑 【司令塔認定 (Commander Certified)】" if is_commander_certified else "⚖️ 【司令塔検証中 (In Verification)】",
+                "gate_fails": gate_fails,
+                "title": "【司令塔認定】" if is_commander_certified else "【未認定 / 検証中】",
                 "summary": (
-                    f"Adverse Score と 実損益に明確な負の相関 (r={corr_r:.2f}, β={slope:.2f}bp/pt) を確認。"
-                    f"「高Signal × 低Adverse (Q1)」の期待値 ({q1_pnl:+.2f}bp) が「高Signal × 高Adverse (Q2)」の罠期待値 ({q2_pnl:+.2f}bp) を凌駕し、"
-                    "Adverse Agent の逆選択回避がトレード収益性の絶対的な決定因子であることが統計的に証明されました。"
+                    f"ゲートPASS: r={corr_r:.2f}, p={p_value:.4f}, n={n}, Q1={q1_pnl:+.2f}bp (n={q1_n}) > Q2={q2_pnl:+.2f}bp (n={q2_n})."
                     if is_commander_certified else
-                    f"サンプル蓄積中 (現在 {n}件)。相関係数: r={corr_r:.2f}。引き続き3軸推移を追跡します。"
+                    f"ゲートFAIL {gate_fails}: r={corr_r:.2f}, p={p_value:.4f}, n={n}. 認定不可。"
                 )
             }
         }

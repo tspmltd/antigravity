@@ -182,17 +182,25 @@ class DuckDBOptimizerAgent:
         if stats["avg_spread"] > 500.0:
             rec_max_spread = min(3000.0, max(2000.0, round(stats["avg_spread"] + 800.0, -2)))
 
-        # 結論の構築
-        verdict = "WEIGHTS_OPTIMAL" if not updated else "WEIGHTS_ADAPTED"
-        confidence = min(1.0, max(0.5, stats["win_rate"]))
-        explanation = (
-            f"DuckDB解析完了: スナップショット {stats['total_snapshots']:,}件, "
-            f"意思決定 {stats['total_decisions']:,}件, 勝率 {stats['win_rate']*100:.1f}%, "
-            f"平均スプレッド ¥{stats['avg_spread']:,.0f}。最適スプレッド上限 ¥{rec_max_spread:,.0f}。"
-        )
-        if updated:
-            explanation += f" レジーム別重みを更新適用: {new_w_pressure}"
-
+        # 結論の構築 — データ無しで OPTIMAL を名乗らない
+        no_data = int(stats.get("total_snapshots") or 0) == 0 and int(stats.get("total_decisions") or 0) == 0
+        if no_data:
+            verdict = "INSUFFICIENT_DATA"
+            confidence = 0.0
+            explanation = "DuckDB: スナップショット0・意思決定0。重み更新不可（未検証）。"
+            updated = False
+        else:
+            verdict = "WEIGHTS_ADAPTED" if updated else "WEIGHTS_UNCHANGED"
+            confidence = min(1.0, max(0.0, float(stats["win_rate"])))
+            explanation = (
+                f"DuckDB解析: スナップショット {stats['total_snapshots']:,}件, "
+                f"意思決定 {stats['total_decisions']:,}件, 勝率 {stats['win_rate']*100:.1f}%, "
+                f"平均スプレッド ¥{stats['avg_spread']:,.0f}。推奨スプレッド上限 ¥{rec_max_spread:,.0f}。"
+            )
+            if updated:
+                explanation += f" レジーム別重みを更新適用: {new_w_pressure}"
+            else:
+                explanation += " 変化なし（採用判定ではない）。"
         conclusion = AgentConclusion(
             agent_name="DuckDBOptimizerAgent",
             timestamp=now_ms,

@@ -70,6 +70,7 @@ class UMMStrategy:
         imbalance: float = 0.0,
         adverse_score: float = 0.0,
         cancel_recommendation: bool = False,
+        avoidance_on: bool = False,
     ) -> Dict[str, Any]:
         """
         1 Tick ごとの戦略評価
@@ -88,14 +89,7 @@ class UMMStrategy:
             price_diff = (eval_price - self.entry_price) if self.position_side == "buy" else (self.entry_price - eval_price)
             current_pnl = price_diff * self.params["order_size_btc"]
 
-            # (A) トキシック逆選択による緊急キャンセル・撤退
-            if cancel_recommendation or adverse_score >= 0.75:
-                return {
-                    "action": "cancel",
-                    "reason": f"ADVERSE_EMERGENCY_EVACUATE (逆選択スコア: {adverse_score:.2f})",
-                    "price": eval_price,
-                    "expected_pnl": current_pnl,
-                }
+            # Adverse は研究フラグのみ。建玉は戦略ルールで閉じる。
 
             # (B) 利確
             if current_pnl >= self.params["take_profit_jpy"]:
@@ -135,9 +129,7 @@ class UMMStrategy:
         if spread > self.params["max_spread_jpy"]:
             return {"action": "hold", "reason": f"SPREAD_TOO_WIDE (¥{spread:,.0f} > ¥{self.params['max_spread_jpy']:,.0f})"}
 
-        # 逆選択警戒時は新規提示を見送り
-        if adverse_score >= 0.60:
-            return {"action": "hold", "reason": f"ADVERSE_VETO (逆選択スコア: {adverse_score:.2f})"}
+        # Adverse は研究フラグのみ。新規提示は止めない。
 
         # 在庫スキューの計算 (gamma_high)
         # 買い持ちが多い -> 売り指値を引き下げ、買い指値を遠ざける
@@ -148,24 +140,23 @@ class UMMStrategy:
         bid_quote = round(mid_price - half_spread + skew_offset)
         ask_quote = round(mid_price + half_spread + skew_offset)
 
-        # Imbalance に応じた片側エントリー判断 (板の厚い方向へ順張りクォート)
-        action = "hold"
-        reason = "QUOTING"
-        if imbalance >= 0.25 and self.inventory_btc < self.params["max_position_btc"]:
-            action = "buy"
-            reason = f"UMM_SKEW_BUY (Imb:{imbalance:+.2f}, Skew:{skew_offset:+.0f})"
-        elif imbalance <= -0.25 and self.inventory_btc > -self.params["max_position_btc"]:
-            action = "sell"
-            reason = f"UMM_SKEW_SELL (Imb:{imbalance:+.2f}, Skew:{skew_offset:+.0f})"
-
         return {
-            "action": action,
-            "reason": reason,
+            "action": "quote",
+            "reason": f"UMM_REST (Imb:{imbalance:+.2f}, Skew:{skew_offset:+.0f})",
             "bid_quote": bid_quote,
             "ask_quote": ask_quote,
             "spread_bp": round(spread_bp, 2),
             "skew_offset": round(skew_offset, 1),
         }
+
+    @staticmethod
+    def maker_fill(bid_quote, ask_quote, last_sell, last_buy, taker_bid, taker_ask):
+        """指値を、その値段まで届いた約定だけが取る。最良気配での成行約定はしない。"""
+        if bid_quote and last_sell and taker_bid > 0 and last_sell <= bid_quote:
+            return "buy", float(bid_quote)
+        if ask_quote and last_buy and taker_ask > 0 and last_buy >= ask_quote:
+            return "sell", float(ask_quote)
+        return None, None
 
     def record_trade(self, side: str, fill_price: float, pnl: float, mid_price: float = 0.0):
         """約定および損益の記録 (bp換算対応)"""
