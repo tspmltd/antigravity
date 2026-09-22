@@ -1,12 +1,14 @@
 """
 Microstructure Agent (板の癖 ＆ 瞬間圧力解析)
 - 板の厚み不均衡 (Imbalance), Micro-price, Taker攻撃性, フェイクブレイク, レイテンシを監視
-- 周期: 10ms〜100ms (イベント駆動)
+- 1時間集計: tip/成行/cancel 同時発生を蓄積し、人間が読めない板癖を毎時報告
+- 周期: イベント駆動 / WIRE=NO（hard_veto 常時 False）
 """
-from typing import Optional
+from typing import Optional, Any, Dict
 from dataclasses import asdict
 from ..event_bus import EventBus
 from ..schema import OrderbookMicroSnapshot, AgentConclusion
+from ..microstructure_hourly_store import MicrostructureHourlyStore
 
 
 class MicrostructureAgent:
@@ -15,6 +17,8 @@ class MicrostructureAgent:
         self.latency_threshold_ms = latency_threshold_ms
         self.latest_state: dict = {}
         self.latest_conclusion: Optional[AgentConclusion] = None
+        self.hourly = MicrostructureHourlyStore()
+        self.latest_hourly_report: Optional[Dict[str, Any]] = None
         self.bus.subscribe("orderbook_micro", self.on_micro_update)
 
     def on_micro_update(self, snap: OrderbookMicroSnapshot):
@@ -87,21 +91,6 @@ class MicrostructureAgent:
             adverse_side = "sell"
             adverse_score = min(1.0, round(raw_adverse_sell, 3))
             adverse_warning = (raw_adverse_sell >= 0.65)
-        micro_state = {
-            "timestamp": snap.timestamp,
-            "pressure_side": pressure_side,
-            "pressure_score": round(pressure_score, 3),
-            "fake_breakout_flag": fake_breakout,
-            "latency_risk_flag": latency_risk,
-            "micro_deviation": snap.micro_dev,
-            "imbalance": snap.imbalance,
-            "adverse_risk_side": adverse_side,
-            "adverse_risk_score": adverse_score,
-            "adverse_warning_flag": adverse_warning,
-        }
-        self.latest_state = micro_state
-        self.bus.publish("micro_state", micro_state)
-
         # 結論の策定 (研究表示。hard_veto は常に False — cancel_rate 誤警報で執行遮断しない)
         verdict = "NEUTRAL"
         primary_action = "hold"
@@ -115,6 +104,31 @@ class MicrostructureAgent:
             verdict = f"{pressure_side.upper()}_PRESSURE"
             primary_action = pressure_side
             explanation += f" [板圧力: {pressure_side.upper()} 強度{pressure_score:.2f}]"
+
+        micro_state = {
+            "timestamp": snap.timestamp,
+            "pressure_side": pressure_side,
+            "pressure_score": round(pressure_score, 3),
+            "fake_breakout_flag": fake_breakout,
+            "latency_risk_flag": latency_risk,
+            "micro_deviation": snap.micro_dev,
+            "imbalance": snap.imbalance,
+            "adverse_risk_side": adverse_side,
+            "adverse_risk_score": adverse_score,
+            "adverse_warning_flag": adverse_warning,
+            "verdict": verdict,
+        }
+        self.latest_state = micro_state
+        self.bus.publish("micro_state", micro_state)
+
+        # 1時間板癖集計（新シグナル判断材料・執行非接続）
+        try:
+            rolled = self.hourly.ingest(snap, micro_state)
+            if rolled is not None:
+                self.latest_hourly_report = rolled
+                self.bus.publish("micro_hourly_report", rolled)
+        except Exception:
+            pass
 
         conclusion = AgentConclusion(
             agent_name="MicrostructureAgent",
@@ -144,4 +158,13 @@ class MicrostructureAgent:
 
     def get_latest_conclusion(self) -> Optional[AgentConclusion]:
         return self.latest_conclusion
+
+    def get_hourly_snapshot(self) -> Dict[str, Any]:
+        """定期報告用: 確定時間次があればそれ、なければ部分集計。"""
+        if self.latest_hourly_report and not self.latest_hourly_report.get("partial"):
+            return self.latest_hourly_report
+        try:
+            return self.hourly.flush_partial()
+        except Exception:
+            return {}
 

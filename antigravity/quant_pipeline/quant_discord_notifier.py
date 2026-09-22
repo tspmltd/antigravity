@@ -15,7 +15,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+# 常に antigravity ルートの .env を読む（cwd 依存を排除）
+load_dotenv("/home/azureuser/antigravity/.env", override=False)
 
 JST = timezone(timedelta(hours=9))
 
@@ -145,21 +146,38 @@ class QuantDiscordNotifier:
 
     def post_dryrun_multicast(self, payload: Dict[str, Any]) -> bool:
         """
-        DRYRUN定期報告をメイン運用報告チャンネル (REPORT) および DRYRUNチャンネルの両方に配信
+        DRYRUN 定期報告を指定チャンネルへ配信。
+        優先: DISCORD_HOURLY_REPORT_WEBHOOK_URL（ユーザー指定の定期報告先）
+        併用: DRYRUN / LIVE(REPORT) — 空ならスキップ。
         """
-        urls = set()
-        if self.dryrun_webhook_url:
-            urls.add(self.dryrun_webhook_url)
-        if self.live_webhook_url:
-            urls.add(self.live_webhook_url)
-        report_url = os.environ.get("DISCORD_REPORT_WEBHOOK_URL", "").strip()
-        if report_url:
-            urls.add(report_url)
+        urls = []
+        seen = set()
+
+        def _add(u: str) -> None:
+            u = (u or "").strip()
+            if u and u.startswith("http") and u not in seen:
+                seen.add(u)
+                urls.append(u)
+
+        # ユーザー指定の定期報告先を最優先
+        _add(os.environ.get("DISCORD_HOURLY_REPORT_WEBHOOK_URL", ""))
+        _add(self.dryrun_webhook_url)
+        _add(os.environ.get("DISCORD_REPORT_WEBHOOK_URL", ""))
+        _add(self.live_webhook_url)
+
+        if not urls:
+            print("[QuantDiscordNotifier] ⚠️ 定期報告 webhook 未設定", flush=True)
+            return False
 
         success = False
         for url in urls:
             if self._post(url, payload):
                 success = True
+            else:
+                print(
+                    f"[QuantDiscordNotifier] ⚠️ 定期報告送信失敗 id=...{url.rstrip('/').split('/')[-2][-6:]}",
+                    flush=True,
+                )
         return success
 
     # =========================================================================
@@ -867,4 +885,134 @@ class QuantDiscordNotifier:
         url = self.alpha_vs_adverse_webhook_url or self.analysis_webhook_url or self.quants_agent_webhook_url
         return self._post(url, {"embeds": [embed]})
 
+    def post_microstructure_hourly(self, report: Dict[str, Any]) -> bool:
+        """Microstructure 1時間板解析（WIRE=NO）。"""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        hour_key = report.get("hour_key", "?")
+        n = int(report.get("n_ticks") or 0)
+        partial = bool(report.get("partial"))
+        ps = report.get("pressure_share") or {}
+        mid_move = report.get("mid_move_bp")
+        feat = report.get("feature_stats") or {}
+        flags = report.get("flag_rates") or {}
+        patterns = report.get("top_cooccurrence_patterns") or []
+        hints = report.get("signal_candidate_hints") or []
 
+        def _fstat(key: str) -> str:
+            st = feat.get(key) or {}
+            if not st:
+                return "—"
+            return f"μ={st.get('mean')} p50={st.get('p50')} p90={st.get('p90')}"
+
+        pat_lines = [
+            f"• `{p.get('pattern')}` ×{p.get('count')} ({float(p.get('rate') or 0)*100:.1f}%)"
+            for p in patterns[:8]
+        ]
+        hint_lines = [f"• [{h.get('priority','low')}] {h.get('text')}" for h in hints[:6]]
+        fields = [
+            {
+                "name": "⏱ 時間窓",
+                "value": (
+                    f"• hour: `{hour_key}` {'(進行中)' if partial else '(確定)'}\n"
+                    f"• ticks: `{n}` | midΔ: `{mid_move if mid_move is not None else '—'} bp`\n"
+                    f"• pressure buy/sell/none: `{ps.get('buy',0):.1%}`/`{ps.get('sell',0):.1%}`/`{ps.get('none',0):.1%}`"
+                ),
+                "inline": False,
+            },
+            {
+                "name": "📐 特徴分布",
+                "value": (
+                    f"• spread_bp: {_fstat('spread_bp')}\n"
+                    f"• imbalance: {_fstat('imbalance')}\n"
+                    f"• micro_dev: {_fstat('micro_dev')}\n"
+                    f"• tip bid/ask: {_fstat('bid_depth_1')} / {_fstat('ask_depth_1')}\n"
+                    f"• (c−r): {_fstat('cancel_minus_refill')}\n"
+                    f"• taker_total: {_fstat('taker_total')}\n"
+                    f"• latency_ms: {_fstat('latency_ms')}"
+                ),
+                "inline": False,
+            },
+            {
+                "name": "🚩 フラグ発生率",
+                "value": (
+                    f"• tip_thin bid/ask: `{flags.get('tip_thin_bid',0):.1%}`/`{flags.get('tip_thin_ask',0):.1%}`\n"
+                    f"• one_way sell/buy: `{flags.get('one_way_sell',0):.1%}`/`{flags.get('one_way_buy',0):.1%}`\n"
+                    f"• cancel_spike: `{flags.get('cancel_spike',0):.1%}` fake_bo: `{flags.get('fake_breakout',0):.1%}`\n"
+                    f"• imb_noise: `{flags.get('imb_noise_no_taker',0):.1%}` imb+taker: `{flags.get('imb_with_taker',0):.1%}`"
+                ),
+                "inline": False,
+            },
+            {
+                "name": "🧬 同時発生パターン",
+                "value": "\n".join(pat_lines) if pat_lines else "• (薄い)",
+                "inline": False,
+            },
+            {
+                "name": "💡 シグナル候補ヒント",
+                "value": "\n".join(hint_lines) if hint_lines else "• —",
+                "inline": False,
+            },
+        ]
+        embed = {
+            "title": "🧱 【Microstructure 1時間板解析】",
+            "description": f"人間が判断できない板の癖（WIRE=NO）\n報告: `{now_str}`",
+            "color": 0x1ABC9C,
+            "fields": fields,
+            "footer": {"text": "Microstructure Hourly • 新シグナル判断材料"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        url = (
+            os.environ.get("DISCORD_MICROSTRUCTURE_WEBHOOK_URL", "").strip()
+            or self.analysis_webhook_url
+            or self.observation_webhook_url
+            or self.quants_agent_webhook_url
+        )
+        ok = self._post(url, {"embeds": [embed]})
+        self.post_dryrun_multicast({"embeds": [embed]})
+        return ok
+
+    def post_librarian_daily(self, report: Dict[str, Any]) -> bool:
+        """DuckDB Research Librarian 日次 usable / ADVISE。"""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        lanes = report.get("lanes") or {}
+        lane_lines = []
+        for name, lane in lanes.items():
+            if not isinstance(lane, dict):
+                continue
+            u = lane.get("usable", "?")
+            adv0 = (lane.get("advise") or ["—"])[0]
+            lane_lines.append(f"• **{name}**: `{u}` — {adv0}")
+        exp_lines = []
+        for e in (report.get("next_experiments") or [])[:8]:
+            exp_lines.append(f"• [{e.get('priority','normal')}] `{e.get('lane')}`: {e.get('advise')}")
+        counts = report.get("usable_counts") or {}
+        embed = {
+            "title": "📚 【Research Librarian 日次判定】 DuckDB",
+            "description": (
+                f"日付: `{report.get('date')}` | portfolio: **`{report.get('portfolio_verdict')}`**\n"
+                f"USEFUL={counts.get('USEFUL',0)} NEED_MORE={counts.get('NEED_MORE',0)} "
+                f"NOT_USEFUL={counts.get('NOT_USEFUL',0)} CONTEXT={counts.get('CONTEXT',0)}\n"
+                f"WIRE=NO / ENFORCE=0 / 重み自動適用OFF\n報告: `{now_str}`"
+            ),
+            "color": 0xF1C40F,
+            "fields": [
+                {"name": "レーン usable", "value": "\n".join(lane_lines) or "• —", "inline": False},
+                {"name": "次に試すこと (ADVISE)", "value": "\n".join(exp_lines) or "• 継続観測", "inline": False},
+                {
+                    "name": "禁止",
+                    "value": "• 経済PASS/FAIL • LIVE配線 • approved_weights自動更新 • frozenパラ自動変更",
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "DuckDB Research Librarian • 全研究レーン最終チェック"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        ok = self.post_conclusion({"embeds": [embed]})
+        self.post_dryrun_multicast({"embeds": [embed]})
+        url = self.analysis_webhook_url or self.quants_agent_webhook_url
+        self._post(url, {"embeds": [embed]})
+        return ok

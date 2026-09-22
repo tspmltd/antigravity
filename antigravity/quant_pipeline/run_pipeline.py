@@ -20,6 +20,7 @@ from .agents.trend_agent import TrendFollowAgent
 from .agents.microstructure_agent import MicrostructureAgent
 from .agents.adverse_agent import AdverseResearchAgent
 from .agents.duckdb_optimizer_agent import DuckDBOptimizerAgent
+from .agents.peg_research_agent import PegResearchAgent
 from .council_coordinator import FourAgentsCouncil
 from .fusion_engine import SignalFusionEngine
 from .ingestion import MarketDataIngestion
@@ -45,6 +46,7 @@ def main():
     print("=" * 85)
     print("   🏛️  Antigravity 4AGENT Autonomous Strategy & Governance Pipeline  🏛️")
     print("   [1]Microstructure  [2]TrendFollow  [3]DuckDBOptimizer  [4]AdverseResearch")
+    print("   [5]PegResearch (WIRE=NO · CSR-022/025/210o/231/499 · DATA only)")
     print("=" * 85)
     print(f"対象銘柄          : {args.symbol}")
     print(f"観測間隔          : {args.interval} 秒")
@@ -98,11 +100,12 @@ def main():
             enable_real_live=args.real,
         )
 
-    # 3. 4AGENT 登録
+    # 3. 4AGENT 登録 + PEG 研究（評議会外・執行非接続）
     trend_agent = TrendFollowAgent(bus)
     micro_agent = MicrostructureAgent(bus)
     adverse_agent = AdverseResearchAgent(bus)
     duckdb_agent = DuckDBOptimizerAgent(bus)
+    peg_research_agent = PegResearchAgent(bus)  # CSR-022/025/210o · WIRE=NO
 
     # 4. 4AGENT 評議会コーディネーター登録
     council = FourAgentsCouncil(

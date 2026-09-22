@@ -33,6 +33,9 @@ COUNCIL_STATE = os.path.join(BASE_DIR, "configs", "agents_council_state.json")
 ADVERSE_SUMMARY_STATE = os.path.join(BASE_DIR, "data", "adverse_excursion_summary.json")
 TOXIC_STATE = os.path.join(BASE_DIR, "data", "adverse_toxic_state.json")
 SPREAD_GATE_STATE = os.path.join(BASE_DIR, "data", "spread_gate_stats.json")
+MICRO_HOURLY_LATEST = os.path.join(BASE_DIR, "data", "microstructure", "hourly_latest.json")
+LIBRARIAN_STATE = os.path.join(BASE_DIR, "data", "research_librarian", "librarian_state.json")
+LIBRARIAN_DAILY_DIR = os.path.join(BASE_DIR, "data", "research_librarian", "daily")
 LOG_PATH = os.path.join(BASE_DIR, "logs", "hourly_dryrun_reporter.log")
 
 
@@ -41,6 +44,7 @@ class HourlyDryRunReporter:
         self.interval_sec = interval_sec
         self.notifier = QuantDiscordNotifier()
         self.last_sent_hour: int = -1
+        self.last_librarian_day: str = ""
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 
     def _load_json(self, path: str) -> Dict[str, Any]:
@@ -338,6 +342,26 @@ class HourlyDryRunReporter:
             }
         self.notifier.post_alpha_vs_adverse(alpha_stats)
 
+        # 9. Microstructure 1時間板解析
+        micro_rep = self._load_json(MICRO_HOURLY_LATEST)
+        if micro_rep:
+            try:
+                self.notifier.post_microstructure_hourly(micro_rep)
+            except Exception as e:
+                self._log_to_file(f"microstructure hourly post err: {e}")
+
+        # 10. Research Librarian 日次（JST 09時 or 未送信日）
+        try:
+            day = now_jst.strftime("%Y-%m-%d")
+            if now_jst.hour == 9 or self.last_librarian_day != day:
+                from antigravity.quant_pipeline.duckdb_research_librarian import run_daily_review
+                lib_rep = run_daily_review(day)
+                self.notifier.post_librarian_daily(lib_rep)
+                self.last_librarian_day = day
+                self._log_to_file(f"librarian daily {day}: {lib_rep.get('portfolio_verdict')}")
+        except Exception as e:
+            self._log_to_file(f"librarian daily err: {e}")
+
         log_msg = f"[{now_str}] 統合定期レポート送信: {'成功' if success else '失敗'} (1h: {total_1h_bp:+.2f}bp, 24h: {total_24h_bp:+.2f}bp)"
         print(log_msg, flush=True)
         self._log_to_file(log_msg)
@@ -355,7 +379,7 @@ class HourlyDryRunReporter:
         print("   📢 DRYRUN 1時間毎 統合定期レポート配信デーモン")
         print("=" * 70)
         print(f"送信間隔: 1時間ごと (毎時ジャスト) ＋ 起動時即時送信")
-        print(f"送信先  : メイン運用報告チャンネル (REPORT) ＆ DRYRUN チャンネル")
+        print(f"送信先  : HOURLY_REPORT（指定）＋ DRYRUN ＋ REPORT/LIVE")
         print("-" * 70)
 
         # 起動直後に初回レポートを即座に送信

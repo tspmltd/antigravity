@@ -32,6 +32,7 @@ from ..event_bus import EventBus
 from ..adverse_excursion import AdverseExcursionTracker
 from ..toxic_flow_analyzer import ToxicFlowAnalyzer
 from ..adverse_score_engine import AdverseScoreEngine
+from ..adverse_victim_anatomy import AdverseVictimAnatomy, BoardFeatureBuffer
 
 
 class AdverseResearchAgent:
@@ -65,6 +66,8 @@ class AdverseResearchAgent:
         self.min_abs_drop = min_abs_drop
         self.max_episode_age_ms = max_episode_age_ms
         self.device_version = "episode_sm_v2"
+        self._device_sig = None
+        self._last_device_write = 0.0
 
         # S1. Adverse Excursion 分析器の統合
         self.excursion_tracker = AdverseExcursionTracker(save_dir=save_dir)
@@ -108,9 +111,15 @@ class AdverseResearchAgent:
             "cancel_recommendation": False,
             "adverse_side": "none",
         }
-        self._last_device_write = 0.0
-        self._last_toxic_write = 0.0
-        self._device_sig = None
+        # 研究モード: victim_anatomy = 常時スコア縮退・UMM toxic 直前特徴解剖
+        # full_legacy = 旧 episode/toxic/score 毎tick（非推奨）
+        # advance_from_umm | victim_anatomy（互換）— いずれも legacy episode/score 停止
+        self.research_mode = os.environ.get("ADVERSE_RESEARCH_MODE", "advance_from_umm")
+        self.board_buf = BoardFeatureBuffer(maxlen=180)
+        self.anatomy = AdverseVictimAnatomy()
+        self._hist_len_before_tick = 0
+        self._last_legacy_eval = 0.0
+        self._legacy_interval_sec = float(os.environ.get("ADVERSE_LEGACY_INTERVAL_SEC", "300"))
 
         # EventBus購読
         self.bus.subscribe("orderbook_micro", self.on_orderbook)
@@ -128,12 +137,27 @@ class AdverseResearchAgent:
         strategy_name: str = "default",
         meta: Optional[Dict[str, Any]] = None,
     ):
-        """約定時の Adverse Excursion (AE) 追跡を開始"""
+        """約定時の Adverse Excursion (AE) 追跡を開始。UMM 教師用に直前〜数秒前板を付与。"""
+        et = float(entry_time) if entry_time is not None else time.time()
+        meta = dict(meta or {})
+        asof = self.board_buf.asof(et) or self.board_buf.latest()
+        if asof is not None:
+            meta["asof_board"] = asof
+            side_l = str(side or "").lower()
+            meta["pred_adverse_score"] = self.anatomy.simple_adverse_score(asof, side_l or "buy")
+        pre5 = self.board_buf.asof(et - 5.0)
+        pre10 = self.board_buf.asof(et - 10.0)
+        if pre5 is not None:
+            meta["asof_board_pre5s"] = pre5
+        if pre10 is not None:
+            meta["asof_board_pre10s"] = pre10
+        meta["adverse_research_mode"] = self.research_mode
+        meta["data_source"] = strategy_name
         return self.excursion_tracker.track_entry(
             trade_id=trade_id,
             side=side,
             entry_price=entry_price,
-            entry_time=entry_time,
+            entry_time=et,
             strategy_name=strategy_name,
             meta=meta,
         )
@@ -192,21 +216,93 @@ class AdverseResearchAgent:
                 theory_spread_bp=theory_spread_bp,
             )
 
-    def on_orderbook(self, snap: OrderbookMicroSnapshot):
-        now_ts = snap.timestamp / 1000.0 if snap.timestamp > 1e6 else float(snap.timestamp)
+    def _board_feat(self, snap: OrderbookMicroSnapshot, now_ts: float) -> Dict[str, Any]:
+        mid = float(snap.mid_price)
+        spread = max(0.0, float(snap.best_ask) - float(snap.best_bid))
+        tb = float(snap.taker_volume_bid or 0.0)
+        ta = float(snap.taker_volume_ask or 0.0)
+        cancel_rate = float(getattr(snap, "cancel_rate", 0.0) or 0.0)
+        refill_rate = float(getattr(snap, "refill_rate", 0.0) or 0.0)
+        return {
+            "_ts": now_ts,
+            "mid": mid,
+            "best_bid": float(snap.best_bid),
+            "best_ask": float(snap.best_ask),
+            "spread": spread,
+            "spread_bp": (spread / mid * 10000.0) if mid > 0 else 0.0,
+            "bid_depth_1": float(snap.bid_depth_1),
+            "ask_depth_1": float(snap.ask_depth_1),
+            "imbalance": float(snap.imbalance),
+            "micro_dev": float(snap.micro_dev),
+            "taker_volume_bid": tb,
+            "taker_volume_ask": ta,
+            "taker_total": tb + ta,
+            "taker_aggressiveness": float(getattr(snap, "taker_aggressiveness", 0.0) or 0.0),
+            "cancel_rate": cancel_rate,
+            "refill_rate": refill_rate,
+            "cancel_minus_refill": cancel_rate - refill_rate,
+            "latency_ms": float(getattr(snap, "latency_ms", 0.0) or 0.0),
+        }
 
-        # -------------------------------------------------------------
-        # S1. Adverse Excursion (AE) のリアルタイム Tick 評価
-        # -------------------------------------------------------------
+    def on_orderbook(self, snap: OrderbookMicroSnapshot):
+        ts_raw = float(snap.timestamp)
+        if ts_raw > 1e12:
+            now_ts = ts_raw / 1000.0
+        elif ts_raw > 1e9:
+            now_ts = ts_raw
+        else:
+            now_ts = time.time()
+
+        # 直前板バッファ（victim anatomy の本体）
+        feat = self._board_feat(snap, now_ts)
+        self.board_buf.push(now_ts, feat)
+
+        # AE tick（TOXIC/NORMAL ラベル確定に必要）
+        hist_before = len(self.excursion_tracker.history_records)
         self.excursion_tracker.on_tick(
             current_price=snap.mid_price,
             timestamp=now_ts,
             best_bid=snap.best_bid,
             best_ask=snap.best_ask,
         )
+        for rec in self.excursion_tracker.history_records[hist_before:]:
+            try:
+                self.anatomy.ingest_umm_completed(rec.to_full_dict())
+            except Exception:
+                pass
+
+        # --- advance / anatomy モード: 常時 episode/toxic/score を止める ---
+        if self.research_mode in ("advance_from_umm", "victim_anatomy"):
+            if now_ts - self._last_legacy_eval >= self._legacy_interval_sec:
+                self._last_legacy_eval = now_ts
+                self.latest_state = {
+                    "timestamp": snap.timestamp,
+                    "agent_rank": "RESEARCH_AGENT",
+                    "research_mode": "advance_from_umm",
+                    "avoidance_on": False,
+                    "adverse_side": "none",
+                    "adverse_score": 0.0,
+                    "research_score": 0.0,
+                    "cancel_recommendation": False,
+                    "wire": "NO",
+                    "enforce": 0,
+                    "advance_counts": dict(self.anatomy._counts),
+                    "anatomy_counts": dict(self.anatomy._counts),
+                    "note": "UMM-supervised advance research only; legacy episode/score OFF",
+                }
+                self._persist_device_state({
+                    **self.latest_state,
+                    "total_episodes": self.total_episodes,
+                    "confirmed_episodes": self.confirmed_episodes,
+                    "false_episodes": self.false_episodes,
+                    "confirm_rate": None,
+                    "episode_id": 0,
+                    "lead_ms_estimated": 0.0,
+                })
+            return self.latest_state
 
         # -------------------------------------------------------------
-        # 1. BUY側 (買い指値に対する逆選択 = 急落・下落貫通リスク)
+        # full_legacy: 旧 episode / toxic / score（非推奨・明示時のみ）
         # -------------------------------------------------------------
         buy_res = self._evaluate_side(
             side="buy",

@@ -693,3 +693,64 @@ Signal Score (アルファ) vs Adverse Score (逆選択) の相関・侵食度�
 - これは「嘘をつかない計測」への復旧段階。confirm 率が揃うまで装置を執行・採用判定に使わない。
 - LIVE 実発注は引き続き OFF（`ENABLE_REAL_TRADING=false`）。
 
+---
+
+## 23. PegResearchAgent 新設（CSR 整合 · 2026-09-23）
+
+### 目的
+PEG を「成績悪い観測レーン」のまま流すのではなく、**方向 / 継続 / 終焉**を日々観測して DATA 化する研究 AGENT。
+
+### 参照 CSR
+| CSR | 取り込み |
+| :--- | :--- |
+| **CSR-022** | direction ラベル horizon **10 / 30 / 60s**（mid@horizon） |
+| **CSR-023/024** | Adverse/toxic 代理特徴を記録（EV 判定はしない · WIRE=NO） |
+| **CSR-025** | `peg_diff_10` / `peg_diff_30_10` を特徴・継続ゲートに使用 |
+| **CSR-148** | trend_end = exhaust / 逆行成行 |
+| **CSR-210o** | 細波 1–5bp + MON 継続（horizon≈18s） |
+| **CSR-231/232** | `(c−r)` / hole / one_way / taker_total を特徴記録 |
+| **CSR-499** | TF2BP Baseline ピン · ENFORCE=0 · n未達で経済判定禁止 |
+
+### 成果物
+- Agent: `antigravity/quant_pipeline/agents/peg_research_agent.py` (`peg_research_v1_csr`)
+- Store: `data/peg_research/{predictions,labeled}.jsonl` + `daily/YYYY-MM-DD.json` + `peg_research_state.json`
+- 配線: `run_pipeline` および `run_dryrun_umm_tf2bp_24h`（評議会・執行には入れない）
+
+### 運用制約
+- **WIRE=NO / ENFORCE=0 / research_only**
+- hard_veto / emergency_cancel 常時 False
+- 日次 rollup の hit rate が揃うまで採用・経済 PASS/FAIL を出さない
+
+## 24. 研究 AGENT 最終チェック＆足りない作業の追加（2026-09-23）
+
+### 役割分担（確定）
+
+| AGENT | 業務 | 頻度 | WIRE |
+| :--- | :--- | :--- | :--- |
+| **Microstructure** | 板の細かい癖（tip/成行/cancel同時発生）を集計し新シグナル材料化 | **1時間** Discord | NO |
+| **PegResearch** | PEG 方向/継続/終焉 DATA | 常時＋日次 rollup | NO |
+| **AdverseResearch** | UMM教師の先回り（pre5/10・1–5bp・方向） | 約定完了時 | NO |
+| **TrendFollow** | forward mid 方向ヒット＋TF2BP onset 教師 | 常時＋日次 | NO |
+| **DuckDBOptimizer = Librarian** | 全レーン usable 判定＋次実験 ADVISE | **1日1回**（JST09時＋未送信日） | NO |
+| **Council/Fusion** | 実時間合議は従来どおり。研究判定は Librarian 報告を結論chへ | 従来＋日次 | 研究は非執行 |
+
+### 今回埋めた穴
+1. DuckDB を重み自動更新から **Research Librarian** へ転換（`auto_apply=False` 強制）
+2. Microstructure `hourly` ストア＋毎時 Discord（`post_microstructure_hourly`）
+3. dryrun が `adverse.on_orderbook` / `peg.on_orderbook` を呼んでいなかった → **修正**
+4. TrendFollow 研究ストア＋Librarian レーン追加
+5. hourly_reporter に Micro 毎時 ＋ Librarian 日次を配線
+6. Adverse `_device_sig` 未初期化バグ修正
+
+### 成果物パス
+- `data/microstructure/hourly_latest.json`
+- `data/research_librarian/daily/YYYY-MM-DD.json`
+- `data/trend_research/`
+- `data/adverse_research/advance_*.json*`
+- `data/peg_research/`
+
+### 判定ルール（Librarian）
+- n<30 → NEED_MORE（経済判定禁止）
+- hit が baseline±edge 外 → USEFUL / NOT_USEFUL
+- Fusion `realized_pnl` ラベル率が低い → NOT_USEFUL（ΔW禁止）
+- **経済 PASS/FAIL・LIVE配線・frozenパラ自動変更は禁止**

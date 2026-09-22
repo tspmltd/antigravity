@@ -3,10 +3,12 @@ Trend Follow Agent (方向性 ＆ レジーム判定)
 - 価格の中期トレンド・ボラティリティ・市場レジーム(trend/range)を判定
 - 周期: 1s〜30s
 """
-from typing import List, Optional
+import time
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import asdict
 from ..event_bus import EventBus
 from ..schema import OrderbookMicroSnapshot, AgentConclusion
+from ..trend_research_store import TrendResearchStore
 
 
 class TrendFollowAgent:
@@ -15,12 +17,21 @@ class TrendFollowAgent:
         self.mid_history: List[float] = []
         self.latest_state: dict = {}
         self.latest_conclusion: Optional[AgentConclusion] = None
+        self.research = TrendResearchStore()
+        self._pending: List[Dict[str, Any]] = []
+        self._last_pred_ts = 0.0
         self.bus.subscribe("orderbook_micro", self.on_micro_update)
 
     def on_micro_update(self, snap: OrderbookMicroSnapshot):
         self.mid_history.append(snap.mid_price)
         if len(self.mid_history) > 60:
             self.mid_history.pop(0)
+
+        # 研究: 前方 mid で方向ヒットをラベル（WIRE=NO）
+        try:
+            self._resolve_trend_research(snap)
+        except Exception:
+            pass
 
         # 30サンプル以上で方向判定。未満は WARMUP（偽のトレンドを出さない）
         min_samples = 20
@@ -95,7 +106,87 @@ class TrendFollowAgent:
         )
         self.latest_conclusion = conclusion
         self.bus.publish("trend_conclusion", asdict(conclusion))
+        try:
+            if ready and direction in ("up", "down"):
+                self._maybe_schedule_pred(snap, direction, strength, regime)
+        except Exception:
+            pass
         return conclusion
+
+    def _snap_ts(self, snap: OrderbookMicroSnapshot) -> float:
+        ts = float(snap.timestamp)
+        if ts > 1e12:
+            return ts / 1000.0
+        if ts > 1e9:
+            return ts
+        return time.time()
+
+    def _maybe_schedule_pred(self, snap, direction: str, strength: float, regime: str) -> None:
+        now = self._snap_ts(snap)
+        if now - self._last_pred_ts < 15.0:
+            return
+        self._last_pred_ts = now
+        self._pending.append({
+            "ts": now,
+            "mid": float(snap.mid_price),
+            "direction": direction,
+            "strength": strength,
+            "regime": regime,
+            "horizon_sec": 30.0,
+            "task": "direction_fwd_30s",
+            "event": "onset" if strength >= 0.35 else "hold",
+        })
+        if len(self._pending) > 40:
+            self._pending = self._pending[-40:]
+
+    def _resolve_trend_research(self, snap: OrderbookMicroSnapshot) -> None:
+        now = self._snap_ts(snap)
+        mid = float(snap.mid_price)
+        still = []
+        for p in self._pending:
+            if now - float(p["ts"]) < float(p["horizon_sec"]):
+                still.append(p)
+                continue
+            entry = float(p["mid"])
+            fwd_bp = (mid - entry) / entry * 10000.0 if entry > 0 else 0.0
+            pred = p["direction"]
+            actual = "up" if fwd_bp >= 1.0 else ("down" if fwd_bp <= -1.0 else "flat")
+            hit = (pred == actual) or (pred == "up" and fwd_bp > 0) or (pred == "down" and fwd_bp < 0)
+            # flat はヒットにしにくい: 1bp未満は miss
+            if abs(fwd_bp) < 1.0:
+                hit = False
+            self.research.append_sample({
+                "ts": p["ts"],
+                "task": p["task"],
+                "event": p.get("event", "hold"),
+                "pred_dir": pred,
+                "actual_dir": actual,
+                "fwd_bp": round(fwd_bp, 3),
+                "dir_hit": bool(hit),
+                "strength": p.get("strength"),
+                "regime": p.get("regime"),
+                "source": "TrendFollowAgent",
+                "wire": "NO",
+            })
+        self._pending = still
+
+    def note_tf2bp_event(self, event: str, side: str, mid: float, reason: str = "") -> None:
+        """TF2BP 入口/出口を教師イベントとして記録（dryrun から呼ぶ）。"""
+        self.research.append_sample({
+            "ts": time.time(),
+            "task": "tf2bp_supervised",
+            "event": event,
+            "pred_dir": "up" if str(side).lower() == "buy" else "down",
+            "actual_dir": None,
+            "fwd_bp": 0.0,
+            "dir_hit": False,
+            "strength": None,
+            "regime": None,
+            "source": "TF2BP",
+            "reason": reason,
+            "wire": "NO",
+            "note": "label later via pipeline mid; onset/end marker",
+        })
 
     def get_latest_conclusion(self) -> Optional[AgentConclusion]:
         return self.latest_conclusion

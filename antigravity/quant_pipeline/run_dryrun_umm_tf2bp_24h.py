@@ -26,6 +26,8 @@ from .schema import OrderbookMicroSnapshot
 from .ingestion import MarketDataIngestion, LiveBoardFeed
 from .quant_discord_notifier import QuantDiscordNotifier
 from .agents.adverse_agent import AdverseResearchAgent
+from .agents.peg_research_agent import PegResearchAgent
+from .trend_research_store import TrendResearchStore
 from ..strategies.umm_strategy import UMMStrategy
 from ..strategies.tf2bp_strategy import TF2BPStrategy
 from ..strategies.tf2bp_peg_v2_strategy import TF2BP_PEG_v2_Strategy
@@ -69,6 +71,9 @@ class DryRunObservation24h:
         self.logger = ParquetBatchLogger(flush_interval_sec=30.0, batch_size=100)
         self.notifier = QuantDiscordNotifier()
         self.adverse_agent = AdverseResearchAgent(self.bus)
+        # PEG 専用研究（CSR-022/025/210o/231 · WIRE=NO · 執行非接続）
+        self.peg_research_agent = PegResearchAgent(self.bus)
+        self.trend_research = TrendResearchStore()
         self.ingestion = MarketDataIngestion(self.bus, self.logger, product_code=self.symbol)
 
         # 仮想口座
@@ -140,6 +145,16 @@ class DryRunObservation24h:
                     self.step_count += 1
 
                 if snap:
+                    # 0. 研究レーンへ板を供給（AE完了・PegResearch・先回り教師）
+                    try:
+                        self.adverse_agent.on_orderbook(snap)
+                    except Exception:
+                        pass
+                    try:
+                        self.peg_research_agent.on_orderbook(snap)
+                    except Exception:
+                        pass
+
                     # 1. Adverse 判定の取得
                     adv_state = self.adverse_agent.latest_state or {}
                     adv_score = adv_state.get("adverse_score", 0.0)
@@ -271,6 +286,22 @@ class DryRunObservation24h:
                 acc["trades"] += 1
                 log_line = f"[{name}] 📥 新規エントリー: {action.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
+                if name == "TF2BP":
+                    try:
+                        self.trend_research.append_sample({
+                            "ts": time.time(),
+                            "task": "tf2bp_supervised",
+                            "event": "onset",
+                            "pred_dir": "up" if action == "buy" else "down",
+                            "actual_dir": None,
+                            "fwd_bp": 0.0,
+                            "dir_hit": False,
+                            "source": "TF2BP",
+                            "reason": res.get("reason"),
+                            "wire": "NO",
+                        })
+                    except Exception:
+                        pass
                 # S1. Adverse Excursion (AE) 追跡開始
                 theory_spread_bp = ((snap.best_ask - snap.best_bid) / snap.mid_price) * 10000.0 if snap.mid_price > 0 else 2.0
                 self.adverse_agent.track_entry(
@@ -283,6 +314,18 @@ class DryRunObservation24h:
                         "reason": res.get("reason"),
                         "spread": snap.best_ask - snap.best_bid,
                         "theoretical_spread_bp": theory_spread_bp,
+                        # UMM → AdverseResearch 教師 DATA
+                        "umm_feed": True,
+                        "imbalance": snap.imbalance,
+                        "micro_dev": snap.micro_dev,
+                        "bid_depth_1": snap.bid_depth_1,
+                        "ask_depth_1": snap.ask_depth_1,
+                        "taker_volume_bid": snap.taker_volume_bid,
+                        "taker_volume_ask": snap.taker_volume_ask,
+                        "cancel_rate": snap.cancel_rate,
+                        "refill_rate": snap.refill_rate,
+                        "taker_aggressiveness": snap.taker_aggressiveness,
+                        "latency_ms": snap.latency_ms,
                     },
                 )
 
