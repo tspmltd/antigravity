@@ -27,6 +27,12 @@ from .ingestion import MarketDataIngestion, LiveBoardFeed
 from .quant_discord_notifier import QuantDiscordNotifier
 from .agents.adverse_agent import AdverseResearchAgent
 from .agents.peg_research_agent import PegResearchAgent
+from .agents.mm_agent import MMAgent
+from .agents.microstructure_agent import MicrostructureAgent
+from .agents.trend_agent import TrendFollowAgent
+from .fusion_engine import SignalFusionEngine
+from .quote_engine import QuoteEngine
+from .mm_quote_store import MMQuoteStore
 from .trend_research_store import TrendResearchStore
 from ..strategies.umm_strategy import UMMStrategy
 from ..strategies.tf2bp_strategy import TF2BPStrategy
@@ -74,6 +80,29 @@ class DryRunObservation24h:
         # PEG 専用研究（CSR-022/025/210o/231 · WIRE=NO · 執行非接続）
         self.peg_research_agent = PegResearchAgent(self.bus)
         self.trend_research = TrendResearchStore()
+        # MM Agent Platform（CSR-514 · 連続クォート研究レーン · WIRE=NO）
+        self.mm_store = MMQuoteStore()
+        self.micro_agent = MicrostructureAgent(self.bus)
+        self.trend_agent = TrendFollowAgent(self.bus)
+        self.fusion = SignalFusionEngine(self.bus, self.logger)
+        umm_cfg = self.config_data.get("umm_config", {})
+        self.mm_agent = MMAgent(
+            self.bus,
+            order_size_btc=float(umm_cfg.get("order_size_btc", 0.001)),
+            max_position_btc=float(umm_cfg.get("max_position_btc", 0.005)),
+            gamma=float(umm_cfg.get("gamma_high", 0.15)),
+            spread_min_bp=float(umm_cfg.get("spread_min_bp", 1.2)),
+            max_spread_jpy=float(umm_cfg.get("max_spread_jpy", 3000.0)),
+        )
+        self.quote_engine = QuoteEngine(
+            order_size_btc=float(umm_cfg.get("order_size_btc", 0.001)),
+            max_position_btc=float(umm_cfg.get("max_position_btc", 0.005)),
+            hard_stop_bp=float(umm_cfg.get("hard_stop_bp", 5.0)),
+            max_hold_sec=float(umm_cfg.get("max_hold_sec", 1800.0)),
+            store=self.mm_store,
+            bus=self.bus,
+            logger=self.logger,
+        )
         self.ingestion = MarketDataIngestion(self.bus, self.logger, product_code=self.symbol)
 
         # 仮想口座
@@ -110,6 +139,8 @@ class DryRunObservation24h:
         print(f"Discord レポート  : {self.discord_report_sec / 60:.0f} 分ごと")
         print(f"パラメータ制御    : 🔒 自動調整禁止 (完全手動指示・固定パラメータ)")
         print(f"UMM パラメータ    : {self.umm.params}")
+        print("UMM モード        : 連続クォート (fill-and-hold 廃止 · HardStop mid−5bp failsafe)")
+        print("MM Research       : MMAgent+QuoteEngine → mm_research/ (WIRE=NO · CSR-514)")
         print(f"TF2BP パラメータ  : {self.tf2bp.params}")
         print("-" * 80)
         print(" [経過時間] | Mid価格 (円) | スプレッド | Adverse | UMM状態 (PnL)      | TF2BP状態 (PnL)")
@@ -150,8 +181,17 @@ class DryRunObservation24h:
                         self.adverse_agent.on_orderbook(snap)
                     except Exception:
                         pass
+                    # PegResearch は pipeline 側が正本（同一パス二重書き込み競合を避ける）
+
+                    # 0b. MM Agent Platform 研究レーン（WIRE=NO · Librarian MMQuote）
                     try:
-                        self.peg_research_agent.on_orderbook(snap)
+                        self.fusion.evaluate()
+                        q = self.mm_agent.latest_quote or self.mm_agent.compute_quote(snap)
+                        self.quote_engine.step(q, snap)
+                        self.mm_agent.set_inventory(
+                            self.quote_engine.inventory_btc,
+                            self.quote_engine._inventory_pnl_jpy(snap.mid_price),
+                        )
                     except Exception:
                         pass
 
@@ -211,9 +251,26 @@ class DryRunObservation24h:
                     spread_val = snap.best_ask - snap.best_bid
                     adv_str = f"{adv_state.get('adverse_side', 'none')[:1].upper()}:{adv_score:.2f}"
 
-                    umm_pos_str = f"{self.umm.position_side.upper() if self.umm.position_side else 'FLAT'} ({self.umm.total_pnl_bp:+.1f}bp)"
-                    tf_pos_str = f"{self.tf2bp.position_side.upper() if self.tf2bp.position_side else 'FLAT'} ({self.tf2bp.total_pnl_bp:+.1f}bp)"
-                    tf_v2_pos_str = f"{self.tf2bp_v2.position_side.upper() if self.tf2bp_v2.position_side else 'FLAT'} ({self.tf2bp_v2.total_pnl_bp:+.1f}bp)"
+                    # 建玉中は含み損益を表示（確定PnLだけだと「取引消失」に見える）
+                    def _pos_str(strat, realized_bp: float) -> str:
+                        side = strat.position_side
+                        if not side:
+                            return f"FLAT ({realized_bp:+.1f}bp)"
+                        eval_px = snap.best_bid if side == "buy" else snap.best_ask
+                        entry = float(getattr(strat, "entry_price", 0.0) or 0.0)
+                        size = float(strat.params.get("order_size_btc", 0.001) or 0.001)
+                        if entry > 0 and eval_px > 0:
+                            diff = (eval_px - entry) if side == "buy" else (entry - eval_px)
+                            u_jpy = diff * size
+                            notional = size * snap.mid_price if snap.mid_price > 0 else 1.0
+                            u_bp = (u_jpy / notional) * 10000.0
+                            hold = time.time() - float(getattr(strat, "entry_time", time.time()) or time.time())
+                            return f"{side.upper()} u:{u_bp:+.1f}bp/{hold:.0f}s"
+                        return f"{side.upper()} ({realized_bp:+.1f}bp)"
+
+                    umm_pos_str = _pos_str(self.umm, self.umm.total_pnl_bp)
+                    tf_pos_str = _pos_str(self.tf2bp, self.tf2bp.total_pnl_bp)
+                    tf_v2_pos_str = _pos_str(self.tf2bp_v2, self.tf2bp_v2.total_pnl_bp)
 
                     if now - self._last_status_print >= 1.0:
                         print(
@@ -255,7 +312,7 @@ class DryRunObservation24h:
             acc = self.tf2bp_account
 
         umm_fill_price = None
-        if name == "UMM" and not strat.position_side:
+        if name == "UMM":
             if action == "quote":
                 self.umm_bid = res.get("bid_quote")
                 self.umm_ask = res.get("ask_quote")
@@ -268,11 +325,38 @@ class DryRunObservation24h:
                     snap.taker_volume_ask,
                 )
                 if side:
-                    action = side
-                    umm_fill_price = px
+                    # 連続クォート: 建玉中の反対約定は exit、同方向は無視（cap）
+                    if strat.position_side:
+                        opposite = (
+                            (strat.position_side == "buy" and side == "sell")
+                            or (strat.position_side == "sell" and side == "buy")
+                        )
+                        if opposite:
+                            tip = float(px)
+                            size = float(strat.params.get("order_size_btc", 0.001))
+                            entry = float(strat.entry_price or 0.0)
+                            if strat.position_side == "buy":
+                                pnl = (tip - entry) * size
+                            else:
+                                pnl = (entry - tip) * size
+                            action = "exit"
+                            res = {
+                                **res,
+                                "action": "exit",
+                                "reason": f"MAKER_CLOSE ({side}@{tip:.0f})",
+                                "price": tip,
+                                "expected_pnl": pnl,
+                                "pnl_bp": (pnl / (size * snap.mid_price) * 10000.0) if snap.mid_price > 0 else 0.0,
+                            }
+                            umm_fill_price = tip
+                        # same-side fill ignored
+                    else:
+                        action = side
+                        umm_fill_price = px
             else:
-                self.umm_bid = None
-                self.umm_ask = None
+                if action != "exit":
+                    self.umm_bid = None
+                    self.umm_ask = None
 
         if action in ("buy", "sell"):
             if not strat.position_side:
@@ -326,6 +410,7 @@ class DryRunObservation24h:
                         "refill_rate": snap.refill_rate,
                         "taker_aggressiveness": snap.taker_aggressiveness,
                         "latency_ms": snap.latency_ms,
+                        "continuous_quote": True,
                     },
                 )
 
@@ -364,6 +449,8 @@ class DryRunObservation24h:
             if strat.position_side:
                 if name == "TF2BP":
                     fill_price = float(snap.mid_price)
+                elif res.get("price"):
+                    fill_price = float(res["price"])
                 else:
                     fill_price = snap.best_bid if strat.position_side == "buy" else snap.best_ask
                 pnl = res.get("expected_pnl", res.get("pnl", 0.0))
@@ -483,6 +570,14 @@ class DryRunObservation24h:
                     "frozen": self.umm.frozen_mode,
                     "user_directive": self.umm.last_user_directive,
                     "trades": self._ledger_rows(self.umm),
+                    "continuous_quote": True,
+                },
+                "mm_quote_research": {
+                    "mode": getattr(self.mm_agent, "fusion_mm_mode", "aggressive_mm"),
+                    "inventory_btc": round(self.quote_engine.inventory_btc, 6),
+                    "stats": self.quote_engine.stats(),
+                    "wire": "NO",
+                    "enforce": 0,
                 },
                 "tf2bp": {
                     "position": self.tf2bp.position_side or "FLAT",
@@ -541,7 +636,7 @@ class DryRunObservation24h:
             "fields": [
                 {
                     "name": "① UMM (Unified Market Making v1 - CSR-504)",
-                    "value": f"• スプレッド下限: `{self.umm.params['spread_min_bp']} bp` | 在庫スキュー感度: `{self.umm.params['gamma_high']}`\n• 利確: `+¥{self.umm.params['take_profit_jpy']}` / 損切: `-¥{self.umm.params['stop_loss_jpy']}` / ロット: `{self.umm.params['order_size_btc']} BTC`",
+                    "value": f"• スプレッド下限: `{self.umm.params['spread_min_bp']} bp` | 在庫スキュー感度: `{self.umm.params['gamma_high']}`\n• 利確: `+{self.umm.params.get('take_profit_bp', 2.5)} bp tip` / HardStop: `-{self.umm.params.get('hard_stop_bp', 5.0)} bp mid` / ロット: `{self.umm.params['order_size_btc']} BTC`",
                     "inline": False,
                 },
                 {

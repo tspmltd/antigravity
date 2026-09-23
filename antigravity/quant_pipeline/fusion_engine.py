@@ -41,6 +41,12 @@ class SignalFusionEngine:
             "cancel_recommendation": False,
             "lead_ms_estimated": 0.0,
         }
+        # MM モード調停用（Trend 発注経路 final_signal とは分離）
+        self.latest_mm_inventory: Dict[str, Any] = {
+            "inventory_btc": 0.0,
+            "inventory_pnl_bp": 0.0,
+        }
+        self.latest_mm_mode: str = "aggressive_mm"
 
         self.weights_file = "/home/azureuser/antigravity/configs/approved_weights.json"
         self._last_weights_mtime: float = 0.0
@@ -62,6 +68,57 @@ class SignalFusionEngine:
         self.bus.subscribe("trend_state", self._on_trend_update)
         self.bus.subscribe("micro_state", self._on_micro_update)
         self.bus.subscribe("adverse_research_state", self._on_adverse_update)
+        self.bus.subscribe("mm_inventory", self._on_mm_inventory)
+
+    def _on_mm_inventory(self, data: Dict[str, Any]) -> None:
+        if isinstance(data, dict):
+            self.latest_mm_inventory = data
+            self.publish_mm_mode()
+
+    def compute_mm_mode(self) -> str:
+        """
+        Meta Fusion → MM mode（売買一発シグナルではない）。
+        Trend の final_signal 経路は変更しない。
+        """
+        t_dir = str(self.latest_trend.get("trend_direction") or "neutral")
+        p_side = str(self.latest_micro.get("pressure_side") or "none")
+        fake_bo = bool(self.latest_micro.get("fake_breakout_flag"))
+        lat_risk = bool(self.latest_micro.get("latency_risk_flag"))
+        inv = float(self.latest_mm_inventory.get("inventory_btc") or 0.0)
+        pnl_bp = float(self.latest_mm_inventory.get("inventory_pnl_bp") or 0.0)
+
+        if fake_bo:
+            return "pause"
+        # Trend Down + Sell pressure + long inventory → 在庫解消
+        if inv > 1e-6 and (
+            (t_dir == "down" and p_side in ("sell", "down"))
+            or pnl_bp < -1.5
+        ):
+            return "inventory_reduce"
+        # Trend Up + Buy pressure + short inventory → 在庫解消
+        if inv < -1e-6 and (
+            (t_dir == "up" and p_side in ("buy", "up"))
+            or pnl_bp < -1.5
+        ):
+            return "inventory_reduce"
+        if lat_risk and abs(inv) < 1e-9:
+            return "pause"
+        return "aggressive_mm"
+
+    def publish_mm_mode(self) -> str:
+        mode = self.compute_mm_mode()
+        self.latest_mm_mode = mode
+        payload = {
+            "mm_mode": mode,
+            "inventory_btc": float(self.latest_mm_inventory.get("inventory_btc") or 0.0),
+            "inventory_pnl_bp": float(self.latest_mm_inventory.get("inventory_pnl_bp") or 0.0),
+            "trend_direction": self.latest_trend.get("trend_direction"),
+            "pressure_side": self.latest_micro.get("pressure_side"),
+            "wire": "NO",
+            "enforce": 0,
+        }
+        self.bus.publish("mm_fusion_mode", payload)
+        return mode
 
     def _check_and_reload_weights(self):
         """承認済み重みファイルの変更を検知して無停止ホットリロード"""
@@ -192,9 +249,12 @@ class SignalFusionEngine:
         )
         self.logger.log("fusion_log", decision)
 
-        # 6. シグナルを配信 (buy/sell/exit/cancel)
+        # 6. シグナルを配信 (buy/sell/exit/cancel) — Trend 経路（MM と分離）
         if action in ["buy", "sell", "exit", "cancel"]:
             self.bus.publish("final_signal", asdict(decision))
+
+        # 7. MM モード調停のみ（Trend 発注を書き換えない）
+        self.publish_mm_mode()
 
         return decision
 

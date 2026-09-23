@@ -1,10 +1,12 @@
 {
-  "version": "v1.0.0-approved-arena",
-  "updated_at": "2026-09-19T01:48:00+09:00",
+  "version": "v1.1.0-approved-arena-csr515",
+  "updated_at": "2026-09-23T20:20:00+09:00",
   "policy": {
     "auto_tune_allowed": false,
     "frozen_mode": true,
-    "description": "承認済み12戦略の固定パラメータによるリアルタイム比較Dry-runアリーナ。自動調整・再学習は完全禁止。"
+    "wire": "NO",
+    "enforce": 0,
+    "description": "承認済み12戦略 Dry-run。CSR-515: 出血停止・クローン縮退・MM連続クォート・HardStop mid-bp。自動調整禁止。"
   },
   "execution": {
     "symbol": "FX_BTC_JPY",
@@ -13,8 +15,33 @@
     "report_interval_sec": 3600.0,
     "take_profit_jpy": 25.0,
     "stop_loss_jpy": 25.0,
+    "hard_stop_bp": 5.0,
+    "take_profit_bp": 2.5,
     "max_hold_sec": 1800.0,
-    "daily_loss_limit_jpy": 300.0
+    "daily_loss_limit_jpy": 300.0,
+    "mm_continuous_quote": true
+  },
+  "improvement_csr515": {
+    "entry_halt": [
+      "micro_trend_order_flow",
+      "strat_efd3fab8"
+    ],
+    "entry_halt_reason": "24h出血: MicroTrend≈-262bp WR22% / EmaTrend≈-137bp WR22% — 新規エントリー停止・建玉はHardStop/既存exitのみ",
+    "observe_only": [
+      "strat_6e5a6296",
+      "strat_92a1dffd",
+      "strat_a5d8ae20",
+      "strat_a2a6d745",
+      "strat_9ca5d130"
+    ],
+    "observe_only_reason": "同一ロジック克隆: GridMM/MicroSpread/RSI は代表1本のみ取引、他はシグナル観測のみ",
+    "active_representatives": {
+      "GridMM": "strat_1ac224f3",
+      "MicroSpreadMM": "strat_4d3f2c9f",
+      "InventorySkewMM": "strat_de08146e",
+      "SpreadCaptureMM": "strat_cbcd5aed",
+      "RsiMeanReversion": "strat_7e09696a"
+    }
   },
   "persistence": {
     "state_path": "data/dryrun_approved_arena_state.json",

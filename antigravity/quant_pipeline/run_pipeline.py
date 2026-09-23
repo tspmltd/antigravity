@@ -21,6 +21,9 @@ from .agents.microstructure_agent import MicrostructureAgent
 from .agents.adverse_agent import AdverseResearchAgent
 from .agents.duckdb_optimizer_agent import DuckDBOptimizerAgent
 from .agents.peg_research_agent import PegResearchAgent
+from .agents.mm_agent import MMAgent
+from .quote_engine import QuoteEngine
+from .mm_quote_store import MMQuoteStore
 from .council_coordinator import FourAgentsCouncil
 from .fusion_engine import SignalFusionEngine
 from .ingestion import MarketDataIngestion
@@ -47,6 +50,7 @@ def main():
     print("   🏛️  Antigravity 4AGENT Autonomous Strategy & Governance Pipeline  🏛️")
     print("   [1]Microstructure  [2]TrendFollow  [3]DuckDBOptimizer  [4]AdverseResearch")
     print("   [5]PegResearch (WIRE=NO · CSR-022/025/210o/231/499 · DATA only)")
+    print("   [6]MMAgent+QuoteEngine (WIRE=NO · CSR-514 · continuous quote)")
     print("=" * 85)
     print(f"対象銘柄          : {args.symbol}")
     print(f"観測間隔          : {args.interval} 秒")
@@ -106,6 +110,9 @@ def main():
     adverse_agent = AdverseResearchAgent(bus)
     duckdb_agent = DuckDBOptimizerAgent(bus)
     peg_research_agent = PegResearchAgent(bus)  # CSR-022/025/210o · WIRE=NO
+    mm_store = MMQuoteStore()
+    mm_agent = MMAgent(bus)  # CSR-514 · continuous quote · WIRE=NO
+    quote_engine = QuoteEngine(store=mm_store, bus=bus, logger=logger)
 
     # 4. 4AGENT 評議会コーディネーター登録
     council = FourAgentsCouncil(
@@ -150,6 +157,14 @@ def main():
                 latest_dec = fusion_engine.evaluate()
                 act_str = latest_dec.action.upper() if latest_dec else "HOLD"
                 conf_val = latest_dec.final_confidence if latest_dec else 0.0
+
+                # MM 連続クォート（WIRE=NO）— Trend dryrun と分離
+                q = mm_agent.latest_quote or mm_agent.compute_quote(snap)
+                quote_engine.step(q, snap)
+                mm_agent.set_inventory(
+                    quote_engine.inventory_btc,
+                    quote_engine._inventory_pnl_jpy(snap.mid_price),
+                )
 
                 live_status = "OFF"
 

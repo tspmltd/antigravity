@@ -88,10 +88,22 @@ class PegResearchStore:
         bucket["avg_abs_realized_bp"] = round(bucket["sum_abs_realized_bp"] / n, 3)
 
         data["updated_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, path)
+        self._atomic_json_write(path, data)
+
+    def _atomic_json_write(self, path: str, data: Dict[str, Any]) -> None:
+        """プロセス横断の replace 競合に耐える一意 tmp。"""
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{time.time_ns()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
 
     def write_state(self, state: Dict[str, Any], min_interval_sec: float = 2.0) -> None:
         now = time.time()
@@ -106,8 +118,5 @@ class PegResearchStore:
                 state["today_rollup"] = json.load(open(daily_path, encoding="utf-8"))
             except Exception:
                 pass
-        tmp = self.state_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, self.state_path)
+        self._atomic_json_write(self.state_path, state)
         self._last_state_write = now

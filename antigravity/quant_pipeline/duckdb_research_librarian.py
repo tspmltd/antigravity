@@ -45,6 +45,16 @@ LANE_PATHS = {
         "state": os.path.join(BASE, "data", "trend_research", "trend_research_state.json"),
         "samples": os.path.join(BASE, "data", "trend_research", "samples.jsonl"),
     },
+    "MMQuoteResearch": {
+        "daily": os.path.join(BASE, "data", "mm_research", "daily"),
+        "state": os.path.join(BASE, "data", "mm_research", "mm_quote_state.json"),
+        "fills": os.path.join(BASE, "data", "mm_research", "fills.jsonl"),
+        "quotes": os.path.join(BASE, "data", "mm_research", "quotes.jsonl"),
+    },
+    "FactorICResearch": {
+        "daily": os.path.join(BASE, "data", "factor_ic_research", "daily"),
+        "state": os.path.join(BASE, "data", "factor_ic_research", "factor_ic_state.json"),
+    },
 }
 
 
@@ -136,6 +146,8 @@ class DuckDBResearchLibrarian:
         lanes["CouncilFusion"] = self._review_council(day)
         lanes["TrendFollowResearch"] = self._review_trend(day)
         lanes["FusionParquet"] = self._review_fusion_parquet()
+        lanes["MMQuoteResearch"] = self._review_mm_quote(day)
+        lanes["FactorICResearch"] = self._review_factor_ic(day)
 
         usable_counts = {"USEFUL": 0, "NEED_MORE": 0, "NOT_USEFUL": 0, "CONTEXT": 0}
         for name, lane in lanes.items():
@@ -482,6 +494,140 @@ class DuckDBResearchLibrarian:
             "onset_n": (daily or {}).get("onset_n") or state.get("counts", {}).get("onset_n"),
             "advise": advise,
             "wire": "NO",
+        }
+
+    def _review_mm_quote(self, day: str) -> Dict[str, Any]:
+        paths = LANE_PATHS["MMQuoteResearch"]
+        daily = _load_json(os.path.join(paths["daily"], f"{day}.json"))
+        state = _load_json(paths["state"])
+        tasks = (daily.get("tasks") or state.get("tasks") or {}) if (daily or state) else {}
+        q = tasks.get("mm_quote") or {}
+        f = tasks.get("mm_fill") or {}
+        n_q = int(q.get("n_quote_ticks") or 0)
+        n_f = int(f.get("n") or 0)
+        fill_rate = f.get("fill_rate")
+        if fill_rate is None and n_q > 0:
+            fill_rate = n_f / n_q
+        pos_rate = f.get("pos_close_rate")
+        pause_rate = q.get("pause_rate")
+        hard_stops = int(f.get("hard_stops") or 0)
+
+        # usable: 連続クォートが動いて fill が一定数あるか（経済ではなく計測器）
+        if n_q < 100:
+            usable, reason = "NEED_MORE", f"quote_ticks={n_q}<100"
+        elif n_f < 10:
+            usable, reason = "NEED_MORE", f"fills={n_f}<10（maker_fill 未十分）"
+        else:
+            # fill_rate が極端に 0 や 1 に張り付いていないことだけ見る
+            fr = float(fill_rate or 0.0)
+            if fr <= 0.0:
+                usable, reason = "NOT_USEFUL", "fill_rate=0（クォートが板に届いていない）"
+            elif fr >= 0.5:
+                usable, reason = "NEED_MORE", f"fill_rate={fr:.3f} 高すぎ（幅が狭すぎる可能性）"
+            else:
+                usable, reason = "USEFUL", f"n_q={n_q} n_f={n_f} fill_rate={fr:.3f}（計測器OK・経済判定禁止）"
+
+        advise = []
+        if n_q < 100 or n_f < 10:
+            advise.append("MMQuote: dryrun 連続クォートを継続蓄積（HARD_STOP failsafe のみ）")
+        if hard_stops > max(3, n_f // 5):
+            advise.append("HardStop 頻発 — inventory_reduce / pause 閾値を人手で見直し（自動最適化禁止）")
+        if usable == "NOT_USEFUL":
+            advise.append("quote 幅・maker_fill 条件を Micro tip と突合（幅の無承認ホットリロード禁止）")
+        if not advise:
+            advise.append("MMQuote: usable 後も幅候補は人手承認のみ（auto_apply OFF）")
+
+        fills_n = _duck_count_jsonl(paths["fills"])
+        if fills_n is None:
+            fills_n = _count_jsonl(paths["fills"])
+
+        return {
+            "lane": "MMQuoteResearch",
+            "usable": usable,
+            "reason": reason,
+            "n_quote_ticks": n_q,
+            "n_fills": n_f,
+            "fill_rate": fill_rate,
+            "pos_close_rate": pos_rate,
+            "pause_rate": pause_rate,
+            "hard_stops": hard_stops,
+            "avg_quote_distance": q.get("avg_quote_distance"),
+            "avg_inventory_pnl_bp": q.get("avg_inventory_pnl_bp"),
+            "avg_adverse_selection_bp": q.get("avg_adverse_selection_bp"),
+            "spread_capture": q.get("spread_capture"),
+            "fills_total": fills_n,
+            "mode_counts": q.get("mode_counts"),
+            "advise": advise,
+            "wire": "NO",
+            "auto_apply": False,
+        }
+
+    def _review_factor_ic(self, day: str) -> Dict[str, Any]:
+        paths = LANE_PATHS["FactorICResearch"]
+        daily = _load_json(os.path.join(paths["daily"], f"{day}.json"))
+        state = _load_json(paths["state"])
+        src = daily or state or {}
+        counts = src.get("counts") or state.get("counts") or {}
+        ranked = src.get("ranked") or []
+        ix_tests = src.get("interaction_tests") or state.get("interaction_tests") or []
+        ox_tests = src.get("orthogonal_tests") or state.get("orthogonal_tests") or []
+        top = ranked[:5] if ranked else (state.get("top3") or [])
+        usable = src.get("usable") or "NEED_MORE"
+        portfolio = src.get("portfolio_adoption") or state.get("portfolio_adoption")
+        advise = list(src.get("next_steps") or [])
+        if not advise:
+            if ox_tests:
+                for t in ox_tests[:3]:
+                    advise.append(f"OX {t.get('interaction')}: {t.get('status')} — {t.get('reason')}")
+            elif ix_tests:
+                for t in ix_tests[:2]:
+                    advise.append(f"IX {t.get('interaction')}: {t.get('status')} — {t.get('reason')}")
+            elif usable == "NEED_MORE":
+                advise.append("FactorIC: orderbook_micro サンプル増やすか horizon 再設計（経済判定禁止）")
+            elif usable == "NOT_USEFUL":
+                advise.append("候補ファクター再設計 — Micro tip / Adverse pre 特徴と突合")
+            else:
+                advise.append("Orthogonal / Interaction Test は人手承認後のみ Fusion 設計（auto_apply OFF）")
+        return {
+            "lane": "FactorICResearch",
+            "usable": usable,
+            "portfolio_adoption": portfolio,
+            "counts": counts,
+            "phase": src.get("phase") or state.get("phase"),
+            "user_fusion_scorecard": src.get("user_fusion_scorecard") or state.get("user_fusion_scorecard"),
+            "orthogonal_tests": [
+                {
+                    "interaction": t.get("interaction"),
+                    "status": t.get("status"),
+                    "orthogonal": t.get("orthogonal"),
+                    "ic_oos": t.get("ic_oos") or ((t.get("steps") or {}).get("3_orthogonal_interaction_ic") or {}).get("rank_ic_oos"),
+                    "reason": t.get("reason"),
+                }
+                for t in ox_tests[:6]
+            ],
+            "interaction_tests": [
+                {
+                    "interaction": t.get("interaction"),
+                    "status": t.get("status"),
+                    "ic_oos": t.get("ic_oos") or ((t.get("steps") or {}).get("3_interaction_ic") or {}).get("rank_ic_oos"),
+                    "reason": t.get("reason"),
+                }
+                for t in ix_tests[:4]
+            ],
+            "top": [
+                {
+                    "factor": t.get("factor"),
+                    "horizon_sec": t.get("horizon_sec") or t.get("h"),
+                    "rank_ic_oos": t.get("rank_ic_oos") or t.get("ic_oos"),
+                    "adoption": t.get("adoption"),
+                }
+                for t in top
+            ],
+            "advise": advise,
+            "wire": "NO",
+            "auto_apply": False,
+            "csr": src.get("csr") or "CSR-519",
+            "note": "単独マイクロ発見段階。Orthogonal Interaction が次。経済PASSではない。",
         }
 
     def _compose_next_experiments(self, lanes: Dict[str, Any]) -> List[Dict[str, str]]:

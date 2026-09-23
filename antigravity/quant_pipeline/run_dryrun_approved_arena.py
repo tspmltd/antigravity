@@ -83,6 +83,12 @@ class SingleStrategyState:
         self.be_armed: bool = False  # BE5 建値防衛アーム
         self.mfe_bp: float = 0.0
         self.current_trade_id: Optional[str] = None  # Adverse 追跡用トレードID
+        # CSR-515: 連続クォート / 止血フラグ
+        self.entry_halted: bool = False
+        self.observe_only: bool = False
+        self.pending_bid: Optional[float] = None
+        self.pending_ask: Optional[float] = None
+        self.quote_side: Optional[str] = None  # intended inventory direction from signal
 
         # 成績
         self.total_trades: int = 0
@@ -144,11 +150,14 @@ class SingleStrategyState:
             "stats_24h": self.get_window_stats(24.0),
             "max_dd_jpy": round(self.max_dd, 1),
             "is_halted": self.is_halted,
+            "entry_halted": self.entry_halted,
+            "observe_only": self.observe_only,
             "be_armed": self.be_armed,
             "mfe_bp": round(self.mfe_bp, 2),
             "last_action": self.last_action,
             "last_reason": self.last_reason,
             "signal_fail_count": self.signal_fail_count,
+            "quote_side": self.quote_side,
         }
 
 
@@ -297,7 +306,20 @@ class ApprovedStrategyArena:
                 state.last_reason = f"{type(e).__name__}: {e}"
                 strat_dict[strat_id] = state
 
+        # CSR-515: 止血・クローン縮退フラグ適用
+        imp = self.config.get("improvement_csr515") or {}
+        halt_ids = set(imp.get("entry_halt") or [])
+        obs_ids = set(imp.get("observe_only") or [])
+        for sid, st in strat_dict.items():
+            if sid in halt_ids:
+                st.entry_halted = True
+                st.last_reason = "CSR515_ENTRY_HALT"
+            if sid in obs_ids:
+                st.observe_only = True
+                st.last_reason = "CSR515_OBSERVE_ONLY"
+
         print(f"[Arena] 🏛️ 合計 {len(strat_dict)} 個の承認済み戦略をロード完了しました。")
+        print(f"[Arena] CSR-515 entry_halt={sorted(halt_ids)} observe_only={sorted(obs_ids)}")
         return strat_dict
 
     def run(self):
@@ -309,9 +331,16 @@ class ApprovedStrategyArena:
         print(f"サンプリング間隔  : {self.poll_interval_sec} 秒")
         print(f"Discord レポート  : {self.report_interval_sec / 60:.0f} 分ごと")
         print(f"運用ポリシー      : 🔒 自動調整完全禁止 (FROZEN: 各承認時パラメータ固定)")
+        print("CSR-515           : 出血停止 + クローン縮退 + MM連続クォート + HardStop mid-bp")
         print("-" * 80)
         for s in self.strategies.values():
-            print(f"  • [{s.strat_id:25}] {s.name:18} ({os.path.basename(s.file_path)})")
+            tags = []
+            if s.entry_halted:
+                tags.append("HALT")
+            if s.observe_only:
+                tags.append("OBS")
+            tag = f" [{','.join(tags)}]" if tags else ""
+            print(f"  • [{s.strat_id:25}] {s.name:18}{tag} ({os.path.basename(s.file_path)})")
         print("-" * 80)
 
         # Discord 開始通知
@@ -380,8 +409,11 @@ class ApprovedStrategyArena:
             exec_cfg = self.config.get("execution", {})
             take_profit = exec_cfg.get("take_profit_jpy", 25.0)
             stop_loss = exec_cfg.get("stop_loss_jpy", 25.0)
+            hard_stop_bp = float(exec_cfg.get("hard_stop_bp", 5.0))
+            take_profit_bp = float(exec_cfg.get("take_profit_bp", 2.5))
             max_hold = exec_cfg.get("max_hold_sec", 1800.0)
             order_size = exec_cfg.get("order_size_btc", 0.001)
+            mm_cont = bool(exec_cfg.get("mm_continuous_quote", True))
 
             # Adverse Score & Toxic State & 4AGENT評議会合議ステート取得
             adverse_score = self._get_adverse_score()
@@ -408,11 +440,15 @@ class ApprovedStrategyArena:
                 if s.position:
                     hold_time = time.time() - s.entry_time
                     # 決済価格 (成行決済: BUYはBid、SELLはAsk)
-                    exit_price = best_bid if s.position == "buy" else best_ask
+                    tip_exit = best_bid if s.position == "buy" else best_ask
+                    exit_price = tip_exit
                     pnl_per_unit = (exit_price - s.entry_price) if s.position == "buy" else (s.entry_price - exit_price)
                     current_pnl = pnl_per_unit * s.position_size
                     entry_val = s.entry_price * s.position_size if s.entry_price > 0 else 12500.0
                     current_pnl_bp = (current_pnl / entry_val) * 10000.0 if entry_val > 0 else 0.0
+                    # mid-bp（HardStop 正本 · Go unified_mm）
+                    mid_pnl_unit = (ltp - s.entry_price) if s.position == "buy" else (s.entry_price - ltp)
+                    mid_pnl_bp = (mid_pnl_unit / s.entry_price * 10000.0) if s.entry_price > 0 else 0.0
 
                     # MFE (Maximum Favorable Excursion) 更新
                     if current_pnl_bp > s.mfe_bp:
@@ -424,26 +460,44 @@ class ApprovedStrategyArena:
                         self._log_to_file(f"[{s.strat_id}] 🛡️ BE5 Armed: 含み益 +{current_pnl_bp:.2f}bp 到達 (建値撤退防衛起動)")
 
                     close_reason = None
-                    # Adverse は研究フラグのみ。建玉は戦略ルールで閉じる。
-                    # 1. BE5 建値防衛発動: 含み益が戻って +0.2bp (微益) 以下に落ちたら即手仕舞い
-                    if s.be_armed and current_pnl_bp <= 0.2:
+                    # 0. HardStop mid-bp failsafe（CSR-515 / Go HardStopBp=5）
+                    if mid_pnl_bp <= -hard_stop_bp:
+                        close_reason = f"HARD_STOP ({mid_pnl_bp:.2f}bp mid≤-{hard_stop_bp:.1f})"
+                    # 1. BE5 建値防衛
+                    elif s.be_armed and current_pnl_bp <= 0.2:
                         close_reason = f"BE5_PROFIT_DEFENSE (MFE: +{s.mfe_bp:.1f}bp -> {current_pnl_bp:+.2f}bp, 利確防衛)"
-                    # 3. テイクプロフィット (MM戦略はMaker指値決済: BUYならbest_ask, SELLならbest_bid)
-                    elif (is_mm and (((best_ask - s.entry_price if s.position == 'buy' else s.entry_price - best_bid) * s.position_size) >= take_profit)) or (current_pnl >= take_profit):
+                    # 2. tip TP (bp 正本; jpy は後方互換)
+                    elif current_pnl_bp >= take_profit_bp or current_pnl >= take_profit:
                         if is_mm:
                             exit_price = best_ask if s.position == "buy" else best_bid
                             current_pnl = (exit_price - s.entry_price if s.position == "buy" else s.entry_price - exit_price) * s.position_size
-                        close_reason = f"TAKE_PROFIT (+¥{current_pnl:.1f})"
-                    # 4. ストップロス
-                    elif current_pnl <= -stop_loss:
+                        close_reason = f"TAKE_PROFIT (+{current_pnl_bp:.2f}bp tip)"
+                    # 3. 旧 jpy stop（HardStop より浅い場合のみ補助）
+                    elif current_pnl <= -stop_loss and mid_pnl_bp > -hard_stop_bp:
                         close_reason = f"STOP_LOSS (-¥{abs(current_pnl):.1f})"
-                    # 5. タイムアウト
+                    # 4. タイムアウト
                     elif hold_time >= max_hold:
-                        close_reason = f"TIMEOUT ({hold_time:.0f}s経過, PnL:¥{current_pnl:+.1f})"
+                        close_reason = f"TIMEOUT ({hold_time:.0f}s経過, {mid_pnl_bp:+.2f}bp mid)"
+                    # 5. MM 連続クォート: LTPが反対側クォートに到達したら maker 解消
+                    elif mm_cont and is_mm:
+                        if s.position == "buy" and s.pending_ask and ltp >= s.pending_ask:
+                            exit_price = float(s.pending_ask)
+                            current_pnl = (exit_price - s.entry_price) * s.position_size
+                            close_reason = f"MM_MAKER_CLOSE (ask@{exit_price:.0f})"
+                        elif s.position == "sell" and s.pending_bid and ltp <= s.pending_bid:
+                            exit_price = float(s.pending_bid)
+                            current_pnl = (s.entry_price - exit_price) * s.position_size
+                            close_reason = f"MM_MAKER_CLOSE (bid@{exit_price:.0f})"
 
                     if close_reason:
                         self._close_position(s, exit_price, current_pnl, close_reason)
+                        s.pending_bid = s.pending_ask = s.quote_side = None
                         continue
+
+                    # MM 連続クォート: 建玉中も両面を更新（fill-and-hold しない）
+                    if mm_cont and is_mm:
+                        s.pending_bid = best_bid
+                        s.pending_ask = best_ask
 
                 # (B) シグナル算出
                 # 例外や列無しを sig=0 に黙殺すると、故障本が FLAT 0戦に見える。
@@ -465,7 +519,18 @@ class ApprovedStrategyArena:
                 # (C) 新規エントリーまたはシグナル決済
                 if s.position is None:
                     if sig in (1, -1):
-                        # Adverse は研究フラグのみ。新規エントリーは止めない。
+                        # CSR-515: 出血停止 / クローン観測のみ — 新規禁止
+                        if s.entry_halted or s.observe_only:
+                            self.spread_gate_tracker.record_signal_decision(
+                                s.strat_id, passed=False,
+                                block_reason="entry_halt" if s.entry_halted else "observe_only",
+                            )
+                            # MM 連続クォート観測: クォートは出すが約定させない
+                            if mm_cont and is_mm and s.observe_only:
+                                s.pending_bid = best_bid
+                                s.pending_ask = best_ask
+                                s.quote_side = "buy" if sig == 1 else "sell"
+                            continue
 
                         # 2. S2. Toxic Flow 危険例遮断 (Toxic Score >= 75 または方向別Toxic急変)
                         if toxic_score >= 75.0:
@@ -484,44 +549,70 @@ class ApprovedStrategyArena:
                             continue
 
                         # 4. レジーム・戦略タイプ整合性フィルター (AGENT合議知見)
-                        # トレンド相場中: 逆張り平均回帰(RSI)はエントリー禁止 (ナイフキャッチ防止)
                         if active_regime == "trend" and is_reversion:
                             self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="regime_gate")
                             continue
-                        # レンジ相場中: 順張りトレンド(EMA, MicroTrend)はエントリー禁止 (ダマシ往復ビンタ防止)
                         if active_regime == "range" and is_trend:
                             self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="regime_gate")
                             continue
 
-                        # 5. 確信度フィルター (合議確信度が0.45未満の極小時は見送り)
+                        # 5. 確信度フィルター
                         if final_confidence < 0.45:
                             self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=False, block_reason="confidence_gate")
                             continue
 
-                        # 全ゲート突破！
-                        self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=True)
+                        # MM 連続クォート: 即約定せず pending → LTP交差で maker fill
+                        if mm_cont and is_mm:
+                            s.pending_bid = best_bid
+                            s.pending_ask = best_ask
+                            s.quote_side = "buy" if sig == 1 else "sell"
+                            self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=True)
+                            # LTP がクォートに到達したら約定
+                            if sig == 1 and ltp <= best_bid:
+                                self._open_position(
+                                    s, "buy", best_bid, order_size,
+                                    "SIGNAL_BUY(MAKER_CONT)", spread=spread, adverse_score=adverse_score,
+                                )
+                            elif sig == -1 and ltp >= best_ask:
+                                self._open_position(
+                                    s, "sell", best_ask, order_size,
+                                    "SIGNAL_SELL(MAKER_CONT)", spread=spread, adverse_score=adverse_score,
+                                )
+                            continue
 
+                        # 非MM: 従来の即時エントリー
+                        self.spread_gate_tracker.record_signal_decision(s.strat_id, passed=True)
                         if sig == 1:
-                            # 買いエントリー: MM戦略はMaker指値(best_bid)、その他はAsk成行
-                            entry_p = best_bid if is_mm else best_ask
-                            self._open_position(s, "buy", entry_p, order_size, f"SIGNAL_BUY({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
+                            entry_p = best_ask
+                            self._open_position(s, "buy", entry_p, order_size, "SIGNAL_BUY(TAKER)", spread=spread, adverse_score=adverse_score)
                         elif sig == -1:
-                            # 売りエントリー: MM戦略はMaker指値(best_ask)、その他はBid成行
-                            entry_p = best_ask if is_mm else best_bid
-                            self._open_position(s, "sell", entry_p, order_size, f"SIGNAL_SELL({'MAKER' if is_mm else 'TAKER'})", spread=spread, adverse_score=adverse_score)
+                            entry_p = best_bid
+                            self._open_position(s, "sell", entry_p, order_size, "SIGNAL_SELL(TAKER)", spread=spread, adverse_score=adverse_score)
+                    elif mm_cont and is_mm and s.quote_side and s.pending_bid and s.pending_ask:
+                        # シグナル消灯後も pending が残っていれば LTP 交差で fill
+                        if s.quote_side == "buy" and ltp <= s.pending_bid:
+                            self._open_position(
+                                s, "buy", float(s.pending_bid), order_size,
+                                "QUOTE_FILL(MAKER_CONT)", spread=spread, adverse_score=adverse_score,
+                            )
+                        elif s.quote_side == "sell" and ltp >= s.pending_ask:
+                            self._open_position(
+                                s, "sell", float(s.pending_ask), order_size,
+                                "QUOTE_FILL(MAKER_CONT)", spread=spread, adverse_score=adverse_score,
+                            )
                 else:
-                    # ドテンまたは手仕舞いシグナル
+                    # ドテンまたは手仕舞いシグナル（非MM / MMでもシグナル反転）
                     hold_time = time.time() - s.entry_time
                     exit_price = best_bid if s.position == "buy" else best_ask
                     pnl = ((exit_price - s.entry_price) if s.position == "buy" else (s.entry_price - exit_price)) * s.position_size
 
-                    if sig == 0:
-                        # ノイズ即時損切り防止ガード:
-                        # エントリー直後 (<15s) かつ 損失中 (pnl <= 0) はノイズ微動による手仕舞いを防ぐ
+                    if sig == 0 and not (mm_cont and is_mm):
+                        # ノイズ即時損切り防止ガード（非MMのみ）
                         if hold_time >= 15.0 or pnl > 0:
                             self._close_position(s, exit_price, pnl, "SIGNAL_EXIT")
                     elif (s.position == "buy" and sig == -1) or (s.position == "sell" and sig == 1):
                         self._close_position(s, exit_price, pnl, "SIGNAL_REVERSE")
+                        s.pending_bid = s.pending_ask = s.quote_side = None
 
             # 4. コンソール進捗表示 (上位3戦略の表示)
             sorted_strats = sorted(self.strategies.values(), key=lambda x: x.total_pnl, reverse=True)

@@ -754,3 +754,156 @@ PEG を「成績悪い観測レーン」のまま流すのではなく、**方�
 - hit が baseline±edge 外 → USEFUL / NOT_USEFUL
 - Fusion `realized_pnl` ラベル率が低い → NOT_USEFUL（ΔW禁止）
 - **経済 PASS/FAIL・LIVE配線・frozenパラ自動変更は禁止**
+
+## 25. MM Agent on Agy Platform（設計ロック · 2026-09-23）
+
+Agy を Trend 専用から **MM＋Trend ハイブリッド** へ拡張。正本は連続クォート型（fill→固定保有ではない）。
+
+### 経路
+`MarketDataIngestion → OrderbookMicroSnapshot → Micro/Trend/MM → Meta Fusion → Quote Engine → Bid/Ask`
+
+### MM Agent 出力
+`fair_price / bid_quote / ask_quote / inventory_bias / quote_size / mode`
+mode ∈ `aggressive_mm | inventory_reduce | pause`
+
+### ピン（自動最適化禁止）
+- imbalance>±0.25 + taker確認 → skew
+- fake_bo / latency → pause or size↓
+- HardStop mid **−5.0bp** は failsafe（Go unified_mm_v1）
+- WIRE=NO / ENFORCE=0 / DuckDB auto_apply OFF
+
+### 成果物（実装済 · 2026-09-23）
+- `agents/mm_agent.py` · `quote_engine.py` · `mm_quote_store.py`
+- Fusion `mm_mode` 調停（`mm_fusion_mode` · Trend `final_signal` 非破壊）
+- Librarian `MMQuoteResearch` レーン（auto_apply OFF）
+- dryrun UMM = 連続クォート（建玉中も quote · 反対 maker で解消 · HardStop failsafe）
+- data: `data/mm_research/{quotes,fills}.jsonl` · `daily/` · `mm_quote_state.json`
+
+参照: CSR-514 · FIX.me §3 · plan MM Agent Platform
+
+## 26. 承認済み12戦略アリーナ改善ロック（CSR-515 · 2026-09-23）
+
+MM Agent Platform と並行し、12戦略アリーナも **fill-and-hold 依存を縮退**する。
+
+### 現状（改善前スナップ）
+| 家族 | 代表 | 24h目安 | 問題 |
+|---|---|---|---|
+| MicroTrendOrderFlow | micro_trend_order_flow | ≈−262bp · WR22% | 高頻度出血 |
+| EmaTrend | strat_efd3fab8 | ≈−137bp · WR22% | レンジ往復 |
+| SpreadCapture / Inventory | cbcd5aed / de08146e | ≈−33 / −29bp | 名目Makerだが即約定fill-hold |
+| MicroSpread ×2 | 4d3f / a5d8 | ≈−10bp 同一 | クローン重複 |
+| GridMM ×3 | 1ac / 6e5 / 92a | +15bp 同一 | クローン重複 |
+| RSI ×3 | 7e0 / 9ca / a2a | n≈0 | 過剰ゲート＋クローン |
+
+### ロック（WIRE=NO · 自動調整禁止）
+1. **entry_halt**: MicroTrend · EmaTrend（新規停止・建玉は HardStop/既存exitのみ）
+2. **observe_only**: Grid/MicroSpread/RSI のクローン（代表1本のみ取引）
+3. **HardStop mid −5.0bp** + tip TP 2.5bp（Go 整合）
+4. **MM系**: 連続クォート（pending bid/ask → LTP交差で maker fill · 建玉中も両面更新）
+5. 経済 PASS/FAIL・LIVE・パラメータ自動最適化は禁止
+
+参照: `configs/approved_arena_config.json` · `run_dryrun_approved_arena.py` · CSR-515
+
+## 27. Factor IC 研究レーン（散布・RankIC・Decile・OOS → 採用 · CSR-516 · 2026-09-23）
+
+戦略採用の正本フロー（経済 PASS ではない）:
+
+1. **候補ファクター**（板マイクロ）: imbalance / micro_dev_bp / taker_* / depth / cancel−refill / spread_bp …
+2. **散布図**（OOS）: factor vs forward mid-bp
+3. **Rank IC**（Spearman）IS / OOS 分離
+4. **Decile**: top−bot · 単調性
+5. **採用ゲート**: `|IC_oos|≥0.03` · IS/OOS 同符号 · mono≥0.55 · n_oos≥400 → `CANDIDATE`（人手承認のみ）
+6. Librarian `FactorICResearch` · auto_apply **OFF** · LIVE禁止
+
+成果物: `quant_pipeline/factor_ic_research.py` · `data/factor_ic_research/`
+
+参照: CSR-516 · 判定ロックは §28 が上書き
+
+## 28. Interaction Test ロック（CSR-518 · 2026-09-23）
+
+ユーザー判定（Fusion 思想）:
+
+- **単独 `spread_bp@30s` は採用しない** → `INTERACTION_TEST` 昇格のみ
+- **本命**: `spread_bp×imbalance` · `spread_bp×depth_imbalance`
+
+Interaction 6段（経済 PASS/FAIL 禁止）:
+
+1. Rolling IC
+2. Regime IC
+3. Interaction IC（単独脚との比較）
+4. ICIR
+5. Walk Forward
+6. Strategy Design（Fusion `mm_mode` / size_mult スケッチのみ · WIRE=NO）
+
+軽量再実行（parts≤40 · rows≤4000 · n≈2113）: 両本命 = **`IX_NEED_MORE`**
+（IC_oos≈0.29 · ICIR≈0.78 · WF sign=1.0 だが **単独 imbalance/depth_imbalance を |IC| で超えず**）
+
+`IX_STRATEGY_DESIGN` 未達 · auto_apply OFF · LIVE未触
+
+参照: CSR-518 · canvas `factor-ic-oos-adoption.canvas.tsx`
+
+## 29. Orthogonal Interaction 次フェーズ（CSR-519 · 2026-09-23）
+
+ユーザー評価（研究スコアカード · **システム経済PASSではない**）:
+
+| 段階 | 評価 |
+|------|------|
+| 経済仮説〜Regime | PASS（計測器・仮説フロー） |
+| Interaction | **NEED_MORE** |
+| Strategy Design | **NOT_READY** |
+| 要約 | 良い単独マイクロ発見段階 · Interaction Alpha 未発見 |
+
+Adoption Gate は健全（単独 IC 高→採用を拒否した）。
+
+次フェーズ: **Interaction → Orthogonal Interaction**（異なる経済現象を掛ける）
+
+| ペア | 状態（軽量） |
+|------|-------------|
+| spread × funding_rate | **OX_MISSING**（n_unique=1 · 統計不能 · フィード配線は正資産） |
+| spread × realized_vol | 直交 · 軽量で符号不安定（記述のみ） |
+| spread × trade_sign_imbalance | 直交 · 軽量で符号不安定 |
+| spread × queue_position | tip×micro **proxy**（真queue無し · Bitflyer制約） |
+
+### funding フィード（CSR-519-GO）
+- Bitflyer `GET /v1/getfundingrate` 公開REST · `funding_cache.jsonl` as-of forward-fill
+- 巨大 pulse tape は読まない（VM保護）
+- 研究ラン時に30分超なら1点追記 · LIVE配線なし
+
+掘る問い: なぜ spread が効くか → どの状態で → 何と掛けると増分情報になるか
+
+WIRE=NO · ピン変更禁止 · 軽量ゲート揺れは記述のみ（ユーザー NOT_READY が正）
+
+参照: CSR-519 · `factor_ic_research.py`
+
+## 30. エッジ探索ロック（CSR-520 · 2026-09-23）
+
+**成果:** 高ICシグナル発見 → **なぜ存在するかを説明する**段階へ移行。
+
+### 現在地（ユーザー正本）
+統計学 PASS · 安定性 PASS · 直交性 **未確定** · 経済合理性 **検証中** · 採用 **保留**
+
+### ⑬ Economic Edge Review 正式追加
+⑪ Regime → ⑫ Interaction → **⑬ Economic Edge Review** → ⑭ Strategy Design → ⑮ Entry → ⑯ Exit → ⑰ Portfolio BT
+
+### Strategy Design 解放条件（3点セット）
+1. 統計 PASS  
+2. Orthogonal PASS  
+3. Economic Edge PASS  
+
+どれか欠ければ **NOT_READY**（ルネサンス对齐 · 健全）
+
+### 研究優先順位
+1. funding 履歴蓄積  
+2. true queue_position  
+3. MM Inventory Risk 検証（P0 · spread×inventory_proxy）  
+4. Liquidity Withdrawal 検証（P1 · spread×queue）  
+5. Orthogonal Interaction 再評価  
+
+### 軽量 P0/P1（記述 · 採用しない）
+- P0 inventory: 情報量増 **未確認**（HYP_NEED_MORE）  
+- P1 queue proxy: |IC| は立つが spread単独を超えず · 真queue待ち  
+- funding: OX_MISSING（配線済）
+
+予測対象は価格ではなく **人間行動**。WIRE=NO · ピン未変更。
+
+参照: CSR-520 · canvas

@@ -1,6 +1,6 @@
 {
   "version": "v1.0.0-fixed-csr504-csr499",
-  "updated_at": "2026-09-19T01:34:00+09:00",
+  "updated_at": "2026-09-23T02:20:00+09:00",
   "policy": {
     "auto_tune_allowed": false,
     "frozen_mode": true,
@@ -14,10 +14,11 @@
     "gamma_high": 0.15,
     "order_size_btc": 0.001,
     "max_position_btc": 0.005,
-    "take_profit_jpy": 35.0,
-    "stop_loss_jpy": 25.0,
     "max_hold_sec": 1800.0,
-    "target_spread_markup": 0.5
+    "target_spread_markup": 0.5,
+    "hard_stop_bp": 5.0,
+    "take_profit_bp": 2.5,
+    "exit_note": "Go HardStopBp=5.0 mid-bp; old jpy*size (~18bp) was a port bug"
   },
   "tf2bp_config": {
     "strategy_name": "TF2BP_v1",
@@ -31,7 +32,10 @@
     "max_hold_sec": 1200.0,
     "theta_mae": 3.82,
     "theta_md": 0.12,
-    "target_cells": ["1600_2200|mid|BOOST", "1600_2200|hi|BASE"]
+    "target_cells": [
+      "1600_2200|mid|BOOST",
+      "1600_2200|hi|BASE"
+    ]
   },
   "observation_24h": {
     "target_symbol": "FX_BTC_JPY",
