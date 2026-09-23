@@ -50,6 +50,9 @@ class QuoteEngine:
         self._sum_spread_capture_bp: float = 0.0
         self._spread_capture_n: int = 0
         self._last_adverse_selection_bp: float = 0.0
+        # CSR-521-GO: close ledger with entry/hold for precise PnL decompose
+        self.closes_history: List[Dict[str, Any]] = []
+        self._entry_board_env: Dict[str, Any] = {}
 
     @staticmethod
     def maker_fill(
@@ -226,6 +229,10 @@ class QuoteEngine:
         realized = 0.0
         closed = 0.0
         event_type = "open_or_add"
+        # Capture BEFORE mutation (full close clears entry_time)
+        pre_entry_ts = float(self.entry_time) if self.entry_time > 0 else 0.0
+        pre_entry_px = float(self.avg_entry) if self.avg_entry > 0 else 0.0
+        bp = 0.0
 
         # closing / reducing opposite inventory
         if prev != 0.0 and (prev > 0) != (signed > 0):
@@ -243,18 +250,15 @@ class QuoteEngine:
             self.close_count += 1
             if realized > 0:
                 self.win_closes += 1
-            # spread_capture: realized bp on reduce/close (positive = captured)
             self._sum_spread_capture_bp += bp
             self._spread_capture_n += 1
 
         new_inv = prev + signed
-        # residual opens new avg
         if abs(new_inv) < 1e-12:
             self.inventory_btc = 0.0
             self.avg_entry = 0.0
             self.entry_time = 0.0
         elif prev == 0.0 or (prev > 0) == (signed > 0):
-            # add same direction
             old_abs = abs(prev)
             new_abs = abs(new_inv)
             if old_abs < 1e-12:
@@ -264,17 +268,21 @@ class QuoteEngine:
                 self.avg_entry = (self.avg_entry * old_abs + price * abs(signed)) / new_abs
             self.inventory_btc = new_inv
         else:
-            # flipped or residual after close
             residual = abs(signed) - closed
             self.inventory_btc = new_inv
             if residual > 1e-12:
                 self.avg_entry = price
                 self.entry_time = now
                 event_type = "flip"
-            # else fully closed — avg cleared above if near zero
 
         self.total_fills += 1
-        return {
+        q = self.latest_quote or {}
+        be = q.get("board_env") if isinstance(q.get("board_env"), dict) else {}
+
+        if event_type in ("open_or_add",) and abs(prev) < 1e-12 and abs(self.inventory_btc) > 1e-12:
+            self._entry_board_env = dict(be) if be else {}
+
+        ev: Dict[str, Any] = {
             "ts": now,
             "event": event_type,
             "side": side,
@@ -283,11 +291,32 @@ class QuoteEngine:
             "inventory_btc": round(self.inventory_btc, 6),
             "avg_entry": round(self.avg_entry, 1),
             "realized_pnl_jpy": round(realized, 2),
+            "realized_pnl_bp": round(bp, 3),
             "mid": mid,
             "reason": reason,
             "wire": "NO",
             "enforce": 0,
         }
+        if event_type in ("reduce", "close", "flip") and pre_entry_ts > 0:
+            ev["entry_ts"] = pre_entry_ts
+            ev["hold_sec"] = round(now - pre_entry_ts, 3)
+            if pre_entry_px > 0:
+                ev["entry_price"] = round(pre_entry_px, 1)
+        if be:
+            ev["board_env_csnt"] = bool(be.get("cancel_spike_no_taker"))
+            ev["board_env_fake_bo"] = bool(be.get("fake_breakout"))
+            ev["observe_would_pause_csnt"] = bool(be.get("observe_would_pause_csnt"))
+        if self._entry_board_env and event_type in ("reduce", "close", "flip"):
+            ebe = self._entry_board_env
+            ev["entry_board_env_csnt"] = bool(ebe.get("cancel_spike_no_taker"))
+            ev["entry_board_env_fake_bo"] = bool(ebe.get("fake_breakout"))
+        if event_type in ("close", "reduce") and (realized != 0.0 or "hold_sec" in ev):
+            self.closes_history.append(dict(ev))
+            if len(self.closes_history) > 2000:
+                self.closes_history = self.closes_history[-2000:]
+        if abs(self.inventory_btc) < 1e-12:
+            self._entry_board_env = {}
+        return ev
 
     def _flatten(self, tip: float, mid: float, reason: str, now: float) -> Dict[str, Any]:
         side = "sell" if self.inventory_btc > 0 else "buy"

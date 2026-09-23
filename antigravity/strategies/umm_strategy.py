@@ -164,8 +164,13 @@ class UMMStrategy:
                 self.win_trades += 1
             self.total_pnl += pnl
             self.total_pnl_bp += pnl_bp
+            entry_ts = float(self.entry_time) if self.entry_time > 0 else 0.0
+            hold_sec = round(now - entry_ts, 3) if entry_ts > 0 else None
             self.trades_history.append({
                 "ts": now,
+                "entry_ts": entry_ts if entry_ts > 0 else None,
+                "hold_sec": hold_sec,
+                "entry_price": round(self.entry_price, 1) if self.entry_price > 0 else None,
                 "side": self.position_side,
                 "exit_side": side,
                 "fill_price": fill_price,
@@ -175,6 +180,7 @@ class UMMStrategy:
             })
             self.position_side = None
             self.entry_price = 0.0
+            self.entry_time = 0.0
             self.inventory_btc = 0.0
 
         elif side == "buy":

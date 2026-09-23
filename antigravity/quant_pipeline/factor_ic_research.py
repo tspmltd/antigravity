@@ -115,17 +115,41 @@ PRIORITY_LANES: List[Dict[str, str]] = [
         "priority": "P0",
         "hypothesis": "MM inventory偏り → スプレッド拡大 → 片側ヘッジ → 価格追随",
         "interaction": "spread_bp×inventory_proxy",
-        "expect": "spread単独より情報量増加 → Economic Edge 説明可能に",
+        "expect": "spread単独より情報量増加 → Economic Edge 説明可能に（CSR-520 最初の勝負どころ）",
         "observe": "spread, microprice, depth skew, trade sign, inventory proxy",
     },
     {
-        "lane": "Liquidity_Withdrawal",
+        "lane": "Funding_History",
         "priority": "P1",
+        "hypothesis": "Funding → ポジション偏重 → 強制決済 → 価格変動",
+        "interaction": "spread_bp×funding_rate",
+        "expect": "n_unique≥2 で統計可能化（現状 OX_MISSING）",
+        "observe": "funding_rate cache as-of",
+    },
+    {
+        "lane": "True_Queue_Position",
+        "priority": "P2",
+        "hypothesis": "実 queue rank は独立情報源（3番目 vs 300番目）",
+        "interaction": "spread_bp×queue_position",
+        "expect": "proxy から真queueへ置換後に本判定",
+        "observe": "queue rank at best bid/ask",
+    },
+    {
+        "lane": "Liquidity_Withdrawal",
+        "priority": "P3",
         "hypothesis": "受動流動性減少 → 板薄化 → インパクト増加 → 価格変動",
         "interaction": "spread_bp×queue_position",
         "expect": "spread×queue が spread単独を超える",
         "observe": "spread, book depth, cancel rate, trade intensity, queue position",
-        "queue_note": "現在 tip×micro proxy · 本命は実 queue rank（3番目 vs 300番目）",
+        "queue_note": "現在 tip×micro proxy · 本命は実 queue rank（P2）",
+    },
+    {
+        "lane": "Orthogonal_Rerun",
+        "priority": "P4",
+        "hypothesis": "P0–P2 整備後の Orthogonal Interaction 再評価",
+        "interaction": "—",
+        "expect": "直交性確定 → Strategy Design 3点セットの一角",
+        "observe": "full OX battery",
     },
 ]
 ORTHOGONAL_LEG_HYPOTHESES: Dict[str, str] = {
@@ -167,16 +191,25 @@ SINGLE_FACTOR_PROMOTE_TO_IX = {"spread_bp"}  # 単独CANDIDATE禁止 → INTERAC
 
 # ユーザー評価ロック（CSR-520 · システム経済PASSではない）
 USER_FUSION_SCORECARD: Dict[str, str] = {
-    "統計学": "PASS",
-    "安定性": "PASS",
+    "Statistical Signal": "PASS",
+    "Economic Edge": "UNDER_INVESTIGATION",
+    "Adoption": "LOCKED",
     "直交性": "未確定",
-    "経済合理性": "検証中",
-    "採用": "保留",
-    "Economic Edge Review": "検証中",
     "Strategy Design": "NOT_READY",
-    "phase": "シグナル探索 → エッジ探索（なぜ存在するかの説明）",
-    "spread_bp_status": "HAS_CANDIDATE · USEFUL · NOT ADOPTED",
-    "achievement": "高ICシグナル発見 → なぜ存在するかを説明する段階へ移行（成果）",
+    "phase": "Signal Discovery → Edge Discovery（遷移成功）",
+    "csr519_phase": "高ICを見つけた",
+    "csr520_phase": "高ICの背後にある行動主体を見つけ始めた",
+    "spread_bp_status": "Statistical Signal PASS · Economic Edge UNDER INVESTIGATION · Adoption LOCKED",
+    "achievement": (
+        "高ICだから採用の罠を回避。Signal Discovery→Edge Discovery への遷移に成功。"
+        "失敗ではなく研究プロセスが正しく機能しているサイン。"
+    ),
+    "first_battle": "spread×inventory_proxy が spread単独を超えるか（CSR-520 最初の勝負どころ）",
+    "hyp_info_gain_eval": (
+        "小さく見えるが Signal→Behavior を初めて繋いだ仮説レーン。"
+        "Economic Edge PASS ではないが、「なぜ spread が効くのか」へ到達しうる最初の糸口。"
+        "これまでの研究で最も価値のある進展候補（ユーザー評価）。"
+    ),
     "summary": (
         "IC追いではなく行動主体の説明。P0=MM Inventory Risk。"
         "Strategy Design は 統計PASS+Orthogonal PASS+Economic Edge PASS の3点セットでのみ解放。"
@@ -192,13 +225,35 @@ STRATEGY_DESIGN_UNLOCK: Dict[str, str] = {
     "current": "NOT_READY（直交未確定 · Economic Edge 検証中）",
 }
 
-# 研究優先順位（ユーザー正本 · CSR-520）
+# 研究優先順位（ユーザー正本 · CSR-520 · P0=MM Inventory Risk）
 RESEARCH_PRIORITIES: List[Dict[str, str]] = [
-    {"rank": 1, "item": "funding 履歴蓄積", "why": "n_unique=1 では統計不能 · フィード配線は正資産"},
-    {"rank": 2, "item": "true queue_position", "why": "tip×micro proxy → 実 queue rank（3番目 vs 300番目）"},
-    {"rank": 3, "item": "MM Inventory Risk 検証", "why": "P0 · spread×inventory_proxy で情報量増→EER説明"},
-    {"rank": 4, "item": "Liquidity Withdrawal 検証", "why": "P1 · spread×queue が単独を超えるか"},
-    {"rank": 5, "item": "Orthogonal Interaction 再評価", "why": "履歴・真queue後に再判定"},
+    {
+        "rank": "P0",
+        "item": "MM Inventory Risk",
+        "why": "最初の勝負どころ: spread×inventory_proxy が spread単独を超えるか → EER説明",
+        "interaction": "spread_bp×inventory_proxy",
+    },
+    {
+        "rank": "P1",
+        "item": "Funding履歴蓄積",
+        "why": "n_unique=1 では統計不能 · REST→cache as-of 配線は正資産",
+    },
+    {
+        "rank": "P2",
+        "item": "True Queue Position",
+        "why": "tip×micro proxy → 実 queue rank（3番目 vs 300番目）",
+    },
+    {
+        "rank": "P3",
+        "item": "Liquidity Withdrawal",
+        "why": "spread×queue が単独を超えるか（真queue後に本判定）",
+        "interaction": "spread_bp×queue_position",
+    },
+    {
+        "rank": "P4",
+        "item": "Orthogonal Re-run",
+        "why": "P0–P2 整備後に Orthogonal Interaction 再評価",
+    },
 ]
 
 # Renaissance对齐ゲート（ユーザー指定）
@@ -749,7 +804,7 @@ def evaluate_behavior_hypotheses(
 
     probes = [
         ("inventory_proxy", "mm_inventory_risk", "MM_Inventory_Risk", "P0"),
-        ("queue_position", "liquidity_withdrawal", "Liquidity_Withdrawal", "P1"),
+        ("queue_position", "liquidity_withdrawal", "Liquidity_Withdrawal", "P3"),
     ]
     for leg, chain_key, lane, pri in probes:
         if leg not in df.columns:
@@ -780,7 +835,14 @@ def evaluate_behavior_hypotheses(
             "lane": lane,
             "priority": pri,
             "interaction": f"spread_bp×{leg}",
-            "hypothesis": PRIORITY_LANES[0]["hypothesis"] if pri == "P0" else PRIORITY_LANES[1]["hypothesis"],
+            "hypothesis": (
+                PRIORITY_LANES[0]["hypothesis"]
+                if pri == "P0"
+                else next(
+                    (p["hypothesis"] for p in PRIORITY_LANES if p["priority"] == pri),
+                    "",
+                )
+            ),
             "behavioral_chain": BEHAVIORAL_CHAINS.get(chain_key, []),
             "n_oos": int(mo.sum()),
             "rank_ic_spread_oos": _round_or_none(ic_spread),
@@ -1445,13 +1507,18 @@ def run_factor_ic_research(
         "priority_lanes": PRIORITY_LANES,
         "behavioral_chains": BEHAVIORAL_CHAINS,
         "judgment_lock": {
-            "spread_bp": "HAS_CANDIDATE · USEFUL · NOT ADOPTED（EER未突破）",
-            "funding_rate": "OX_MISSING when n_unique=1（統計不能）· フィード配線は正資産",
-            "queue_position": "proxy中 · 本命は実 queue rank",
-            "p0": "MM Inventory Risk · spread×inventory_proxy",
-            "p1": "Liquidity Withdrawal · spread×queue_position",
+            "p0": "MM Inventory Risk · spread×inventory_proxy が spread単独を超えるか（最初の勝負どころ）",
+            "p1": "Funding履歴蓄積",
+            "p2": "True Queue Position",
+            "p3": "Liquidity Withdrawal · spread×queue",
+            "p4": "Orthogonal Re-run",
+            "spread_bp": (
+                "Statistical Signal PASS · Economic Edge UNDER INVESTIGATION · Adoption LOCKED"
+            ),
             "strategy_design": "統計PASS + Orthogonal PASS + Economic Edge PASS の3点セットでのみ解放",
-            "achievement": "高IC発見 → なぜ存在するかを説明する段階（エッジ探索）",
+            "achievement": (
+                "高ICだから採用の罠を回避 · Signal→Edge Discovery 遷移成功 · 失敗ではない"
+            ),
         },
         "pipeline_steps": PIPELINE_STEPS,
         "interaction_test_steps": INTERACTION_TEST_STEPS,
@@ -1526,7 +1593,7 @@ def _next_steps(
     behavior_hypotheses: Optional[List[Dict[str, Any]]] = None,
 ) -> List[str]:
     out: List[str] = [
-        f"{p['rank']}. {p['item']} — {p['why']}" for p in RESEARCH_PRIORITIES
+        f"{p['rank']} {p['item']} — {p['why']}" for p in RESEARCH_PRIORITIES
     ]
     out.append(
         "Strategy Design 解放条件: 統計PASS + Orthogonal PASS + Economic Edge PASS（3点セット）"

@@ -12,6 +12,7 @@ import time
 from dataclasses import asdict
 from typing import Any, Dict, Optional
 
+from ..board_env import board_env_flags
 from ..event_bus import EventBus
 from ..schema import OrderbookMicroSnapshot
 
@@ -62,8 +63,15 @@ class MMAgent:
             self.fusion_mm_mode = str(data["mm_mode"])
 
     def set_inventory(self, inventory_btc: float, inventory_pnl: float = 0.0) -> None:
+        prev = abs(self.inventory_btc)
         self.inventory_btc = float(inventory_btc)
         self.inventory_pnl = float(inventory_pnl)
+        if abs(self.inventory_btc) < 1e-12:
+            self._inv_entry_ts = 0.0
+        elif prev < 1e-12 and abs(self.inventory_btc) > 1e-12:
+            self._inv_entry_ts = time.time()
+        elif not getattr(self, "_inv_entry_ts", 0.0):
+            self._inv_entry_ts = time.time()
 
     def on_orderbook(self, snap: OrderbookMicroSnapshot) -> Dict[str, Any]:
         q = self.compute_quote(snap)
@@ -98,6 +106,17 @@ class MMAgent:
         lat_risk = bool(micro.get("latency_risk_flag") or micro.get("latency_risk"))
         pressure_side = str(micro.get("pressure_side") or "none")
         t_dir = str(trend.get("trend_direction") or "neutral")
+        tagg = float(getattr(snap, "taker_aggressiveness", 0.0) or 0.0)
+        be = board_env_flags(
+            cancel_rate=cancel_rate,
+            refill_rate=refill_rate,
+            taker_volume_bid=tb,
+            taker_volume_ask=ta,
+            taker_aggressiveness=tagg,
+            fake_breakout_flag=fake_bo,
+        )
+        # CSR-521-GO: csnt is OBSERVE only — do NOT pause here (ENFORCE=0)
+        observe_would_pause_csnt = bool(be.get("observe_would_pause_csnt"))
 
         # fair = micro_price 寄り
         micro_px = float(snap.micro_price) if snap.micro_price else mid
@@ -171,8 +190,15 @@ class MMAgent:
             "trend_direction": t_dir,
             "cancel_minus_refill": round(cancel_rate - refill_rate, 4),
             "micro_dev": float(snap.micro_dev),
-            "taker_aggressiveness": float(getattr(snap, "taker_aggressiveness", 0.0) or 0.0),
+            "taker_aggressiveness": tagg,
             "fake_breakout": fake_bo,
             "latency_risk": lat_risk,
+            "board_env": be,
+            "cancel_spike_no_taker": bool(be.get("cancel_spike_no_taker")),
+            "observe_would_pause_csnt": observe_would_pause_csnt,
+            # InventoryRiskScore inputs (OBSERVE · not a price predictor)
+            "hold_age_sec": round(time.time() - float(getattr(self, "_inv_entry_ts", 0.0)), 1)
+            if abs(self.inventory_btc) > 1e-12 and getattr(self, "_inv_entry_ts", 0.0) > 0
+            else 0.0,
         }
         return quote

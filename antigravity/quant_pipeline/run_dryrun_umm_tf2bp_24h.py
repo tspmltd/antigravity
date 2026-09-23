@@ -487,7 +487,7 @@ class DryRunObservation24h:
                 continue
             if ts < cutoff:
                 continue
-            rows.append({
+            row = {
                 "ts": ts,
                 "side": t.get("side"),
                 "exit_side": t.get("exit_side"),
@@ -495,7 +495,28 @@ class DryRunObservation24h:
                 "pnl_jpy": t.get("pnl_jpy", 0),
                 "pnl_bp": t.get("pnl_bp", 0),
                 "is_win": bool(t.get("is_win", False)),
-            })
+            }
+            # CSR-521-GO: precise hold decompose (OBSERVE · ENFORCE=0)
+            if t.get("entry_ts") is not None:
+                try:
+                    row["entry_ts"] = float(t["entry_ts"])
+                except (TypeError, ValueError):
+                    pass
+            if t.get("hold_sec") is not None:
+                try:
+                    row["hold_sec"] = float(t["hold_sec"])
+                except (TypeError, ValueError):
+                    pass
+            if t.get("entry_price") is not None:
+                row["entry_price"] = t.get("entry_price")
+            for k in (
+                "board_env_csnt",
+                "board_env_fake_bo",
+                "observe_would_pause_csnt",
+            ):
+                if k in t:
+                    row[k] = t.get(k)
+            rows.append(row)
         return rows[-2000:]
 
     def _apply_ledger(self, state: Dict[str, Any]) -> None:
@@ -514,7 +535,7 @@ class DryRunObservation24h:
                     ts = float(t.get("ts"))
                 except (TypeError, ValueError):
                     continue
-                rows.append({
+                row = {
                     "ts": ts,
                     "side": t.get("side"),
                     "exit_side": t.get("exit_side"),
@@ -522,7 +543,27 @@ class DryRunObservation24h:
                     "pnl_jpy": float(t.get("pnl_jpy") or 0),
                     "pnl_bp": float(t.get("pnl_bp") or 0),
                     "is_win": bool(t.get("is_win", False)),
-                })
+                }
+                if t.get("entry_ts") is not None:
+                    try:
+                        row["entry_ts"] = float(t["entry_ts"])
+                    except (TypeError, ValueError):
+                        pass
+                if t.get("hold_sec") is not None:
+                    try:
+                        row["hold_sec"] = float(t["hold_sec"])
+                    except (TypeError, ValueError):
+                        pass
+                if t.get("entry_price") is not None:
+                    row["entry_price"] = t.get("entry_price")
+                for k in (
+                    "board_env_csnt",
+                    "board_env_fake_bo",
+                    "observe_would_pause_csnt",
+                ):
+                    if k in t:
+                        row[k] = t.get(k)
+                rows.append(row)
             strat.trades_history = rows
             if "total_trades" in block:
                 strat.total_trades = int(block.get("total_trades") or 0)

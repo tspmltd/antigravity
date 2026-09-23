@@ -877,10 +877,24 @@ WIRE=NO · ピン変更禁止 · 軽量ゲート揺れは記述のみ（ユー�
 
 ## 30. エッジ探索ロック（CSR-520 · 2026-09-23）
 
-**成果:** 高ICシグナル発見 → **なぜ存在するかを説明する**段階へ移行。
+**成果:** 高ICだから採用の罠を回避。**Signal Discovery → Edge Discovery** への遷移に成功（失敗ではない）。
 
-### 現在地（ユーザー正本）
-統計学 PASS · 安定性 PASS · 直交性 **未確定** · 経済合理性 **検証中** · 採用 **保留**
+### フェーズ対比
+| CSR | フェーズ |
+|-----|----------|
+| **519まで** | 高ICを見つけた |
+| **520** | 高ICの背後にある**行動主体**を見つけ始めた（Signal → Behavior） |
+
+### spread_bp の位置付け（ユーザー正本）
+| 軸 | 状態 |
+|----|------|
+| Statistical Signal | **PASS** |
+| Economic Edge | **UNDER INVESTIGATION** |
+| Adoption | **LOCKED** |
+
+### HYP_INFO_GAIN の評価（ユーザー）
+小さく見えるが、**Signal→Behavior を初めて繋いだ仮説レーン**。  
+Economic Edge PASS ではない。ただし「なぜ spread が効くのか」へ到達しうる**最初の糸口**であり、これまでの研究で最も価値のある進展候補。
 
 ### ⑬ Economic Edge Review 正式追加
 ⑪ Regime → ⑫ Interaction → **⑬ Economic Edge Review** → ⑭ Strategy Design → ⑮ Entry → ⑯ Exit → ⑰ Portfolio BT
@@ -890,20 +904,109 @@ WIRE=NO · ピン変更禁止 · 軽量ゲート揺れは記述のみ（ユー�
 2. Orthogonal PASS  
 3. Economic Edge PASS  
 
-どれか欠ければ **NOT_READY**（ルネサンス对齐 · 健全）
+どれか欠ければ **NOT_READY**
 
 ### 研究優先順位
-1. funding 履歴蓄積  
-2. true queue_position  
-3. MM Inventory Risk 検証（P0 · spread×inventory_proxy）  
-4. Liquidity Withdrawal 検証（P1 · spread×queue）  
-5. Orthogonal Interaction 再評価  
-
-### 軽量 P0/P1（記述 · 採用しない）
-- P0 inventory: 情報量増 **未確認**（HYP_NEED_MORE）  
-- P1 queue proxy: |IC| は立つが spread単独を超えず · 真queue待ち  
-- funding: OX_MISSING（配線済）
+| Pri | 項目 | 勝負どころ |
+|-----|------|------------|
+| **P0** | **MM Inventory Risk** | **spread×inventory_proxy が spread単独を超えるか**（最初の勝負 · Signal→Behavior） |
+| P1 | Funding履歴蓄積 | n_unique≥2 で統計可能化 |
+| P2 | True Queue Position | 実 queue rank |
+| P3 | Liquidity Withdrawal | spread×queue |
+| P4 | Orthogonal Re-run | P0–P2 後 |
 
 予測対象は価格ではなく **人間行動**。WIRE=NO · ピン未変更。
 
-参照: CSR-520 · canvas
+## 31. UMM損失暫定判断（CSR-521 · 2026-09-23）
+
+**暫定判断（ユーザー）:**  
+UMM の赤字は **InventorySkew ロジック自体**ではなく、**在庫保有時間**と**異常板環境フィルタ不足**による可能性が高い。
+
+### 板フラグ（目立ったもの）
+- cancel_spike ≈ **35%+**
+- fake_breakout ≈ **35%+**
+
+### 最優先検証
+**`cancel_spike_no_taker` 環境での UMM PnL 分解**  
+→ これだけで赤字原因の半分以上を説明できる可能性。
+
+### 軽量分解（dryrun UMM trades × micro subsample · 記述のみ）
+| env | n_in | Σbp_in | 負PnL寄与 |
+|-----|------|--------|-----------|
+| cancel_spike_no_taker (asof) | 281 | −181 | **35%** |
+| cancel_spike_no_taker (30s窓) | 345 | −220 | **43%** |
+| fake_breakout (30s窓) | 418 | −335 | **55%** |
+
+在庫保有（quote log）: holding比率 ≈ **83%** · hold p50≈**80s** · p90≈**267s**
+
+### CSR-521-GO — PnL × Hold Time（ユーザー指示 · 本命集計）
+
+真源: `dryrun_umm_tf2bp_24h.log` entry/exit（AE hold は **35s打ち切りで無効**）。
+
+| bucket | n | Σ bp |
+|--------|---|------|
+| 0-15s | 262 | **+54** |
+| 15-30s | 123 | −8 |
+| 30-60s | 88 | **−105** |
+| 60-120s | 68 | −40 |
+| 120s+ | 63 | **−83** |
+
+- **0–30s = +46bp · 30s+ = −229bp** → `hold_time_dominates_pattern = true`
+- 原因フレーミング: **Entryではなく保有時間** / 市場方向当てではない
+- HARD_STOP: n=148 · Σ≈−809bp · median hold≈44s（長持ち→損切）
+- UMM ledger ≈ **−652bp** vs InventorySkewMM arena ≈ **+30bp**
+
+### CSR-521-HAZARD — Conditional Hazard（因果確認）
+
+**ユーザー評価ロック:** UMM損失は Entry品質ではなく、**30s超の在庫保持 → HARD_STOP テール**にほぼ収束。  
+IRS は **OBSERVE固定 · ENFORCE=0**。今はアルファ生成ではなく損失発生機構の因果確認局面。
+
+#### P(HARD_STOP \| hold > T) — 時間そのものがリスク
+
+| cond | n | P(HS) |
+|------|---|-------|
+| hold ≤ 30s | 403 | **14.5%** |
+| hold > 30s | 219 | **42.0%** |
+| hold > 60s | 131 | **45.8%** |
+| hold > 90s | 92 | **45.7%** |
+| hold > 120s | 64 | **51.6%** |
+
+→ **time_as_risk_factor = true**（≤30→>30 で段差 · >120 で過半）
+
+#### ∩ csnt / fake_bo（hold>30 条件付き）
+
+密 micro 接合では **跳ねず**（frac≥0.3 Δ≈0 · any でも上昇なし）。  
+→ IRS 主要因子として **確定採用は hold のみ**。csnt/fake_bo は PnL寄与から二次候補のまま継続観測。
+
+### UMM改善第一候補ロック（ユーザー評価 · CSR-521-CTRL）
+
+**第一候補は新シグナル追加ではない。**  
+**「30秒超保有状態」をどう扱うかという在庫制御問題**である。
+
+| 優先 | 内容 | 状態 |
+|------|------|------|
+| **P0** | hold>30s の在庫制御（size縮小 / 片側撤収 / max_hold短縮 / would_flatten） | **OBSERVE設計 · ENFORCE=0** |
+| P1 | IRS（hold一次 · csnt/fake_bo二次）を制御器入力に配線 | OBSERVE |
+| 後回し | 新エントリーシグナル · 方向予測器 · ピン変更 | しない |
+
+根拠: PnL×Hold（0–30s黒字 / 30s+赤字）∧ Conditional Hazard（P(HS) 14%→42%→52%）。  
+WIRE=NO · 経済PASS不出 · LIVE未触。
+
+正本: `data/mm_research/daily/2026-09-23_umm_hard_stop_hazard.json` · `umm_hard_stop_hazard.py`
+
+### InventoryRiskScore（OBSERVE · 在庫制御器）
+
+```
+InventoryRiskScore = f(hold_time, csnt, fake_breakout, spread, tip_thin, imbalance)
+```
+
+- **価格予測器にしない** · UMM の size/pause/max_hold 制御へ接続が本命
+- Hazard 根拠で一次確定: **hold** · csnt/fake_bo は二次候補（跳ね未確認）
+- P0 `spread×inventory_proxy` をここに吸収
+- IRS Q5: Σ≈**−148bp** · mean hold≈118s（記述のみ）
+- **ENFORCE=0** · ピン未変更
+
+### しないこと
+InventorySkew断罪 · 経済PASS/FAIL · LIVE/ピン変更 · フィルタ自動ON
+
+正本: `umm_pnl_x_hold.py` · `umm_hard_stop_hazard.py` · CSR-521-GO / CSR-521-HAZARD

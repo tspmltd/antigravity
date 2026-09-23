@@ -79,6 +79,7 @@ class SignalFusionEngine:
         """
         Meta Fusion → MM mode（売買一発シグナルではない）。
         Trend の final_signal 経路は変更しない。
+        cancel_spike_no_taker は OBSERVE のみ（ENFORCE=0 では pause しない）。
         """
         t_dir = str(self.latest_trend.get("trend_direction") or "neutral")
         p_side = str(self.latest_micro.get("pressure_side") or "none")
@@ -108,12 +109,21 @@ class SignalFusionEngine:
     def publish_mm_mode(self) -> str:
         mode = self.compute_mm_mode()
         self.latest_mm_mode = mode
+        # OBSERVE: csnt would_pause — never auto-enforced here
+        cancel = float(self.latest_micro.get("cancel_rate") or 0.0)
+        refill = float(self.latest_micro.get("refill_rate") or 0.0)
+        tb = float(self.latest_micro.get("taker_volume_bid") or 0.0)
+        ta = float(self.latest_micro.get("taker_volume_ask") or 0.0)
+        cr = cancel - refill
+        csnt = bool(cancel >= 0.40 and cr >= 0.15 and (tb + ta) < 0.01)
         payload = {
             "mm_mode": mode,
             "inventory_btc": float(self.latest_mm_inventory.get("inventory_btc") or 0.0),
             "inventory_pnl_bp": float(self.latest_mm_inventory.get("inventory_pnl_bp") or 0.0),
             "trend_direction": self.latest_trend.get("trend_direction"),
             "pressure_side": self.latest_micro.get("pressure_side"),
+            "observe_would_pause_csnt": csnt,
+            "cancel_spike_no_taker": csnt,
             "wire": "NO",
             "enforce": 0,
         }
