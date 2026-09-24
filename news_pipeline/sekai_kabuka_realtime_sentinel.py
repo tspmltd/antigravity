@@ -41,7 +41,7 @@ import matplotlib.patches as patches
 
 plt.rcParams["font.family"] = "Noto Sans CJK JP"
 
-from news_pipeline.x_notifier import send_breakout_tweet
+from news_pipeline.x_notifier import send_breakout_tweet, DEFAULT_MOVER_X_BUSY_DAILY_CAP
 from news_pipeline.post_optimizer import compute_chart_colors, optimize_tags, should_release_sentinel
 
 
@@ -181,7 +181,7 @@ class RealtimeMoverSentinel:
         self.market_price_cache: Dict[str, Dict[str, Any]] = self._load_price_cache()
         self.notified_states: Dict[str, Dict[str, Any]] = self._load_notified_states()
         self.x_posted_states: Dict[str, Dict[str, Any]] = self._load_x_states()
-        self.max_daily_x: int = int(os.getenv("SEKAI_MAX_DAILY_X", "4"))  # X無料枠配分: 世界株価急変は日次最大4件
+        self.max_daily_x: int = int(os.getenv("SEKAI_MAX_DAILY_X", str(DEFAULT_MOVER_X_BUSY_DAILY_CAP)))  # 急変 X 繁忙枠。グローバル48は別。
 
         self.stable_cycle_count: int = 0
         self.active_shock_level: str = "NORMAL"
@@ -195,6 +195,17 @@ class RealtimeMoverSentinel:
             pass
 
         self._setup_japanese_font()
+
+    def remaining_mover_x_posts(self, daily_count: Optional[int] = None) -> int:
+        """急変 overlay の本日残 X 枠。Discord は検知全件、X は繁忙上限 max_daily_x（既定12）。"""
+        if daily_count is None:
+            today_str = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+            daily_meta = self.x_posted_states.get("_daily_meta", {}) or {}
+            if daily_meta.get("date") != today_str:
+                daily_count = 0
+            else:
+                daily_count = int(daily_meta.get("count", 0))
+        return max(0, int(self.max_daily_x) - int(daily_count))
 
     def _load_price_cache(self) -> Dict[str, Dict[str, Any]]:
         if os.path.exists(self.price_cache_path):
@@ -792,14 +803,14 @@ class RealtimeMoverSentinel:
                     elif now_ts - last_x_time >= 3600.0:  # 1時間以上経過した重大変動
                         x_eligible_events.append(ev)
 
-            # X日次上限チェック (最大4件)
+            # X日次上限チェック（繁忙 12。グローバル 48 は XNotifier 側）
             today_str = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
             daily_meta = self.x_posted_states.get("_daily_meta", {})
             if daily_meta.get("date") != today_str:
                 daily_meta = {"date": today_str, "count": 0}
             curr_daily_x = daily_meta.get("count", 0)
 
-            if x_eligible_events and curr_daily_x >= self.max_daily_x:
+            if x_eligible_events and self.remaining_mover_x_posts(curr_daily_x) <= 0:
                 logger.info(f"[Sentinel] 🛑 世界の株価 X急変速報 本日上限({self.max_daily_x}件)到達のためスキップ (対象: {[t['name'] for t in x_eligible_events]})")
                 x_eligible_events = []
 

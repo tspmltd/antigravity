@@ -6,9 +6,12 @@ X (旧Twitter) API v2 自動投稿モジュール (x_notifier.py)
 - OAuth 1.0a User Context 認証 (requests-oauthlib)
 - 日本語140文字制限に最適化したスマート要約 & ハッシュタグ自動付与
 - 未設定時の安全スキップ & エラーハンドリング (Discord送信への波及防止)
+- 同一本文の再送禁止 (投稿成功済みの exact tweet text を永続記録)
 """
 
 import os
+import re
+import hashlib
 import logging
 import json
 from datetime import datetime, timezone, timedelta
@@ -23,8 +26,62 @@ X_TWEET_API_URL = "https://api.twitter.com/2/tweets"
 X_MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
 
 JST = timezone(timedelta(hours=9))
-X_DAILY_STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "x_global_daily_state.json")
-GLOBAL_DAILY_POST_LIMIT = int(os.getenv("X_GLOBAL_DAILY_LIMIT", "48"))  # X無料枠(月1500件=日平均50件)の安全上限
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+X_DAILY_STATE_PATH = os.path.join(_DATA_DIR, "x_global_daily_state.json")
+# 配信ゲートの「送信済み本文」記録。同一本文の再投稿を遮断する唯一のソース。
+X_SENT_POSTS_PATH = os.path.join(_DATA_DIR, "x_sent_posts.json")
+X_SENT_POSTS_MAX = 2000
+GLOBAL_DAILY_POST_LIMIT = int(os.getenv("X_GLOBAL_DAILY_LIMIT", "48"))  # 合意済み日次上限。従量課金でも据え置く
+# 日米株・世界株価の急変 X 枠（繁忙 12）。Discord は検知全件。
+DEFAULT_MOVER_X_BUSY_DAILY_CAP = 12
+MOVER_X_BUSY_DAILY_CAP = int(os.getenv("SEKAI_MAX_DAILY_X", str(DEFAULT_MOVER_X_BUSY_DAILY_CAP)))
+
+# 定時背骨 15（17:30 TOP5 は scheduler の別ジョブ）。Discord のみの定時は置かない。
+# 09:00–14:30 は東証セッションの追加枠。16:00 大引けは残す。
+X_BACKBONE_SLOTS = frozenset({
+    "07:00", "07:30", "08:00", "08:30",
+    "09:00", "10:30", "11:30", "12:00", "12:30", "14:30",
+    "16:00", "17:00", "17:30", "19:00", "21:30",
+})
+X_DISCORD_ONLY_SLOTS = frozenset()
+X_SLOT_HEADERS = {
+    "07:00": "【海外市場のまとめ】07:00",
+    "07:30": "【海外テック】07:30",
+    "08:00": "【日本株寄り前】08:00",
+    "08:30": "【PTS・ストップ高安】08:30",
+    "09:00": "【寄り付き】09:00",
+    "10:30": "【前場】10:30",
+    "11:30": "【前場引け】11:30",
+    "12:00": "【社会ニュース】12:00",
+    "12:30": "【後場寄り】12:30",
+    "14:30": "【大引け前】14:30",
+    "16:00": "【日本株総括】16:00",
+    "17:00": "【夜間PTS】17:00",
+    "17:30": "【本日大引け TOP5】17:30",
+    "19:00": "【欧州・アジア】19:00",
+    "21:30": "【NY市場寄り付き】21:30",
+}
+
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_EMPTY_POINT_MARKERS = ("情報なし", "開示待ち", "取得スキップ", "N/A")
+
+
+def strip_tweet_urls(text: str) -> str:
+    """X 本文から URL を除去する（Post: Create with URL 課金を避ける）。他の文字は触らない。"""
+    return _URL_RE.sub("", text or "")
+
+
+def tweet_contains_url(text: str) -> bool:
+    return bool(_URL_RE.search(text or ""))
+
+
+def is_x_backbone_slot(slot: str) -> bool:
+    return slot in X_BACKBONE_SLOTS
+
+
+def tweet_content_key(text: str) -> str:
+    """投稿本文の identity。exact text の SHA-256 (正規化・曖昧一致はしない)。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class XNotifier:
@@ -37,6 +94,8 @@ class XNotifier:
         access_token: Optional[str] = None,
         access_token_secret: Optional[str] = None,
         daily_limit: int = GLOBAL_DAILY_POST_LIMIT,
+        daily_state_path: Optional[str] = None,
+        sent_state_path: Optional[str] = None,
     ):
         self.api_key = api_key or os.getenv("X_API_KEY", "").strip() or os.getenv("TWITTER_API_KEY", "").strip()
         self.api_secret = (
@@ -48,14 +107,16 @@ class XNotifier:
         self.access_token = access_token or os.getenv("X_ACCESS_TOKEN", "").strip() or os.getenv("TWITTER_ACCESS_TOKEN", "").strip()
         self.access_token_secret = access_token_secret or os.getenv("X_ACCESS_TOKEN_SECRET", "").strip() or os.getenv("TWITTER_ACCESS_TOKEN_SECRET", "").strip()
         self.daily_limit = daily_limit
+        self.daily_state_path = daily_state_path or os.getenv("X_DAILY_STATE_PATH", "").strip() or X_DAILY_STATE_PATH
+        self.sent_state_path = sent_state_path or os.getenv("X_SENT_POSTS_PATH", "").strip() or X_SENT_POSTS_PATH
 
     def _get_daily_count(self) -> int:
         """当日のX投稿累計数を取得 (日付変更時は0リセット)"""
         today_str = datetime.now(JST).strftime("%Y-%m-%d")
-        if not os.path.exists(X_DAILY_STATE_PATH):
+        if not os.path.exists(self.daily_state_path):
             return 0
         try:
-            with open(X_DAILY_STATE_PATH, "r", encoding="utf-8") as f:
+            with open(self.daily_state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if data.get("date") == today_str:
                 return int(data.get("count", 0))
@@ -67,13 +128,60 @@ class XNotifier:
         """当日のX投稿累計数をインクリメントして永続化"""
         today_str = datetime.now(JST).strftime("%Y-%m-%d")
         current_count = self._get_daily_count() + 1
-        os.makedirs(os.path.dirname(X_DAILY_STATE_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(self.daily_state_path) or ".", exist_ok=True)
         try:
-            with open(X_DAILY_STATE_PATH, "w", encoding="utf-8") as f:
+            with open(self.daily_state_path, "w", encoding="utf-8") as f:
                 json.dump({"date": today_str, "count": current_count, "limit": self.daily_limit}, f, indent=2)
         except Exception as e:
             logger.warning(f"[XNotifier] 日次カウンター永続化失敗: {e}")
         return current_count
+
+    def _load_sent_posts(self) -> Dict[str, Any]:
+        """送信済み本文レコードをロード。by_hash が identity の唯一のソース。"""
+        if not os.path.exists(self.sent_state_path):
+            return {"by_hash": {}}
+        try:
+            with open(self.sent_state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("by_hash"), dict):
+                return data
+        except Exception as e:
+            logger.warning(f"[XNotifier] 送信済み本文ロード失敗: {e}")
+        return {"by_hash": {}}
+
+    def _save_sent_posts(self, data: Dict[str, Any]) -> None:
+        by_hash = data.get("by_hash") or {}
+        if len(by_hash) > X_SENT_POSTS_MAX:
+            ordered = sorted(
+                by_hash.items(),
+                key=lambda item: (item[1] or {}).get("sent_at", ""),
+            )
+            by_hash = dict(ordered[-X_SENT_POSTS_MAX:])
+            data["by_hash"] = by_hash
+        os.makedirs(os.path.dirname(self.sent_state_path) or ".", exist_ok=True)
+        try:
+            with open(self.sent_state_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"[XNotifier] 送信済み本文保存失敗: {e}")
+
+    def already_sent(self, text: str) -> bool:
+        """同一本文 (exact tweet text) を既に配信済みか。"""
+        if not text:
+            return False
+        key = tweet_content_key(text)
+        return key in self._load_sent_posts().get("by_hash", {})
+
+    def _record_sent(self, text: str, tweet_id: Optional[str] = None) -> None:
+        """投稿成功 (または X API が duplicate と返した) 本文を記録する。"""
+        key = tweet_content_key(text)
+        data = self._load_sent_posts()
+        data.setdefault("by_hash", {})[key] = {
+            "text": text,
+            "tweet_id": tweet_id,
+            "sent_at": datetime.now(JST).isoformat(),
+        }
+        self._save_sent_posts(data)
 
     def get_remaining_daily_posts(self) -> int:
         """本日の残り投稿可能枠数を取得"""
@@ -124,13 +232,29 @@ class XNotifier:
         """
         ツイートを投稿する (画像添付対応)。
         X無料枠(1,500件/月 = 日50件)保護のため、日次上限(48件)に達している場合は安全に遮断。
+        同一本文 (exact tweet text) は送信済み記録と照合し、再送しない。
         :param text: 投稿本文 (最大140文字推奨)
         :param media_id: アップロード済み画像ID (オプション)
         :param _is_retry: リトライフラグ (内部用)
-        :return: 投稿成功時の tweet_id (失敗時は None)
+        :return: 投稿成功時の tweet_id (失敗時・重複スキップ時は None)
         """
         if not self.is_configured():
             logger.info("[XNotifier] X APIクレデンシャルが未設定のため、X投稿をスキップします。")
+            return None
+
+        trimmed_text = strip_tweet_urls(text or "")[:280]
+        if not trimmed_text.strip():
+            logger.info("[XNotifier] 投稿本文が空のため、X投稿をスキップします。")
+            return None
+        if tweet_contains_url(trimmed_text):
+            trimmed_text = strip_tweet_urls(trimmed_text)[:280]
+            if not trimmed_text.strip():
+                logger.info("[XNotifier] URL除去後に本文が空のため、X投稿をスキップします。")
+                return None
+
+        # 同一本文の再送禁止 (配信ゲートの唯一の identity = exact tweet text)
+        if self.already_sent(trimmed_text):
+            logger.info("[XNotifier] 同一本文は既にXへ配信済みのため、再投稿をスキップします。")
             return None
 
         # 無料枠上限保護 (日次最大48件ガード)
@@ -144,7 +268,6 @@ class XNotifier:
         if not oauth:
             return None
 
-        trimmed_text = text[:280]
         payload: Dict[str, Any] = {"text": trimmed_text}
         if media_id:
             payload["media"] = {"media_ids": [media_id]}
@@ -154,13 +277,19 @@ class XNotifier:
             if response.status_code in (200, 201):
                 data = response.json().get("data", {})
                 tweet_id = data.get("id")
+                self._record_sent(trimmed_text, tweet_id)
                 new_cnt = self._increment_daily_count()
                 logger.info(f"[XNotifier] 🐦 Xへのツイート投稿に成功しました (ID: {tweet_id}, 本日累計: {new_cnt}/{self.daily_limit})")
                 return tweet_id
             else:
                 logger.error(f"[XNotifier] ⚠️ X投稿失敗 (HTTP {response.status_code}, Media={bool(media_id)}): {response.text}")
-                # 画像添付で失敗した場合はテキスト単体で再試行 (重複エラーでない場合)
-                if media_id and "duplicate" not in response.text.lower():
+                # X側が duplicate と判定した場合は本文を送信済みとして記録し、再試行しない
+                if "duplicate" in (response.text or "").lower():
+                    self._record_sent(trimmed_text, None)
+                    logger.info("[XNotifier] X APIが重複投稿と判定したため、同一本文を送信済みとして記録しました。")
+                    return None
+                # 画像添付で失敗した場合はテキスト単体で再試行
+                if media_id:
                     import time
                     time.sleep(1.0)
                     logger.warning("[XNotifier] 画像付き投稿失敗のため、テキスト単体で再試行します...")
@@ -171,43 +300,66 @@ class XNotifier:
             return None
 
     def format_news_for_x(self, slot: str, title: str, fields: List[Dict[str, Any]]) -> str:
-        """Discord用の詳細Embed情報から、X (日本語140文字以内) に最適化されたテキストを成形"""
+        """スロット専用の X 本文。データが無い・プレースホルダのみなら空文字（欠送）。"""
         hashtags = {
             "07:00": "#米国株 #為替 #マクロ経済",
             "07:30": "#海外テック #半導体 #米国株",
             "08:00": "#日本株 #適時開示 #決算",
             "08:30": "#PTS #ストップ高 #日本株",
+            "09:00": "#日本株 #寄り付き #日経平均",
+            "10:30": "#日本株 #前場 #日経平均",
+            "11:30": "#日本株 #前場引け #日経平均",
             "12:00": "#ニュース #経済 #社会",
+            "12:30": "#日本株 #後場 #日経平均",
+            "14:30": "#日本株 #大引け前 #日経平均",
             "16:00": "#日本株 #日経平均 #大引け",
             "17:00": "#PTS #夜間取引 #日本株",
             "19:00": "#欧州株 #為替 #世界市場",
             "21:30": "#NY市場 #米国株寄り付き",
         }.get(slot, "#投資 #市場ニュース")
 
-        short_title = title.split("(")[0].strip()
-
         points = []
-        for f in fields:
-            val = f.get("value", "")
-            lines = [l.strip().lstrip("•- ") for l in val.split("\n") if l.strip()]
+        for f in fields or []:
+            val = strip_tweet_urls(str(f.get("value", "")))
+            lines = [l.strip().lstrip("•-▫️🔺🔻 ") for l in val.split("\n") if l.strip()]
             for line in lines:
-                if len(line) > 5 and not line.startswith("http") and not line.startswith("※"):
-                    points.append(line)
+                if not self._is_usable_x_point(line):
+                    continue
+                points.append(line)
                 if len(points) >= 2:
                     break
             if len(points) >= 2:
                 break
 
-        body_points = "\n".join([f"・{p[:45]}" for p in points[:2]])
-        header = f"【{short_title}】\n"
+        if not points:
+            return ""
+
+        identity = X_SLOT_HEADERS.get(slot)
+        if identity:
+            header = f"{identity}\n"
+        else:
+            short_title = (title or "").split("(")[0].strip() or "市場ニュース"
+            header = f"【{short_title}】{slot}\n"
         footer = f"\n\n{hashtags}"
+        body_points = "\n".join([f"・{p[:80]}" for p in points[:2]])
 
-        max_body_len = 135 - len(header) - len(footer)
-        if max_body_len > 0 and len(body_points) > max_body_len:
-            body_points = body_points[:max_body_len - 3] + "..."
+        max_body_len = 280 - len(header) - len(footer)
+        if max_body_len <= 0:
+            return ""
+        if len(body_points) > max_body_len:
+            body_points = body_points[: max_body_len - 3] + "..."
 
-        tweet_text = f"{header}{body_points}{footer}"
-        return tweet_text.strip()
+        return strip_tweet_urls(f"{header}{body_points}{footer}").strip()
+
+    @staticmethod
+    def _is_usable_x_point(line: str) -> bool:
+        if len(line) <= 5 or line.startswith("※"):
+            return False
+        if tweet_contains_url(line):
+            line = strip_tweet_urls(line)
+            if len(line) <= 5:
+                return False
+        return not any(m in line for m in _EMPTY_POINT_MARKERS)
 
     def format_breakout_for_x(self, triggered_events: List[Dict[str, Any]]) -> str:
         """1%急変速報を X (140文字以内) に最適化して成形 (視認性MAX・3秒理解フォーマット)"""
@@ -252,14 +404,19 @@ default_x_notifier = XNotifier()
 
 
 def send_news_tweet(slot: str, title: str, fields: List[Dict[str, Any]]) -> Optional[str]:
-    """スロットニュースをX向けに成形して投稿する簡易関数"""
+    """スロットニュースをX向けに成形して投稿する簡易関数。空本文は欠送。"""
     text = default_x_notifier.format_news_for_x(slot, title, fields)
+    if not text:
+        logger.info(f"[XNotifier] スロット {slot} は本文が空のため X 投稿を欠送します。")
+        return None
     return default_x_notifier.post_tweet(text)
 
 
 def send_breakout_tweet(triggered_events: List[Dict[str, Any]], image_bytes: Optional[bytes] = None) -> Optional[str]:
-    """1%急変速報を画像付きでXに投稿する簡易関数"""
+    """1%急変速報を画像付きでXに投稿する簡易関数。空本文は欠送。"""
     text = default_x_notifier.format_breakout_for_x(triggered_events)
+    if not text:
+        return None
     media_id = None
     if image_bytes:
         media_id = default_x_notifier.upload_media(image_bytes)

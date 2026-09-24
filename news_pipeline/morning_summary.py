@@ -97,98 +97,89 @@ class MorningSummaryGenerator:
             except Exception as e:
                 logger.warning(f"[MorningSummary] 開示キャッシュ読込例外: {e}")
 
-        # デフォルトフォールバック
-        default_news = [
-            "米主要ハイテク株の業績発表とガイダンス",
-            "米金融政策見通しと金利・為替の反応",
-            "東証主要企業の決算発表集中日の動向"
-        ]
-        while len(news_list) < limit:
-            news_list.append(default_news[len(news_list)])
-
+        # デフォルトフォールバックは出さない。取れなければ空。
         return news_list[:limit]
 
-    def build_summary(self, compact_for_x: bool = True) -> str:
+    def build_summary(self, compact_for_x: bool = True, market_data: Optional[Dict[str, Any]] = None) -> str:
         """
-        朝8時サマリーテキストを生成
-        :param compact_for_x: Trueの場合はXの140文字(280半角)以内に最適化
+        朝8時サマリーテキストを生成。ダミー数値・ダミー注目ニュースは入れない。
+        実データが無ければ空文字（X 欠送）。
         """
         now = datetime.now(JST)
         date_str = f"{now.month}/{now.day}"
-        m = self.fetch_global_market_data()
+        m = market_data if market_data is not None else self.fetch_global_market_data()
+        if not m:
+            return ""
 
-        # 1. 米国市場
-        nasdaq = m.get("us_nasdaq", {"pct": 1.2, "last": 18000})
-        n_pct = nasdaq["pct"]
-        n_sign = "+" if n_pct >= 0 else ""
-        n_label = "急伸" if n_pct >= 1.5 else ("堅調" if n_pct > 0 else ("急落" if n_pct <= -1.5 else "軟調"))
-        us_reason = "ハイテク株主導" if n_pct >= 0 else "金利上昇・利益確定"
+        def _line_us() -> Optional[str]:
+            nasdaq = m.get("us_nasdaq")
+            if not nasdaq:
+                return None
+            n_pct = nasdaq["pct"]
+            n_sign = "+" if n_pct >= 0 else ""
+            n_label = "急伸" if n_pct >= 1.5 else ("堅調" if n_pct > 0 else ("急落" if n_pct <= -1.5 else "軟調"))
+            return f"📌米国：NASDAQ {n_sign}{n_pct:.2f}%{n_label}"
 
-        # 2. 欧州市場
-        dax = m.get("eu_dax", {"pct": 0.5})
-        d_pct = dax["pct"]
-        d_sign = "+" if d_pct >= 0 else ""
-        eu_reason = "CPI指標反応" if abs(d_pct) >= 0.5 else "小動き"
+        def _line_eu_asia() -> Optional[str]:
+            dax = m.get("eu_dax")
+            kospi = m.get("asia_kospi")
+            if not dax and not kospi:
+                return None
+            parts = []
+            if dax:
+                d_sign = "+" if dax["pct"] >= 0 else ""
+                parts.append(f"DAX {d_sign}{dax['pct']:.2f}%")
+            if kospi:
+                k_sign = "+" if kospi["pct"] >= 0 else ""
+                parts.append(f"KOSPI {k_sign}{kospi['pct']:.2f}%")
+            return "📌欧州・アジア：" + " / ".join(parts)
 
-        # 3. アジア市場
-        kospi = m.get("asia_kospi", {"pct": -0.4})
-        k_pct = kospi["pct"]
-        k_sign = "+" if k_pct >= 0 else ""
-        asia_reason = "半導体需給" if abs(k_pct) >= 0.5 else "様子見"
+        def _line_fx_oil() -> Optional[str]:
+            fx = m.get("fx_usdjpy")
+            oil = m.get("oil_wti")
+            if not fx and not oil:
+                return None
+            bits = []
+            if fx:
+                bits.append(f"USDJPY {fx['last']:.2f}（{'+' if fx['diff'] >= 0 else ''}{fx['diff']:.2f}円）")
+            if oil:
+                o_sign = "+" if oil["pct"] >= 0 else ""
+                bits.append(f"WTI {o_sign}{oil['pct']:.1f}%")
+            return "📌為替・原油：" + " / ".join(bits)
 
-        # 4. 為替
-        fx = m.get("fx_usdjpy", {"last": 148.5, "diff": 0.3})
-        fx_val = f"{fx['last']:.2f}"
-        fx_diff = f"{'+' if fx['diff'] >= 0 else ''}{fx['diff']:.2f}円"
+        def _line_jp() -> Optional[str]:
+            nk = m.get("nikkei_fut")
+            if not nk:
+                return None
+            nk_sign = "+" if nk["pct"] >= 0 else ""
+            nk_label = "堅調スタート想定" if nk["pct"] > 0 else "軟調スタート想定"
+            return f"📌日本株：先物 {nk_sign}{nk['pct']:.2f}%（{nk_label}）"
 
-        # 5. 原油
-        oil = m.get("oil_wti", {"pct": 1.1})
-        o_pct = oil["pct"]
-        o_sign = "+" if o_pct >= 0 else ""
-        oil_reason = "需給観測"
+        body_lines = [x for x in (_line_us(), _line_eu_asia(), _line_fx_oil(), _line_jp()) if x]
+        if not body_lines:
+            return ""
 
-        # 6. 日本株先物・寄り前気配
-        nk = m.get("nikkei_fut", {"pct": 0.35})
-        nk_pct = nk["pct"]
-        nk_sign = "+" if nk_pct >= 0 else ""
-        nk_label = "堅調スタート想定" if nk_pct > 0 else "軟調スタート想定"
-
-        # 7. 主要ニュース
         top_news = self.fetch_top_disclosures(limit=2 if compact_for_x else 3)
 
         if compact_for_x:
-            # X向け 140文字(280半角) 超凝縮フォーマット
-            lines = [
-                f"【海外市場まとめ＋日本株寄り前】{date_str} 朝8時",
-                f"📌米国：NASDAQ {n_sign}{n_pct:.2f}%{n_label}（{us_reason}）",
-                f"📌欧州：DAX {d_sign}{d_pct:.2f}% / アジア：KOSPI {k_sign}{k_pct:.2f}%",
-                f"📌為替：USDJPY {fx_val}（{fx_diff}）/ 原油：WTI {o_sign}{o_pct:.1f}%",
-                f"📌日本株：先物 {nk_sign}{nk_pct:.2f}%（{nk_label}）",
-                f"📰注目：{top_news[0]}",
-                "#日本株 #米国株 #為替 #世界の株価",
-            ]
-        else:
-            # Discord / 詳細版フォーマット
-            lines = [
-                f"【海外市場まとめ＋日本株寄り前】{date_str}（朝8時 JST）",
-                "",
-                f"📌米国：NASDAQ {n_sign}{n_pct:.2f}%{n_label}（{us_reason}）",
-                f"📌欧州：DAX {d_sign}{d_pct:.2f}%（{eu_reason}）",
-                f"📌アジア：KOSPI {k_sign}{k_pct:.2f}%（{asia_reason}）",
-                f"📌為替：USDJPY {fx_val}（{fx_diff}）",
-                f"📌原油：WTI {o_sign}{o_pct:.1f}%（{oil_reason}）",
-                "",
-                "📌日本株寄り前気配",
-                f"・日経225先物：{nk_sign}{nk_pct:.2f}%（{nk_label}）",
-                f"・為替連動：輸出セクター（自動車・機械）への影響注視",
-                "",
-                "📰主要開示・マーケットトピックス（厳選）",
-            ]
+            lines = [f"【日本株寄り前】08:00 {date_str}", *body_lines]
+            if top_news:
+                lines.append(f"📰注目：{top_news[0]}")
+            lines.append("#日本株 #米国株 #為替 #世界の株価")
+            return "\n".join(lines).strip()
+
+        lines = [
+            f"【日本株寄り前】08:00 {date_str}（朝 JST）",
+            "",
+            *body_lines,
+            "",
+        ]
+        if top_news:
+            lines.append("📰主要開示（厳選）")
             for n in top_news:
                 lines.append(f"・{n}")
             lines.append("")
-            lines.append("#日本株 #米国株 #欧州株 #アジア株 #世界の株価")
-
+        lines.append("#日本株 #米国株 #欧州株 #アジア株 #世界の株価")
         return "\n".join(lines).strip()
 
     def post_morning_summary(self) -> Optional[str]:
@@ -197,8 +188,8 @@ class MorningSummaryGenerator:
         summary_detailed = self.build_summary(compact_for_x=False)
 
         tweet_id = None
-        # 1. X投稿
-        if self.x_notifier.is_configured():
+        # 1. X投稿（空本文は欠送）
+        if summary_x and self.x_notifier.is_configured():
             try:
                 tweet_id = self.x_notifier.post_tweet(text=summary_x)
                 if tweet_id:

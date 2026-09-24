@@ -26,6 +26,7 @@ market_price_cache.json
 sentinel_notified_states.json
 sentinel_x_posted_states.json
 x_global_daily_state.json
+x_sent_posts.json
 scratch/
 
 # 自動生成・検証戦略ディレクトリ (run_autonomous_daemon)

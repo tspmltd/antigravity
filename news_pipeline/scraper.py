@@ -1,12 +1,13 @@
 """
 市場データ・ニュース情報収集モジュール (scraper.py)
-9つのタイムスケジュールに対応したデータ収集関数群:
+定時スロットのデータ収集関数群:
 07:00 海外市場のまとめ (米株指数、金利、為替、商品、指標)
 07:30 海外個別企業ニュース (注目テック・半導体等の決算・ヘッドライン)
 08:00 日本株個別ニュース (適時開示・重要材料)
 08:30 PTSトップ5/ワースト5 & S高S安
+09:00 東証寄り付き / 10:30 前場 / 11:30 前場引け / 12:30 後場寄り / 14:30 大引け前
 12:00 社会ニュース (昼時点の国内・政治経済)
-16:00 日本株総括 (日経平均、TOPIX、グロース、セクター動向)
+16:00 日本株総括 (日経平均、TOPIX、グロース、セクター動向) ※大引け。置き換えない
 17:00 PTSトップ5/ワースト5 (夕方時点)
 19:00 海外市場まとめ (欧州寄り付き・アジア振り返り)
 21:30 海外市場寄り付き概要 (NY寄り付き・指標速報)
@@ -14,13 +15,39 @@
 
 import time
 import logging
-from typing import Dict, List, Any, Optional
+from datetime import datetime, time as dt_time
+from typing import Dict, List, Any, Optional, Tuple
+import pytz
 import requests
 from bs4 import BeautifulSoup
 import feedparser
 import yfinance as yf
 
 logger = logging.getLogger("news_pipeline.scraper")
+JST = pytz.timezone("Asia/Tokyo")
+
+# 東証セッション中の定時枠。各枠の「今値」に使う 5分足の JST 窓。窓に足が無ければ欠送。
+SESSION_PRINT_WINDOWS = {
+    "09:00": ("08:55", "09:25"),
+    "10:30": ("09:00", "10:40"),
+    "11:30": ("11:00", "11:45"),
+    "12:30": ("12:25", "12:55"),
+    "14:30": ("13:30", "14:45"),
+}
+SESSION_PHASE_LABELS = {
+    "09:00": "寄り付き",
+    "10:30": "前場",
+    "11:30": "前場引け",
+    "12:30": "後場寄り",
+    "14:30": "大引け前",
+}
+_JP_SESSION_TICKERS = {
+    "日経平均": "^N225",
+    "TOPIX (ETF)": "1306.T",
+    "ドル円 (USD/JPY)": "JPY=X",
+}
+_JP_INDEX_NAMES = frozenset({"日経平均", "TOPIX (ETF)"})
+_PLACEHOLDER_PRICES = frozenset({"", "N/A", "取得スキップ", "-"})
 
 # HTTPリクエスト共通設定
 HTTP_HEADERS = {
@@ -115,6 +142,220 @@ def fetch_kabutan_table(url: str) -> List[List[str]]:
     except Exception as e:
         logger.warning(f"[Scraper] 株探スクレイピングスキップ ({url}): {e}")
     return rows_data
+
+
+def _parse_hm(hm: str) -> dt_time:
+    hour, minute = hm.split(":")
+    return dt_time(int(hour), int(minute))
+
+
+def _index_to_jst(idx):
+    """yfinance の DatetimeIndex を Asia/Tokyo に揃える。"""
+    if getattr(idx, "tz", None) is None:
+        try:
+            return idx.tz_localize("Asia/Tokyo")
+        except Exception:
+            return idx.tz_localize("UTC").tz_convert("Asia/Tokyo")
+    return idx.tz_convert("Asia/Tokyo")
+
+
+def select_intraday_window(hist, start_hm: str, end_hm: str, as_of_date=None):
+    """
+    5分足から JST [start_hm, end_hm] かつ as_of_date の足だけ返す。
+    足が無ければ空（呼び出し側は欠送）。ダミー行は作らない。
+    """
+    if hist is None or getattr(hist, "empty", True):
+        return hist
+    as_of_date = as_of_date or datetime.now(JST).date()
+    work = hist.copy()
+    work.index = _index_to_jst(work.index)
+    start_t = _parse_hm(start_hm)
+    end_t = _parse_hm(end_hm)
+    keep = []
+    for ts in work.index:
+        ts_date = ts.date()
+        ts_time = ts.time()
+        if getattr(ts_time, "tzinfo", None):
+            ts_time = ts_time.replace(tzinfo=None)
+        ts_time = ts_time.replace(microsecond=0)
+        keep.append(ts_date == as_of_date and start_t <= ts_time <= end_t)
+    try:
+        return work.loc[keep]
+    except Exception:
+        return work.iloc[0:0]
+
+
+def _fmt_signed(value: float, digits: int = 2) -> str:
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:,.{digits}f}"
+
+
+def _quote_from_session_bars(
+    daily,
+    intra,
+    slot: str,
+    as_of_date=None,
+) -> Optional[Dict[str, str]]:
+    """実在する 5分足と前日終値だけから引用を組む。不足なら None（欠送）。"""
+    window = SESSION_PRINT_WINDOWS.get(slot)
+    if not window or daily is None or getattr(daily, "empty", True):
+        return None
+    if intra is None or getattr(intra, "empty", True):
+        return None
+    if len(daily) < 2:
+        return None
+
+    as_of_date = as_of_date or datetime.now(JST).date()
+    start_hm, end_hm = window
+    now_bars = select_intraday_window(intra, start_hm, end_hm, as_of_date=as_of_date)
+    if now_bars is None or now_bars.empty:
+        return None
+
+    last = float(now_bars["Close"].iloc[-1])
+    prev_close = float(daily["Close"].iloc[-2])
+    if prev_close == 0:
+        return None
+
+    open_bars = select_intraday_window(intra, "09:00", "09:20", as_of_date=as_of_date)
+    if open_bars is not None and not open_bars.empty:
+        session_open = float(open_bars["Open"].iloc[0])
+    else:
+        session_open = float(daily["Open"].iloc[-1])
+
+    chg = last - prev_close
+    pct = (chg / prev_close) * 100
+    quote: Dict[str, str] = {
+        "price": f"{last:,.2f}",
+        "change": _fmt_signed(chg),
+        "change_pct": f"{_fmt_signed(pct)}%",
+    }
+
+    if session_open:
+        vs_open = last - session_open
+        vs_open_pct = (vs_open / session_open) * 100
+        quote["vs_open"] = _fmt_signed(vs_open)
+        quote["vs_open_pct"] = f"{_fmt_signed(vs_open_pct)}%"
+
+    if slot == "11:30":
+        morning = select_intraday_window(intra, "09:00", "11:30", as_of_date=as_of_date)
+        if morning is not None and not morning.empty:
+            quote["session_high"] = f"{float(morning['High'].max()):,.2f}"
+            quote["session_low"] = f"{float(morning['Low'].min()):,.2f}"
+    elif slot == "12:30":
+        morning_close = select_intraday_window(intra, "11:00", "11:45", as_of_date=as_of_date)
+        if morning_close is not None and not morning_close.empty:
+            am_last = float(morning_close["Close"].iloc[-1])
+            if am_last:
+                vs_am = last - am_last
+                vs_am_pct = (vs_am / am_last) * 100
+                quote["vs_morning"] = _fmt_signed(vs_am)
+                quote["vs_morning_pct"] = f"{_fmt_signed(vs_am_pct)}%"
+    elif slot == "14:30":
+        afternoon = select_intraday_window(intra, "12:30", "14:45", as_of_date=as_of_date)
+        if afternoon is not None and not afternoon.empty:
+            quote["session_high"] = f"{float(afternoon['High'].max()):,.2f}"
+            quote["session_low"] = f"{float(afternoon['Low'].min()):,.2f}"
+
+    return quote
+
+
+def fetch_session_snapshot(
+    tickers: Dict[str, str],
+    slot: str,
+    as_of_date=None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    当日 5分足のセッション引用。実データが無い銘柄は載せない（N/A 埋めなし）。
+    """
+    results: Dict[str, Dict[str, Any]] = {}
+    for display_name, symbol in tickers.items():
+        try:
+            t = yf.Ticker(symbol)
+            daily = t.history(period="5d", interval="1d")
+            intra = t.history(period="1d", interval="5m")
+            quote = _quote_from_session_bars(daily, intra, slot, as_of_date=as_of_date)
+            if quote:
+                results[display_name] = quote
+            time.sleep(0.2)
+        except Exception as e:
+            logger.warning(f"[Scraper] セッション引用スキップ ({display_name}/{symbol}): {e}")
+    return results
+
+
+def has_jp_session_quotes(indicators: Dict[str, Any]) -> bool:
+    """ドル円だけの引用では東証セッションとみなさない。"""
+    if not indicators:
+        return False
+    for name, data in indicators.items():
+        if name not in _JP_INDEX_NAMES:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("price", "")) in _PLACEHOLDER_PRICES:
+            continue
+        return True
+    return False
+
+
+def format_session_quote_lines(indicators: Dict[str, Any], slot: str) -> str:
+    """スロットごとに違う本文になるよう、局面ラベルを行頭に付ける。"""
+    phase = SESSION_PHASE_LABELS.get(slot, slot)
+    lines = []
+    for name, data in indicators.items():
+        if not isinstance(data, dict):
+            continue
+        price = str(data.get("price", ""))
+        if price in _PLACEHOLDER_PRICES:
+            continue
+        pct = data.get("change_pct", "")
+        line = f"{phase} {name}: {price} 前日比 {pct}"
+        if slot == "10:30" and data.get("vs_open_pct"):
+            line += f" 始値比 {data['vs_open_pct']}"
+        elif slot == "11:30" and data.get("session_high") and data.get("session_low"):
+            line += f" 前場 {data['session_high']}-{data['session_low']}"
+        elif slot == "12:30" and data.get("vs_morning_pct"):
+            line += f" 前場比 {data['vs_morning_pct']}"
+        elif slot == "14:30":
+            extra = []
+            if data.get("vs_open_pct"):
+                extra.append(f"始値比 {data['vs_open_pct']}")
+            if data.get("session_high") and data.get("session_low"):
+                extra.append(f"後場 {data['session_high']}-{data['session_low']}")
+            if extra:
+                line += " " + " ".join(extra)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _fetch_live_sectors() -> Tuple[List[str], List[str]]:
+    """株探業種。行が無ければ空（情報なし埋めなし）。"""
+    sector_rows = fetch_kabutan_table("https://kabutan.jp/warning/?mode=9_1")
+    top_sectors: List[str] = []
+    worst_sectors: List[str] = []
+    if not sector_rows:
+        return top_sectors, worst_sectors
+    for r in sector_rows[:3]:
+        if len(r) >= 8 and r[1] and r[7]:
+            top_sectors.append(f"🔺 {r[1]}: {r[7]}")
+    for r in sector_rows[-3:]:
+        if len(r) >= 8 and r[1] and r[7]:
+            worst_sectors.append(f"🔻 {r[1]}: {r[7]}")
+    return top_sectors, worst_sectors
+
+
+def _scrape_jp_session(slot: str, title: str, include_sectors: bool = False) -> Dict[str, Any]:
+    quotes = fetch_session_snapshot(_JP_SESSION_TICKERS, slot)
+    payload: Dict[str, Any] = {
+        "title": title,
+        "indicators": quotes if has_jp_session_quotes(quotes) else {},
+        "top_sectors": [],
+        "worst_sectors": [],
+    }
+    if include_sectors and payload["indicators"]:
+        top_sectors, worst_sectors = _fetch_live_sectors()
+        payload["top_sectors"] = top_sectors
+        payload["worst_sectors"] = worst_sectors
+    return payload
 
 
 # -------------------------------------------------------------
@@ -240,6 +481,31 @@ def scrape_0830_pts_and_stops() -> Dict[str, Any]:
         "stop_high": stop_high or ["情報なし (該当なし)"],
         "stop_low": stop_low or ["情報なし (該当なし)"]
     }
+
+
+def scrape_0900_open() -> Dict[str, Any]:
+    """09:00 東証寄り付き。5分足が無ければ空（欠送）。"""
+    return _scrape_jp_session("09:00", "🔔 東証 寄り付き (09:00 JST)", include_sectors=False)
+
+
+def scrape_1030_morning() -> Dict[str, Any]:
+    """10:30 前場の推移。"""
+    return _scrape_jp_session("10:30", "📈 東証 前場 (10:30 JST)", include_sectors=True)
+
+
+def scrape_1130_morning_close() -> Dict[str, Any]:
+    """11:30 前場引け。"""
+    return _scrape_jp_session("11:30", "⏸ 東証 前場引け (11:30 JST)", include_sectors=False)
+
+
+def scrape_1230_afternoon_open() -> Dict[str, Any]:
+    """12:30 後場寄り。"""
+    return _scrape_jp_session("12:30", "🔔 東証 後場寄り (12:30 JST)", include_sectors=False)
+
+
+def scrape_1430_pre_close() -> Dict[str, Any]:
+    """14:30 大引け前。16:00 大引け総括とは別本文。"""
+    return _scrape_jp_session("14:30", "⏳ 東証 大引け前 (14:30 JST)", include_sectors=True)
 
 
 def scrape_1200_society_news() -> Dict[str, Any]:
@@ -374,7 +640,12 @@ SLOT_SCRAPERS = {
     "07:30": scrape_0730_foreign_stocks,
     "08:00": scrape_0800_japan_stocks,
     "08:30": scrape_0830_pts_and_stops,
+    "09:00": scrape_0900_open,
+    "10:30": scrape_1030_morning,
+    "11:30": scrape_1130_morning_close,
     "12:00": scrape_1200_society_news,
+    "12:30": scrape_1230_afternoon_open,
+    "14:30": scrape_1430_pre_close,
     "16:00": scrape_1600_japan_summary,
     "17:00": scrape_1700_pts_ranking,
     "19:00": scrape_1900_europe_asia_summary,

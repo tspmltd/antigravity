@@ -5,8 +5,9 @@ APSchedulerによるJSTタイムスケジュール管理と無人自律稼働パ
 07:30 海外個別企業ニュース
 08:00 日本株個別ニュース
 08:30 PTSトップ5/ワースト5 & S高S安
+09:00 寄り付き / 10:30 前場 / 11:30 前場引け / 12:30 後場寄り / 14:30 大引け前
 12:00 社会ニュース
-16:00 日本株総括
+16:00 日本株総括（大引け。置き換えない）
 17:00 PTSトップ5/ワースト5
 19:00 海外市場まとめ
 21:30 海外市場寄り付き概要
@@ -29,13 +30,48 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # 自作モジュールのインポート
-from news_pipeline.scraper import SLOT_SCRAPERS
+from news_pipeline.scraper import (
+    SLOT_SCRAPERS,
+    format_session_quote_lines,
+    has_jp_session_quotes,
+)
 from news_pipeline.summarizer import Summarizer
 from news_pipeline.notifier import send_news_embed, THEME_COLOR_BLUE, THEME_COLOR_NAVY, THEME_COLOR_CYAN
-from news_pipeline.x_notifier import send_news_tweet, default_x_notifier
+from news_pipeline.x_notifier import (
+    default_x_notifier,
+    is_x_backbone_slot,
+)
 
 
-# JSTタイムゾーン
+# 東証セッション中の定時。空データは Discord / X とも欠送。
+MARKET_SESSION_SLOTS = frozenset({"09:00", "10:30", "11:30", "12:30", "14:30"})
+STOCK_SLOTS = frozenset({
+    "08:00", "08:30", "09:00", "10:30", "11:30", "12:30", "14:30", "16:00", "17:00",
+})
+SESSION_FIELD_NAMES = {
+    "09:00": "🔔 東証 寄り付き",
+    "10:30": "📈 前場の推移",
+    "11:30": "⏸ 前場引け",
+    "12:30": "🔔 後場寄り",
+    "14:30": "⏳ 大引け前",
+}
+SCHEDULE_JOBS = [
+    ("07:00", 7, 0),
+    ("07:30", 7, 30),
+    ("08:00", 8, 0),
+    ("08:30", 8, 30),
+    ("09:00", 9, 0),
+    ("10:30", 10, 30),
+    ("11:30", 11, 30),
+    ("12:00", 12, 0),
+    ("12:30", 12, 30),
+    ("14:30", 14, 30),
+    ("16:00", 16, 0),
+    ("17:00", 17, 0),
+    ("19:00", 19, 0),
+    ("21:30", 21, 30),
+]
+
 JST = pytz.timezone("Asia/Tokyo")
 
 # ログ設定 (ディスク圧迫防止のため RotatingFileHandler: 5MB x 3世代)
@@ -129,6 +165,27 @@ def format_slot_content(slot: str, raw_data: dict) -> dict:
         fields.append({"name": "🚀 前営業日 ストップ高", "value": "\n".join(stop_high[:5]), "inline": False})
         fields.append({"name": "⚠️ 前営業日 ストップ安", "value": "\n".join(stop_low[:5]), "inline": False})
 
+    elif slot in MARKET_SESSION_SLOTS:
+        color = THEME_COLOR_BLUE
+        indicators = raw_data.get("indicators") or {}
+        if has_jp_session_quotes(indicators):
+            lines = format_session_quote_lines(indicators, slot)
+            if lines:
+                fields.append({
+                    "name": SESSION_FIELD_NAMES[slot],
+                    "value": lines,
+                    "inline": False,
+                })
+        top_sec = [s for s in (raw_data.get("top_sectors") or []) if s and "情報なし" not in s]
+        worst_sec = [s for s in (raw_data.get("worst_sectors") or []) if s and "情報なし" not in s]
+        if top_sec or worst_sec:
+            sec_bits = []
+            if top_sec:
+                sec_bits.append("**【上昇上位】**\n" + "\n".join(top_sec))
+            if worst_sec:
+                sec_bits.append("**【下落上位】**\n" + "\n".join(worst_sec))
+            fields.append({"name": "🏭 業種の動き", "value": "\n\n".join(sec_bits), "inline": False})
+
     elif slot == "12:00":
         color = THEME_COLOR_BLUE
         nhk_news = raw_data.get("nhk_news", [])
@@ -221,17 +278,24 @@ def execute_slot(slot: str, dry_run: bool = False) -> bool:
         # 2. 要約 & Discord Embed成形
         embed_data = format_slot_content(slot, raw_data)
 
+        if slot in MARKET_SESSION_SLOTS and not embed_data.get("fields"):
+            logger.info(f"[Scheduler] スロット {slot} はセッションデータなしのため欠送")
+            return True
+
         if dry_run:
             logger.info(f"[DryRun] Title: {embed_data['title']}")
             for f in embed_data["fields"]:
                 logger.info(f"[DryRun] Field [{f['name']}]:\n{f['value']}")
-            x_text = default_x_notifier.format_news_for_x(slot, embed_data["title"], embed_data["fields"])
-            logger.info(f"[DryRun] 🐦 X Tweet Preview ({len(x_text)}文字):\n{x_text}")
+            x_text = compose_slot_x_text(slot, embed_data)
+            if x_text:
+                logger.info(f"[DryRun] 🐦 X Tweet Preview ({len(x_text)}文字):\n{x_text}")
+            else:
+                logger.info(f"[DryRun] 🐦 スロット {slot} は空本文のため X 欠送")
             return True
 
         # 3. Discord送信
-        # カテゴリ振り分け (個別株系 08:00, 08:30, 16:00, 17:00 は report、他は macro)
-        category = "stock" if slot in ("08:00", "08:30", "16:00", "17:00") else "macro"
+        # カテゴリ振り分け (個別株系は report、他は macro)
+        category = "stock" if slot in STOCK_SLOTS else "macro"
         success = send_news_embed(
             title=embed_data["title"],
             description=embed_data["description"],
@@ -240,21 +304,18 @@ def execute_slot(slot: str, dry_run: bool = False) -> bool:
             category=category
         )
 
-        # 4. X (旧Twitter) 同時ポスト: 朝8時 (08:00) の「海外市場まとめ＋日本株寄り前」のみXへ投稿 (昼・夕はDiscord限定)
-        enable_morning_x = os.getenv("ENABLE_MORNING_X_SUMMARY", "true").lower() in ("true", "1")
-        is_morning_slot = (slot in ("08:00", "07:00"))
-        if enable_morning_x and is_morning_slot:
-            try:
-                from news_pipeline.morning_summary import MorningSummaryGenerator
-                gen = MorningSummaryGenerator()
-                x_text = gen.build_summary(compact_for_x=True)
-                tweet_id = gen.x_notifier.post_tweet(text=x_text)
+        # 4. 定時背骨はすべて X へ。07:00 は海外終値、08:00 だけ朝サマリー。空本文は欠送。
+        #    急変 overlay は定時の穴埋めに使わない。16:00 大引けは残す。
+        try:
+            x_text = compose_slot_x_text(slot, embed_data)
+            if not x_text:
+                logger.info(f"[Scheduler] 🐦 スロット {slot} は本文なしのため X 欠送")
+            else:
+                tweet_id = default_x_notifier.post_tweet(text=x_text)
                 if tweet_id:
-                    logger.info(f"[Scheduler] 🐦 【朝の海外市場まとめ＋日本株寄り前】X投稿完了 (Tweet ID: {tweet_id})")
-            except Exception as ex:
-                logger.warning(f"[Scheduler] 朝の市場サマリーX投稿スキップ/エラー: {ex}")
-        else:
-            logger.debug(f"[Scheduler] スロット {slot} のX投稿はスキップ (朝サマリーのみX配信、昼・夕はDiscord限定)")
+                    logger.info(f"[Scheduler] 🐦 X投稿完了 slot={slot} (Tweet ID: {tweet_id})")
+        except Exception as ex:
+            logger.warning(f"[Scheduler] X投稿スキップ/エラー slot={slot}: {ex}")
 
         if success:
             logger.info(f"[Scheduler] <<< スロット実行完了 (成功): {slot}")
@@ -266,6 +327,20 @@ def execute_slot(slot: str, dry_run: bool = False) -> bool:
     except Exception as e:
         logger.exception(f"[Scheduler] [CRITICAL] スロット {slot} の実行中に予期せぬ例外が発生しました (自動復帰): {e}")
         return False
+
+
+def compose_slot_x_text(slot: str, embed_data: dict) -> str:
+    """背骨スロットの X 本文。スロットごとに身元が違い、空なら欠送。"""
+    if not is_x_backbone_slot(slot):
+        return ""
+    if slot == "08:00":
+        from news_pipeline.morning_summary import MorningSummaryGenerator
+        return MorningSummaryGenerator().build_summary(compact_for_x=True)
+    return default_x_notifier.format_news_for_x(
+        slot,
+        embed_data.get("title", ""),
+        embed_data.get("fields") or [],
+    )
 
 
 def check_sekai_kabuka_movers():
@@ -284,17 +359,7 @@ def start_scheduler():
     scheduler = BlockingScheduler(timezone=JST)
 
     # タイムスケジュール登録 (JST)
-    schedule_jobs = [
-        ("07:00", 7, 0),
-        ("07:30", 7, 30),
-        ("08:00", 8, 0),
-        ("08:30", 8, 30),
-        ("12:00", 12, 0),
-        ("16:00", 16, 0),
-        ("17:00", 17, 0),
-        ("19:00", 19, 0),
-        ("21:30", 21, 30),
-    ]
+    schedule_jobs = SCHEDULE_JOBS
 
     logger.info("==================================================")
     logger.info("  AGY 24時間ニュース配信スケジューラー 起動")

@@ -12,17 +12,22 @@ class TestMorningSummaryAndPTS(unittest.TestCase):
     """朝8時サマリー & PTSセンチネルテスト"""
 
     def test_morning_summary_build(self):
-        """朝8時サマリーのテキスト生成 & 構造検証"""
+        """朝8時サマリーのテキスト生成 & 構造検証（実データ注入、ダミー禁止）"""
         gen = MorningSummaryGenerator()
-        compact_text = gen.build_summary(compact_for_x=True)
-        self.assertIn("【海外市場まとめ＋日本株寄り前】", compact_text)
+        market = {
+            "us_nasdaq": {"pct": 1.2, "last": 18000, "diff": 210},
+            "eu_dax": {"pct": 0.4, "last": 18000, "diff": 50},
+            "asia_kospi": {"pct": -0.2, "last": 2500, "diff": -5},
+            "fx_usdjpy": {"last": 148.5, "diff": 0.3, "pct": 0.2},
+            "oil_wti": {"pct": 1.1, "last": 80.0, "diff": 0.8},
+            "nikkei_fut": {"pct": 0.35, "last": 39000, "diff": 120},
+        }
+        compact_text = gen.build_summary(compact_for_x=True, market_data=market)
+        self.assertIn("【日本株寄り前】08:00", compact_text)
         self.assertIn("📌米国：", compact_text)
-        self.assertIn("📌欧州：", compact_text)
-        self.assertIn("📌為替：", compact_text)
         self.assertIn("📌日本株：", compact_text)
         self.assertIn("#日本株 #米国株", compact_text)
-
-        # X文字数制限 (半角280以内) チェック
+        self.assertNotIn("ハイテク株主導", compact_text)
         self.assertLessEqual(len(compact_text), 280)
 
     def test_pts_causal_engine_direct(self):
