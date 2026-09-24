@@ -6,9 +6,11 @@ X (旧Twitter) API v2 自動投稿モジュール (x_notifier.py)
 - OAuth 1.0a User Context 認証 (requests-oauthlib)
 - 日本語140文字制限に最適化したスマート要約 & ハッシュタグ自動付与
 - 未設定時の安全スキップ & エラーハンドリング (Discord送信への波及防止)
+- 同一本文の再送禁止 (投稿成功済みの exact tweet text を永続記録)
 """
 
 import os
+import hashlib
 import logging
 import json
 from datetime import datetime, timezone, timedelta
@@ -23,8 +25,17 @@ X_TWEET_API_URL = "https://api.twitter.com/2/tweets"
 X_MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
 
 JST = timezone(timedelta(hours=9))
-X_DAILY_STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "x_global_daily_state.json")
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+X_DAILY_STATE_PATH = os.path.join(_DATA_DIR, "x_global_daily_state.json")
+# 配信ゲートの「送信済み本文」記録。同一本文の再投稿を遮断する唯一のソース。
+X_SENT_POSTS_PATH = os.path.join(_DATA_DIR, "x_sent_posts.json")
+X_SENT_POSTS_MAX = 2000
 GLOBAL_DAILY_POST_LIMIT = int(os.getenv("X_GLOBAL_DAILY_LIMIT", "48"))  # X無料枠(月1500件=日平均50件)の安全上限
+
+
+def tweet_content_key(text: str) -> str:
+    """投稿本文の identity。exact text の SHA-256 (正規化・曖昧一致はしない)。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class XNotifier:
@@ -37,6 +48,8 @@ class XNotifier:
         access_token: Optional[str] = None,
         access_token_secret: Optional[str] = None,
         daily_limit: int = GLOBAL_DAILY_POST_LIMIT,
+        daily_state_path: Optional[str] = None,
+        sent_state_path: Optional[str] = None,
     ):
         self.api_key = api_key or os.getenv("X_API_KEY", "").strip() or os.getenv("TWITTER_API_KEY", "").strip()
         self.api_secret = (
@@ -48,14 +61,16 @@ class XNotifier:
         self.access_token = access_token or os.getenv("X_ACCESS_TOKEN", "").strip() or os.getenv("TWITTER_ACCESS_TOKEN", "").strip()
         self.access_token_secret = access_token_secret or os.getenv("X_ACCESS_TOKEN_SECRET", "").strip() or os.getenv("TWITTER_ACCESS_TOKEN_SECRET", "").strip()
         self.daily_limit = daily_limit
+        self.daily_state_path = daily_state_path or os.getenv("X_DAILY_STATE_PATH", "").strip() or X_DAILY_STATE_PATH
+        self.sent_state_path = sent_state_path or os.getenv("X_SENT_POSTS_PATH", "").strip() or X_SENT_POSTS_PATH
 
     def _get_daily_count(self) -> int:
         """当日のX投稿累計数を取得 (日付変更時は0リセット)"""
         today_str = datetime.now(JST).strftime("%Y-%m-%d")
-        if not os.path.exists(X_DAILY_STATE_PATH):
+        if not os.path.exists(self.daily_state_path):
             return 0
         try:
-            with open(X_DAILY_STATE_PATH, "r", encoding="utf-8") as f:
+            with open(self.daily_state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if data.get("date") == today_str:
                 return int(data.get("count", 0))
@@ -67,13 +82,60 @@ class XNotifier:
         """当日のX投稿累計数をインクリメントして永続化"""
         today_str = datetime.now(JST).strftime("%Y-%m-%d")
         current_count = self._get_daily_count() + 1
-        os.makedirs(os.path.dirname(X_DAILY_STATE_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(self.daily_state_path) or ".", exist_ok=True)
         try:
-            with open(X_DAILY_STATE_PATH, "w", encoding="utf-8") as f:
+            with open(self.daily_state_path, "w", encoding="utf-8") as f:
                 json.dump({"date": today_str, "count": current_count, "limit": self.daily_limit}, f, indent=2)
         except Exception as e:
             logger.warning(f"[XNotifier] 日次カウンター永続化失敗: {e}")
         return current_count
+
+    def _load_sent_posts(self) -> Dict[str, Any]:
+        """送信済み本文レコードをロード。by_hash が identity の唯一のソース。"""
+        if not os.path.exists(self.sent_state_path):
+            return {"by_hash": {}}
+        try:
+            with open(self.sent_state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("by_hash"), dict):
+                return data
+        except Exception as e:
+            logger.warning(f"[XNotifier] 送信済み本文ロード失敗: {e}")
+        return {"by_hash": {}}
+
+    def _save_sent_posts(self, data: Dict[str, Any]) -> None:
+        by_hash = data.get("by_hash") or {}
+        if len(by_hash) > X_SENT_POSTS_MAX:
+            ordered = sorted(
+                by_hash.items(),
+                key=lambda item: (item[1] or {}).get("sent_at", ""),
+            )
+            by_hash = dict(ordered[-X_SENT_POSTS_MAX:])
+            data["by_hash"] = by_hash
+        os.makedirs(os.path.dirname(self.sent_state_path) or ".", exist_ok=True)
+        try:
+            with open(self.sent_state_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"[XNotifier] 送信済み本文保存失敗: {e}")
+
+    def already_sent(self, text: str) -> bool:
+        """同一本文 (exact tweet text) を既に配信済みか。"""
+        if not text:
+            return False
+        key = tweet_content_key(text)
+        return key in self._load_sent_posts().get("by_hash", {})
+
+    def _record_sent(self, text: str, tweet_id: Optional[str] = None) -> None:
+        """投稿成功 (または X API が duplicate と返した) 本文を記録する。"""
+        key = tweet_content_key(text)
+        data = self._load_sent_posts()
+        data.setdefault("by_hash", {})[key] = {
+            "text": text,
+            "tweet_id": tweet_id,
+            "sent_at": datetime.now(JST).isoformat(),
+        }
+        self._save_sent_posts(data)
 
     def get_remaining_daily_posts(self) -> int:
         """本日の残り投稿可能枠数を取得"""
@@ -124,13 +186,24 @@ class XNotifier:
         """
         ツイートを投稿する (画像添付対応)。
         X無料枠(1,500件/月 = 日50件)保護のため、日次上限(48件)に達している場合は安全に遮断。
+        同一本文 (exact tweet text) は送信済み記録と照合し、再送しない。
         :param text: 投稿本文 (最大140文字推奨)
         :param media_id: アップロード済み画像ID (オプション)
         :param _is_retry: リトライフラグ (内部用)
-        :return: 投稿成功時の tweet_id (失敗時は None)
+        :return: 投稿成功時の tweet_id (失敗時・重複スキップ時は None)
         """
         if not self.is_configured():
             logger.info("[XNotifier] X APIクレデンシャルが未設定のため、X投稿をスキップします。")
+            return None
+
+        trimmed_text = (text or "")[:280]
+        if not trimmed_text.strip():
+            logger.info("[XNotifier] 投稿本文が空のため、X投稿をスキップします。")
+            return None
+
+        # 同一本文の再送禁止 (配信ゲートの唯一の identity = exact tweet text)
+        if self.already_sent(trimmed_text):
+            logger.info("[XNotifier] 同一本文は既にXへ配信済みのため、再投稿をスキップします。")
             return None
 
         # 無料枠上限保護 (日次最大48件ガード)
@@ -144,7 +217,6 @@ class XNotifier:
         if not oauth:
             return None
 
-        trimmed_text = text[:280]
         payload: Dict[str, Any] = {"text": trimmed_text}
         if media_id:
             payload["media"] = {"media_ids": [media_id]}
@@ -154,13 +226,19 @@ class XNotifier:
             if response.status_code in (200, 201):
                 data = response.json().get("data", {})
                 tweet_id = data.get("id")
+                self._record_sent(trimmed_text, tweet_id)
                 new_cnt = self._increment_daily_count()
                 logger.info(f"[XNotifier] 🐦 Xへのツイート投稿に成功しました (ID: {tweet_id}, 本日累計: {new_cnt}/{self.daily_limit})")
                 return tweet_id
             else:
                 logger.error(f"[XNotifier] ⚠️ X投稿失敗 (HTTP {response.status_code}, Media={bool(media_id)}): {response.text}")
-                # 画像添付で失敗した場合はテキスト単体で再試行 (重複エラーでない場合)
-                if media_id and "duplicate" not in response.text.lower():
+                # X側が duplicate と判定した場合は本文を送信済みとして記録し、再試行しない
+                if "duplicate" in (response.text or "").lower():
+                    self._record_sent(trimmed_text, None)
+                    logger.info("[XNotifier] X APIが重複投稿と判定したため、同一本文を送信済みとして記録しました。")
+                    return None
+                # 画像添付で失敗した場合はテキスト単体で再試行
+                if media_id:
                     import time
                     time.sleep(1.0)
                     logger.warning("[XNotifier] 画像付き投稿失敗のため、テキスト単体で再試行します...")
