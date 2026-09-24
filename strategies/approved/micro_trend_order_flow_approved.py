@@ -33,8 +33,11 @@ class CustomStrategy(BaseStrategy):
         df["ret_win"] = df["close"].pct_change(win)
 
         # 2. Approximate Volume Delta
-        candle_range = (df["high"] - df["low"]).replace(0, 1e-9)
-        close_pos = (df["close"] - df["low"]) / candle_range
+        # 形成中足・同時刻 doji は range=0。旧実装は replace(0, 1e-9) で
+        # close_pos=0 → delta_ratio=-1（偽の最大売り）になり、最終バーの ±1 を reverse_exit で消していた。
+        candle_range = (df["high"] - df["low"]).astype(float)
+        denom = candle_range.replace(0, np.nan)
+        close_pos = ((df["close"].astype(float) - df["low"].astype(float)) / denom).fillna(0.5).to_numpy()
         df["delta_ratio"] = (close_pos - 0.5) * 2.0
 
         # 3. 大局トレンド判定 (100 EMA)

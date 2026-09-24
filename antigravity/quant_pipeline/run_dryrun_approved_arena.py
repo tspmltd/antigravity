@@ -36,6 +36,13 @@ from antigravity.quant_pipeline.toxic_flow_analyzer import ToxicFlowAnalyzer
 from antigravity.quant_pipeline.spread_gate_tracker import SpreadGateTracker
 from core.dataloader import DataLoader
 from core.bitflyer_client import BitFlyerClient
+from antigravity.quant_pipeline.arena_signal import (
+    bars_for_signal_eval,
+    missing_ohlcv_columns,
+    read_last_signal,
+    to_utc_ts,
+    upsert_minute_bar,
+)
 
 JST = timezone(timedelta(hours=9))
 CONFIG_PATH = os.path.join(BASE_DIR, "configs", "approved_arena_config.json")
@@ -44,6 +51,18 @@ ADVERSE_SCORE_STATE_PATH = os.path.join(BASE_DIR, "data", "adverse_score_state.j
 TOXIC_STATE_PATH = os.path.join(BASE_DIR, "data", "adverse_toxic_state.json")
 COUNCIL_STATE_PATH = os.path.join(BASE_DIR, "configs", "agents_council_state.json")
 LOG_PATH = os.path.join(BASE_DIR, "logs", "dryrun_approved_arena.log")
+
+
+class FailedStrategyStub:
+    """Keeps a strat_id in the arena ranking when the module fails to load."""
+
+    def __init__(self, name: str, error: str):
+        self.name = name
+        self.parameters: Dict[str, Any] = {}
+        self._error = error
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        raise RuntimeError(self._error)
 
 
 class SingleStrategyState:
@@ -81,6 +100,7 @@ class SingleStrategyState:
         # 直近の行動記録
         self.last_action: str = "INIT"
         self.last_reason: str = "Initial state"
+        self.signal_fail_count: int = 0
 
     def get_window_stats(self, hours: float = 1.0) -> Dict[str, Any]:
         """指定ウィンドウ (1h または 24h) の成績を集計"""
@@ -128,6 +148,7 @@ class SingleStrategyState:
             "mfe_bp": round(self.mfe_bp, 2),
             "last_action": self.last_action,
             "last_reason": self.last_reason,
+            "signal_fail_count": self.signal_fail_count,
         }
 
 
@@ -172,6 +193,9 @@ class ApprovedStrategyArena:
         if len(self.df_history) > 300:
             self.df_history = self.df_history.iloc[-300:].reset_index(drop=True)
         print(f"[Arena] ✅ ヒストリカルデータ準備完了: {len(self.df_history)} 本")
+
+        if "timestamp" in self.df_history.columns:
+            self.df_history["timestamp"] = self.df_history["timestamp"].map(to_utc_ts)
 
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -257,8 +281,21 @@ class ApprovedStrategyArena:
                         params=getattr(inst, "parameters", {}),
                     )
                     strat_dict[strat_id] = state
+                else:
+                    raise AttributeError("CustomStrategy が定義されていません")
             except Exception as e:
-                print(f"[Arena] ⚠️ 戦略ロード失敗: {fname} ({e})")
+                print(f"[Arena] ⚠️ 戦略ロード失敗: {fname} ({e}) — strat_id は残し SIGNAL_ERROR で可視化します")
+                stub = FailedStrategyStub(name=f"LOAD_FAILED:{strat_id}", error=f"{fname}: {e}")
+                state = SingleStrategyState(
+                    strat_id=strat_id,
+                    name=stub.name,
+                    file_path=f,
+                    instance=stub,
+                    params={},
+                )
+                state.last_action = "LOAD_ERROR"
+                state.last_reason = f"{type(e).__name__}: {e}"
+                strat_dict[strat_id] = state
 
         print(f"[Arena] 🏛️ 合計 {len(strat_dict)} 個の承認済み戦略をロード完了しました。")
         return strat_dict
@@ -316,7 +353,7 @@ class ApprovedStrategyArena:
             best_bid = float(ticker.get("best_bid", ltp - 1000))
             best_ask = float(ticker.get("best_ask", ltp + 1000))
             spread = best_ask - best_bid
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
 
             # S1. Adverse Excursion のリアルタイム Tick 更新 (100ms, 500ms, 1s, 3s, 10s, 30s)
             self.adverse_tracker.on_tick(
@@ -329,33 +366,17 @@ class ApprovedStrategyArena:
             # #spread-gate-validation 検証用 スプレッド記録
             self.spread_gate_tracker.record_tick_spread(spread, ltp)
 
-            # 2. ローリング1分足の更新
-            last_time = self.df_history["timestamp"].iloc[-1]
-            if hasattr(last_time, "minute") and last_time.minute == now.minute:
-                # 同一分内：足更新
-                self.df_history.loc[self.df_history.index[-1], "close"] = ltp
-                self.df_history.loc[self.df_history.index[-1], "high"] = max(
-                    self.df_history.loc[self.df_history.index[-1], "high"], ltp
-                )
-                self.df_history.loc[self.df_history.index[-1], "low"] = min(
-                    self.df_history.loc[self.df_history.index[-1], "low"], ltp
-                )
-            else:
-                # 新しい足を追加
-                new_row = pd.DataFrame([{
-                    "timestamp": now.replace(second=0, microsecond=0),
-                    "open": ltp,
-                    "high": ltp,
-                    "low": ltp,
-                    "close": ltp,
-                    "volume": float(ticker.get("volume", 0.01))
-                }])
-                self.df_history = pd.concat([self.df_history, new_row], ignore_index=True)
-                if len(self.df_history) > 300:
-                    self.df_history = self.df_history.iloc[-300:].reset_index(drop=True)
+            # 2. ローリング1分足の更新 (UTC 分で揃える。naive vs aware の分ズレで 5 秒足 doji を量産しない)
+            self.df_history = upsert_minute_bar(
+                self.df_history,
+                ltp=ltp,
+                now=now,
+                volume=float(ticker.get("volume", 0.01)),
+            )
 
             # 3. 各戦略のシグナル評価 & 仮想約定管理
-            cur_df = self.df_history.copy()
+            # 形成中の1分足は捨て、確定足の最終バーだけを見る（iloc[-1] が doji で ±1 が消えるのを防ぐ）
+            cur_df = bars_for_signal_eval(self.df_history, now=now)
             exec_cfg = self.config.get("execution", {})
             take_profit = exec_cfg.get("take_profit_jpy", 25.0)
             stop_loss = exec_cfg.get("stop_loss_jpy", 25.0)
@@ -425,11 +446,21 @@ class ApprovedStrategyArena:
                         continue
 
                 # (B) シグナル算出
+                # 例外や列無しを sig=0 に黙殺すると、故障本が FLAT 0戦に見える。
+                # 失敗時はエントリーも例外起因の SIGNAL_EXIT もせず、strat_id を残してログする。
+                missing = missing_ohlcv_columns(cur_df)
+                if missing:
+                    self._record_signal_failure(s, f"missing_ohlcv:{missing}")
+                    continue
                 try:
                     df_sig = s.instance.generate_signals(cur_df)
-                    sig = int(df_sig["signal"].iloc[-1]) if "signal" in df_sig else 0
+                    sig, sig_err = read_last_signal(df_sig)
+                    if sig_err:
+                        self._record_signal_failure(s, sig_err)
+                        continue
                 except Exception as ex:
-                    sig = 0
+                    self._record_signal_failure(s, ex)
+                    continue
 
                 # (C) 新規エントリーまたはシグナル決済
                 if s.position is None:
@@ -518,7 +549,25 @@ class ApprovedStrategyArena:
                 self.last_report_time = time.time()
 
         except Exception as e:
-            pass
+            self._log_to_file(f"[CYCLE_ERROR] {e}\n{traceback.format_exc()}")
+            print(f"[Arena] CYCLE_ERROR: {e}", flush=True)
+
+    def _record_signal_failure(self, s: SingleStrategyState, err: Any):
+        """generate_signals 失敗をログし、ランキング上に strat_id を残す。黙って sig=0 にはしない。"""
+        if isinstance(err, BaseException):
+            msg = f"{type(err).__name__}: {err}"
+            tb = traceback.format_exc()
+        else:
+            msg = str(err)
+            tb = ""
+        s.signal_fail_count += 1
+        s.last_action = "SIGNAL_ERROR"
+        s.last_reason = msg[:240]
+        # 5秒周期なので初回と以降おおよそ1分ごとに残す
+        if s.signal_fail_count == 1 or s.signal_fail_count % 12 == 0:
+            line = f"[{s.strat_id}] SIGNAL_ERROR x{s.signal_fail_count}: {msg}"
+            print(f"[Arena] {line}", flush=True)
+            self._log_to_file(f"{line}\n{tb}".rstrip())
 
     def _open_position(self, s: SingleStrategyState, side: str, price: float, size: float, reason: str, spread: float = 2000.0, adverse_score: float = 30.0):
         s.position = side

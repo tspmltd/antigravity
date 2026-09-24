@@ -15,7 +15,7 @@ import importlib.util
 import pandas as pd
 import numpy as np
 
-BASE_DIR = "/home/azureuser/antigravity"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 class TestRepaired12Strategies(unittest.TestCase):
     def setUp(self):

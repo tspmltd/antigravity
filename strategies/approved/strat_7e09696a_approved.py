@@ -63,7 +63,8 @@ class CustomStrategy(BaseStrategy):
 
         df.loc[long_entry, "signal"] = 1
         df.loc[short_entry, "signal"] = -1
-        df.loc[exit_cond, "signal"] = 0
+        # エントリー足を中心回帰で即 0 にすると ffill 後の最終バーが消える
+        df.loc[exit_cond & ~long_entry & ~short_entry, "signal"] = 0
 
         df["signal"] = df["signal"].ffill().fillna(0).astype(int)
         return df
