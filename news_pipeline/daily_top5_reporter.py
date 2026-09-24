@@ -79,15 +79,18 @@ class DailyTop5Reporter:
         today_str = datetime.now(JST).strftime("%Y/%m/%d")
         items = self.load_today_disclosures()
 
-        if not items and mock_if_empty:
-            # 開示がまだ少ない時間帯やテスト時のデフォルト上位サンプル
-            items = [
-                {"symbol": "1890", "name": "東洋建設", "headline": "エフィッシモ 7.5% 買い増し", "evs_score": 215.8, "tier": "TIER1", "event_type": "大量保有"},
-                {"symbol": "6758", "name": "ソニーG", "headline": "自社株買い 1,000億円枠", "evs_score": 128.0, "tier": "TIER2", "event_type": "自社株買い"},
-                {"symbol": "7203", "name": "トヨタ自動車", "headline": "営業利益+25% 最高益上方修正", "evs_score": 95.0, "tier": "TIER3", "event_type": "業績修正"},
-                {"symbol": "6857", "name": "アドバンテスト", "headline": "PTS急騰 +8.5% (出来高急増)", "evs_score": 88.5, "tier": "TIER1", "event_type": "PTS"},
-                {"symbol": "6335", "name": "東京機械", "headline": "TOB 公開買付価格2,500円", "evs_score": 28.3, "tier": "TIER4", "event_type": "TOB"},
-            ]
+        if not items:
+            if mock_if_empty:
+                items = [
+                    {"symbol": "1890", "name": "東洋建設", "headline": "エフィッシモ 7.5% 買い増し", "evs_score": 215.8, "tier": "TIER1", "event_type": "大量保有"},
+                    {"symbol": "6758", "name": "ソニーG", "headline": "自社株買い 1,000億円枠", "evs_score": 128.0, "tier": "TIER2", "event_type": "自社株買い"},
+                    {"symbol": "7203", "name": "トヨタ自動車", "headline": "営業利益+25% 最高益上方修正", "evs_score": 95.0, "tier": "TIER3", "event_type": "業績修正"},
+                    {"symbol": "6857", "name": "アドバンテスト", "headline": "PTS急騰 +8.5% (出来高急増)", "evs_score": 88.5, "tier": "TIER1", "event_type": "PTS"},
+                    {"symbol": "6335", "name": "東京機械", "headline": "TOB 公開買付価格2,500円", "evs_score": 28.3, "tier": "TIER4", "event_type": "TOB"},
+                ]
+            else:
+                logger.info("[DailyTop5] 本日の開示レコードが空のため X 欠送")
+                return None
 
         # EVSスコア降順でソート
         items.sort(key=lambda x: x.get("evs_score", 0.0), reverse=True)
@@ -98,7 +101,7 @@ class DailyTop5Reporter:
 
         # 2. X投稿テキスト作成 (結論・需給ファースト)
         lines = [
-            f"📊【本日大引け】AIクオンツが選ぶ「重要開示 TOP5」",
+            f"📊【本日大引け TOP5】17:30",
             f"（{today_str}）",
             "",
         ]

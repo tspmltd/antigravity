@@ -10,6 +10,7 @@ X (旧Twitter) API v2 自動投稿モジュール (x_notifier.py)
 """
 
 import os
+import re
 import hashlib
 import logging
 import json
@@ -30,7 +31,45 @@ X_DAILY_STATE_PATH = os.path.join(_DATA_DIR, "x_global_daily_state.json")
 # 配信ゲートの「送信済み本文」記録。同一本文の再投稿を遮断する唯一のソース。
 X_SENT_POSTS_PATH = os.path.join(_DATA_DIR, "x_sent_posts.json")
 X_SENT_POSTS_MAX = 2000
-GLOBAL_DAILY_POST_LIMIT = int(os.getenv("X_GLOBAL_DAILY_LIMIT", "48"))  # X無料枠(月1500件=日平均50件)の安全上限
+GLOBAL_DAILY_POST_LIMIT = int(os.getenv("X_GLOBAL_DAILY_LIMIT", "48"))  # 合意済み日次上限。従量課金でも据え置く
+# 日米株・世界株価の急変 X 枠（繁忙 12）。Discord は検知全件。
+DEFAULT_MOVER_X_BUSY_DAILY_CAP = 12
+MOVER_X_BUSY_DAILY_CAP = int(os.getenv("SEKAI_MAX_DAILY_X", str(DEFAULT_MOVER_X_BUSY_DAILY_CAP)))
+
+# 定時背骨 10。17:30 TOP5 は scheduler の別ジョブ。Discord のみの定時は置かない。
+X_BACKBONE_SLOTS = frozenset({
+    "07:00", "07:30", "08:00", "08:30", "12:00",
+    "16:00", "17:00", "17:30", "19:00", "21:30",
+})
+X_DISCORD_ONLY_SLOTS = frozenset()
+X_SLOT_HEADERS = {
+    "07:00": "【海外市場のまとめ】07:00",
+    "07:30": "【海外テック】07:30",
+    "08:00": "【日本株寄り前】08:00",
+    "08:30": "【PTS・ストップ高安】08:30",
+    "12:00": "【社会ニュース】12:00",
+    "16:00": "【日本株総括】16:00",
+    "17:00": "【夜間PTS】17:00",
+    "17:30": "【本日大引け TOP5】17:30",
+    "19:00": "【欧州・アジア】19:00",
+    "21:30": "【NY市場寄り付き】21:30",
+}
+
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_EMPTY_POINT_MARKERS = ("情報なし", "開示待ち", "取得スキップ", "N/A")
+
+
+def strip_tweet_urls(text: str) -> str:
+    """X 本文から URL を除去する（Post: Create with URL 課金を避ける）。他の文字は触らない。"""
+    return _URL_RE.sub("", text or "")
+
+
+def tweet_contains_url(text: str) -> bool:
+    return bool(_URL_RE.search(text or ""))
+
+
+def is_x_backbone_slot(slot: str) -> bool:
+    return slot in X_BACKBONE_SLOTS
 
 
 def tweet_content_key(text: str) -> str:
@@ -196,10 +235,15 @@ class XNotifier:
             logger.info("[XNotifier] X APIクレデンシャルが未設定のため、X投稿をスキップします。")
             return None
 
-        trimmed_text = (text or "")[:280]
+        trimmed_text = strip_tweet_urls(text or "")[:280]
         if not trimmed_text.strip():
             logger.info("[XNotifier] 投稿本文が空のため、X投稿をスキップします。")
             return None
+        if tweet_contains_url(trimmed_text):
+            trimmed_text = strip_tweet_urls(trimmed_text)[:280]
+            if not trimmed_text.strip():
+                logger.info("[XNotifier] URL除去後に本文が空のため、X投稿をスキップします。")
+                return None
 
         # 同一本文の再送禁止 (配信ゲートの唯一の identity = exact tweet text)
         if self.already_sent(trimmed_text):
@@ -249,7 +293,7 @@ class XNotifier:
             return None
 
     def format_news_for_x(self, slot: str, title: str, fields: List[Dict[str, Any]]) -> str:
-        """Discord用の詳細Embed情報から、X (日本語140文字以内) に最適化されたテキストを成形"""
+        """スロット専用の X 本文。データが無い・プレースホルダのみなら空文字（欠送）。"""
         hashtags = {
             "07:00": "#米国株 #為替 #マクロ経済",
             "07:30": "#海外テック #半導体 #米国株",
@@ -262,30 +306,48 @@ class XNotifier:
             "21:30": "#NY市場 #米国株寄り付き",
         }.get(slot, "#投資 #市場ニュース")
 
-        short_title = title.split("(")[0].strip()
-
         points = []
-        for f in fields:
-            val = f.get("value", "")
-            lines = [l.strip().lstrip("•- ") for l in val.split("\n") if l.strip()]
+        for f in fields or []:
+            val = strip_tweet_urls(str(f.get("value", "")))
+            lines = [l.strip().lstrip("•-▫️🔺🔻 ") for l in val.split("\n") if l.strip()]
             for line in lines:
-                if len(line) > 5 and not line.startswith("http") and not line.startswith("※"):
-                    points.append(line)
+                if not self._is_usable_x_point(line):
+                    continue
+                points.append(line)
                 if len(points) >= 2:
                     break
             if len(points) >= 2:
                 break
 
-        body_points = "\n".join([f"・{p[:45]}" for p in points[:2]])
-        header = f"【{short_title}】\n"
+        if not points:
+            return ""
+
+        identity = X_SLOT_HEADERS.get(slot)
+        if identity:
+            header = f"{identity}\n"
+        else:
+            short_title = (title or "").split("(")[0].strip() or "市場ニュース"
+            header = f"【{short_title}】{slot}\n"
         footer = f"\n\n{hashtags}"
+        body_points = "\n".join([f"・{p[:80]}" for p in points[:2]])
 
-        max_body_len = 135 - len(header) - len(footer)
-        if max_body_len > 0 and len(body_points) > max_body_len:
-            body_points = body_points[:max_body_len - 3] + "..."
+        max_body_len = 280 - len(header) - len(footer)
+        if max_body_len <= 0:
+            return ""
+        if len(body_points) > max_body_len:
+            body_points = body_points[: max_body_len - 3] + "..."
 
-        tweet_text = f"{header}{body_points}{footer}"
-        return tweet_text.strip()
+        return strip_tweet_urls(f"{header}{body_points}{footer}").strip()
+
+    @staticmethod
+    def _is_usable_x_point(line: str) -> bool:
+        if len(line) <= 5 or line.startswith("※"):
+            return False
+        if tweet_contains_url(line):
+            line = strip_tweet_urls(line)
+            if len(line) <= 5:
+                return False
+        return not any(m in line for m in _EMPTY_POINT_MARKERS)
 
     def format_breakout_for_x(self, triggered_events: List[Dict[str, Any]]) -> str:
         """1%急変速報を X (140文字以内) に最適化して成形 (視認性MAX・3秒理解フォーマット)"""
@@ -330,14 +392,19 @@ default_x_notifier = XNotifier()
 
 
 def send_news_tweet(slot: str, title: str, fields: List[Dict[str, Any]]) -> Optional[str]:
-    """スロットニュースをX向けに成形して投稿する簡易関数"""
+    """スロットニュースをX向けに成形して投稿する簡易関数。空本文は欠送。"""
     text = default_x_notifier.format_news_for_x(slot, title, fields)
+    if not text:
+        logger.info(f"[XNotifier] スロット {slot} は本文が空のため X 投稿を欠送します。")
+        return None
     return default_x_notifier.post_tweet(text)
 
 
 def send_breakout_tweet(triggered_events: List[Dict[str, Any]], image_bytes: Optional[bytes] = None) -> Optional[str]:
-    """1%急変速報を画像付きでXに投稿する簡易関数"""
+    """1%急変速報を画像付きでXに投稿する簡易関数。空本文は欠送。"""
     text = default_x_notifier.format_breakout_for_x(triggered_events)
+    if not text:
+        return None
     media_id = None
     if image_bytes:
         media_id = default_x_notifier.upload_media(image_bytes)
