@@ -68,7 +68,7 @@ class HourlyDryRunReporter:
         # 1. UMM & TF2BP データ (1h & 24h)
         umm = umm_tf.get("umm", {})
         tf = umm_tf.get("tf2bp", {})
-        tf_v2 = umm_tf.get("tf2bp_peg_v2", {})
+        tf_v2 = umm_tf.get("tf2bp_peg_v3") or umm_tf.get("tf2bp_peg_v2") or {}
 
         umm_1h = umm.get("stats_1h", {})
         umm_24h = umm.get("stats_24h", {})
@@ -179,7 +179,7 @@ class HourlyDryRunReporter:
             "color": color,
             "fields": [
                 {
-                    "name": "① UMM ＆ TF2BP 24時間観察 ＆ TF2BP_PEG_v2 観測",
+                    "name": "① UMM ＆ TF2BP 24時間観察 ＆ TF2BP_PEG_v3 観測",
                     "value": (
                         f"• **UMM (在庫スキューMM CSR-504)** `[{umm_pos}]`:\n"
                         f"   • 1h: **`{umm_1h_bp:+.2f} bp`** ({umm_1h_t}戦/{umm_1h_wr:.0f}% / ¥{umm_1h_jpy:+,.0f})\n"
@@ -187,7 +187,7 @@ class HourlyDryRunReporter:
                         f"• **TF2BP (Baseline: FROZEN CSR-499)** `[{tf_pos}]`:\n"
                         f"   • 1h: **`{tf_1h_bp:+.2f} bp`** ({tf_1h_t}戦/{tf_1h_wr:.0f}% / ¥{tf_1h_jpy:+,.0f})\n"
                         f"   • 24h: **`{tf_24h_bp:+.2f} bp`** ({tf_24h_t}戦/{tf_24h_wr:.0f}% / ¥{tf_24h_jpy:+,.0f})\n"
-                        f"• **🔬 TF2BP_PEG_v2 (Model 3+1 観測レーン)** `[{v2_pos}]`:\n"
+                        f"• **🔬 TF2BP_PEG_v3 (CSR-522 · AgingGuard+BE3+FakeLiq)** `[{v2_pos}]`:\n"
                         f"   • 1h: **`{v2_1h_bp:+.2f} bp`** ({v2_1h_t}戦/{v2_1h_wr:.0f}% / ¥{v2_1h_jpy:+,.0f}) [対Base: **`{diff_1h_bp:+.2f} bp`**]\n"
                         f"   • 24h: **`{v2_24h_bp:+.2f} bp`** ({v2_24h_t}戦/{v2_24h_wr:.0f}% / ¥{v2_24h_jpy:+,.0f}) [対Base: **`{diff_24h_bp:+.2f} bp`**]\n"
                         f"• **小計 (UMM+TF2BP Base)**: 1h: **`{umm_tf_1h_bp:+.2f} bp`** (`¥{umm_tf_1h_jpy:+,.0f}`) | 24h: **`{umm_tf_24h_bp:+.2f} bp`** (`¥{umm_tf_24h_jpy:+,.0f}`)"
@@ -215,21 +215,28 @@ class HourlyDryRunReporter:
         # 1. メイン運用報告 (REPORT) ＆ DRYRUN チャンネルへマルチキャスト送信
         success = self.notifier.post_dryrun_multicast({"embeds": [embed]})
 
-        # 2. 試運転戦略報告 (Observation 専用チャンネル) へ TF2BP_PEG_v2 特化レポートを送信
+        # 2. 試運転戦略報告 (Observation) — CSR-527: 文言は正本 peg_v3_obs_v1 に一致させる
+        peg_ver = v2_1h.get("peg_version") or v2_24h.get("peg_version") or (tf_v2.get("params") or {}).get("peg_version") or "peg_v3_obs_v1"
+        peg_params = tf_v2.get("params") or {}
+        aging_n = int(v2_24h.get("aging_exits") or 0)
+        be_n = int(v2_24h.get("be_exits") or 0)
+        fake_n = int(v2_24h.get("fake_liq_skips") or 0)
+        be_arm = peg_params.get("be_arm_bp", 3.0)
+        aging_sec = peg_params.get("aging_guard_sec", 3.0)
         obs_embed = {
-            "title": f"🔬 【Observation 試運転戦略報告】 TF2BP_PEG_v2 (Model 3+1) 検証",
+            "title": f"🔬 【Observation】 TF2BP_PEG_v3 (`{peg_ver}`) 検証",
             "description": (
                 f"🕒 **集計時刻**: `{now_str}`\n"
-                f"📊 **観測対象**: `TF2BP_PEG_v2` (Model 3: Effective Reach + Model 1: Dynamic Ratio + 建値防衛 BE5)\n"
-                f"⚖️ **Baseline**: `TF2BP v1 (CSR-499)`\n"
-                f"🔒 **運用モード**: **FROZEN / OBSERVATION (完全手動指示・自動調整禁止)**"
+                f"📊 **正本**: `TF2BP_PEG_v3` = AgingGuard + BE3 + FakeLiquidity + AdaptiveRatio（CSR-522）\n"
+                f"⚖️ **Baseline**: `TF2BP (CSR-499 · FROZEN)` · 非改変\n"
+                f"🔒 **OBSERVATION · ENFORCE=0 · WIRE=NO** · ※旧 Model3+1/BE5 表記は廃棄（CSR-527）"
             ),
             "color": 0x3498DB if v2_24h_bp >= tf_24h_bp else 0xE67E22,
             "fields": [
                 {
                     "name": "① 直近 1時間 (1h) 執行性能比較",
                     "value": (
-                        f"• **TF2BP_PEG_v2**: **`{v2_1h_bp:+.2f} bp`** ({v2_1h_t}戦/{v2_1h_wr:.0f}% / ¥{v2_1h_jpy:+,.1f})\n"
+                        f"• **TF2BP_PEG_v3**: **`{v2_1h_bp:+.2f} bp`** ({v2_1h_t}戦/{v2_1h_wr:.0f}% / ¥{v2_1h_jpy:+,.1f})\n"
                         f"• **TF2BP Baseline**: **`{tf_1h_bp:+.2f} bp`** ({tf_1h_t}戦/{tf_1h_wr:.0f}% / ¥{tf_1h_jpy:+,.1f})\n"
                         f"• **改善差分 (Δbp)**: **`{diff_1h_bp:+.2f} bp`** ({'改善優位 🟢' if diff_1h_bp >= 0 else 'ビハインド 🔴'})"
                     ),
@@ -238,24 +245,25 @@ class HourlyDryRunReporter:
                 {
                     "name": "② 過去 24時間 (24h) 累積性能比較",
                     "value": (
-                        f"• **TF2BP_PEG_v2**: **`{v2_24h_bp:+.2f} bp`** ({v2_24h_t}戦/{v2_24h_wr:.0f}% / ¥{v2_24h_jpy:+,.1f})\n"
+                        f"• **TF2BP_PEG_v3**: **`{v2_24h_bp:+.2f} bp`** ({v2_24h_t}戦/{v2_24h_wr:.0f}% / ¥{v2_24h_jpy:+,.1f})\n"
                         f"• **TF2BP Baseline**: **`{tf_24h_bp:+.2f} bp`** ({tf_24h_t}戦/{tf_24h_wr:.0f}% / ¥{tf_24h_jpy:+,.1f})\n"
                         f"• **改善差分 (Δbp)**: **`{diff_24h_bp:+.2f} bp`** ({'改善優位 🟢' if diff_24h_bp >= 0 else 'ビハインド 🔴'})"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "③ 執行モデルパラメータ",
+                    "name": "③ 正本パラメータ（state 実値）",
                     "value": (
-                        f"• 深度連動比率 (Dynamic Ratio): `0.915 〜 0.975`\n"
-                        f"• テイカー攻撃性ブースト (Effective Reach): 最大 `+0.020`\n"
-                        f"• 建値防衛 (BE5): MFE +5.0bp到達でアーム ➔ +0.2bp割れで微小利確撤退\n"
-                        f"• 現在ポジション: `[{v2_pos}]`"
+                        f"• **AgingGuard**: age≥`{aging_sec}`s ∧ pnl<0.5bp · exits(24h stats)=`{aging_n}`\n"
+                        f"• **BE3**: arm +`{be_arm}`bp · trigger +0.2bp · exits=`{be_n}`\n"
+                        f"• **FakeLiquidity**: imb>0.40 ∧ cxl>0.30 ∧ taker=0 · skips=`{fake_n}`\n"
+                        f"• **AdaptiveRatio**: noise 0.915–0.975 / trend 0.985–0.995\n"
+                        f"• 現在ポジション: `[{v2_pos}]` · version=`{peg_ver}`"
                     ),
                     "inline": False,
                 }
             ],
-            "footer": {"text": "🔬 Antigravity Observation Lane • TF2BP_PEG_v2"},
+            "footer": {"text": "🔬 Antigravity Observation · peg_v3_obs_v1 · CSR-527"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.notifier.post_observation({"embeds": [obs_embed]})
@@ -298,7 +306,7 @@ class HourlyDryRunReporter:
                 f"🕒 **報告時刻**: `{now_str}`\n"
                 f"• **本番 LIVE 取引**: `🛑 完全停止中 (OFF)` (元本 ¥6,390 保護)\n"
                 f"• **Dry-run 統合損益**: 1h: **`{total_1h_bp:+.2f} bp`** (`¥{total_1h_jpy:+,.0f}`) | 24h: **`{total_24h_bp:+.2f} bp`** (`¥{total_24h_jpy:+,.0f}`)\n"
-                f"• **Observation (PEG_v2)**: 1h: **`{v2_1h_bp:+.2f} bp`** | 24h: **`{v2_24h_bp:+.2f} bp`** [対Base: **`{diff_24h_bp:+.2f} bp`**]\n"
+                f"• **Observation (PEG_v3)**: 1h: **`{v2_1h_bp:+.2f} bp`** | 24h: **`{v2_24h_bp:+.2f} bp`** [対Base: **`{diff_24h_bp:+.2f} bp`**]\n"
                 f"• **Watchdog Sentinel**: `🟢 正常稼働中 (常駐死活監視)`"
             ),
             "color": 0x34495E,
@@ -320,7 +328,7 @@ class HourlyDryRunReporter:
             stats_24h = gate_data.get("stats_24h", {})
             self.notifier.post_spread_gate_validation(stats_1h, stats_24h)
 
-        # 7. PEG_v2 専用対比検証 (Baseline TF2BP vs TF2BP_PEG_v2: 食われにくさ実証)
+        # 7. PEG_v3 専用対比検証 (Baseline TF2BP vs TF2BP_PEG_v3: 食われにくさ実証)
         self.notifier.post_peg_v2_vs_baseline_comparison(
             v2_stats=tf_v2,
             base_stats=tf,
@@ -349,6 +357,18 @@ class HourlyDryRunReporter:
                 self.notifier.post_microstructure_hourly(micro_rep)
             except Exception as e:
                 self._log_to_file(f"microstructure hourly post err: {e}")
+
+        # 9b. CSR-521-CTRL OBSERVE（Virtual Exit@30s · hold ladder · ENFORCE=0）
+        try:
+            from antigravity.quant_pipeline.umm_ctrl_observe import run as run_ctrl_observe
+            ctrl_rep = run_ctrl_observe(hours=1.0)
+            self.notifier.post_umm_ctrl_observe(ctrl_rep)
+            self._log_to_file(
+                f"CSR-521-CTRL observe: n={ctrl_rep.get('source',{}).get('n_trades')} "
+                f"Δ30={ (ctrl_rep.get('hourly_watch') or {}).get('would_exit_30_delta_bp') }"
+            )
+        except Exception as e:
+            self._log_to_file(f"CSR-521-CTRL observe err: {e}")
 
         # 10. Research Librarian 日次（JST 09時 or 未送信日）
         try:

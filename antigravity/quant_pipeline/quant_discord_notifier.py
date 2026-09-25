@@ -729,7 +729,10 @@ class QuantDiscordNotifier:
         url = self.spread_gate_webhook_url or self.analysis_webhook_url or self.quants_agent_webhook_url
         return self._post(url, {"embeds": [embed]})
 
-    def post_peg_v2_vs_baseline_comparison(
+    def post_peg_v2_vs_baseline_comparison(self, *a, **k):
+        return self.post_peg_v3_vs_baseline_comparison(*a, **k)
+
+    def post_peg_v3_vs_baseline_comparison(
         self,
         v2_stats: Dict[str, Any],
         base_stats: Dict[str, Any],
@@ -737,7 +740,7 @@ class QuantDiscordNotifier:
         toxic_state: Dict[str, Any],
     ) -> bool:
         """
-        PEG_v2専用検証 (Baseline TF2BP vs TF2BP_PEG_v2)
+        PEG_v3専用検証 (Baseline TF2BP vs TF2BP_PEG_v3)
         5大測定項目:
         1. AE_1s
         2. AE_3s
@@ -756,7 +759,7 @@ class QuantDiscordNotifier:
 
         # AE & Capture Rate (Agent責任分析より抽出)
         attribution = ae_summary.get("agent_attribution", {})
-        peg_ae_data = attribution.get("TF2BP_PEG_v2", {})
+        peg_ae_data = attribution.get("TF2BP_PEG_v3", {})
         base_ae_data = attribution.get("TF2BP", {})
 
         peg_ae_1s = peg_ae_data.get("avg_ae_1s", -0.5)
@@ -782,10 +785,10 @@ class QuantDiscordNotifier:
 
         fields = [
             {
-                "name": "🔬 5大最重要項目 直接対比表 (Baseline vs PEG_v2)",
+                "name": "🔬 5大最重要項目 直接対比表 (Baseline vs PEG_v3)",
                 "value": (
                     f"```\n"
-                    f"測定項目          | Baseline (TF2BP) | PEG_v2 (Maker)  | 改善差分 (Δ)\n"
+                    f"測定項目          | Baseline (TF2BP) | PEG_v3 (Maker)  | 改善差分 (Δ)\n"
                     f"-----------------|------------------|-----------------|-------------\n"
                     f"1. 損益 (24h)     | {base_bp:+14.2f}bp | {v2_bp:+13.2f}bp | {diff_bp:+9.2f}bp {'🟢' if diff_bp>=0 else '🔴'}\n"
                     f"2. AE_1s (逆行)   | {base_ae_1s:+14.2f}bp | {peg_ae_1s:+13.2f}bp | {diff_ae_1s:+9.2f}bp {'🟢' if diff_ae_1s>=0 else '🔴'}\n"
@@ -800,21 +803,23 @@ class QuantDiscordNotifier:
                 "name": "🎯 エグゼクティブ判定",
                 "value": (
                     f"{verdict_str}\n"
-                    f"• **核心の証明**: PEG_v2は「方向予測が上手い」のではなく、Dynamic Ratio ＆ Effective Reach により**「トキシック・テイカーに食われない指値配置」**を実現している。"
+                    f"• **検証焦点 (CSR-522/524)**: Entry再改修ではなく Exit摩擦 "
+                    f"(AgingGuard成行 · BE3 · FakeLiq skip) の分解。数値は正本パラメータと一致したレポートのみ採用。"
                 ),
                 "inline": False,
             }
         ]
 
         embed = {
-            "title": "🔬 【PEG_v2 専用対比検証レポート】 (Model 3+1 vs Baseline)",
+            "title": "🔬 【PEG_v3 専用対比検証レポート】 (CSR-522 vs Baseline)",
             "description": (
-                f"TF2BP Baseline (成行) vs TF2BP_PEG_v2 (指値PEG+建値防衛BE5)\n"
+                f"TF2BP Baseline (成行) vs TF2BP_PEG_v3 "
+                f"(AgingGuard+BE3+FakeLiq+AdaptiveRatio · 旧BE5/Model3+1表記は廃棄)\n"
                 f"集計時刻: `{now_str}`"
             ),
             "color": 0x2ECC71 if is_superior else 0x3498DB,
             "fields": fields,
-            "footer": {"text": "🔬 Antigravity PEG_v2 Research Core"},
+            "footer": {"text": "🔬 Antigravity PEG_v3 Research Core"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -969,6 +974,84 @@ class QuantDiscordNotifier:
             or self.observation_webhook_url
             or self.quants_agent_webhook_url
         )
+        ok = self._post(url, {"embeds": [embed]})
+        self.post_dryrun_multicast({"embeds": [embed]})
+        return ok
+
+    def post_umm_ctrl_observe(self, report: Dict[str, Any]) -> bool:
+        """CSR-521-CTRL v0 OBSERVE — hold ladder + Virtual Exit@30s (WIRE=NO · ENFORCE=0)."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        hw = report.get("hourly_watch") or {}
+        ladder = hw.get("ladder_pnl_hs") or []
+        lad_lines = []
+        for r in ladder:
+            hs = r.get("hard_stop_rate_pct")
+            hs_s = f"{hs}%" if hs is not None else "—"
+            lad_lines.append(
+                f"• `{r.get('level')}` n={r.get('n')} Σ={r.get('sum_pnl_bp'):+g}bp HS={hs_s}"
+            )
+        d30 = hw.get("would_exit_30_delta_bp")
+        d60 = hw.get("would_exit_60_delta_bp")
+        d120 = hw.get("would_exit_120_delta_bp")
+        sides = report.get("ctrl5_one_side_retreat") or {}
+        long_s = sides.get("long") or {}
+        short_s = sides.get("short") or {}
+
+        def _d(v):
+            return f"{v:+.2f}bp" if isinstance(v, (int, float)) else "—"
+
+        embed = {
+            "title": "🎛️ 【CSR-521-CTRL OBSERVE】 Inventory Control v0",
+            "description": (
+                f"目的: **HARD_STOP流入観測**（方向予測ではない）\n"
+                f"window=`{report.get('window')}` · n=`{(report.get('source') or {}).get('n_trades')}`\n"
+                f"WIRE=NO · ENFORCE=0 · Economic PASS不出 · `{now_str}`"
+            ),
+            "color": 0xE67E22,
+            "fields": [
+                {
+                    "name": "CTRL-1 Hold Ladder (L0–L4)",
+                    "value": "\n".join(lad_lines) or "• —",
+                    "inline": False,
+                },
+                {
+                    "name": "CTRL-2 Would-Unwind Δ (Virtual_full − Actual_full)",
+                    "value": (
+                        f"• @30s Δ: `{_d(d30)}` ← **最優先** · id_ok=`{hw.get('delta_identity_ok')}`\n"
+                        f"• @60s Δ: `{_d(d60)}` · @120s Δ: `{_d(d120)}`\n"
+                        f"• L2+L3のみ Δ: `{_d(hw.get('l2_l3_only_delta_bp'))}`\n"
+                        f"• Actual_full: `{_d(hw.get('actual_ledger_bp'))}`\n"
+                        f"• Virtual@30_full: `{_d(hw.get('virtual_30_full_ledger_bp') or hw.get('virtual_30_ledger_bp'))}`\n"
+                        f"• (diag) eligible Actual/Virtual: `{_d(hw.get('actual_eligible_gt30_bp'))}` / "
+                        f"`{_d(hw.get('virtual_30_eligible_sum_bp'))}` ← **足し引き禁止**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "CTRL-5 One-Side",
+                    "value": (
+                        f"• long Σ=`{long_s.get('sum_pnl_bp')}` HS=`{long_s.get('hard_stop_rate')}` "
+                        f"hold_p50=`{long_s.get('hold_p50')}`\n"
+                        f"• short Σ=`{short_s.get('sum_pnl_bp')}` HS=`{short_s.get('hard_stop_rate')}` "
+                        f"hold_p50=`{short_s.get('hold_p50')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": (
+                        "• primary=`hold` · secondary inactive (csnt/fake_bo)\n"
+                        "• 禁止: 新アルファ · 価格予測利用 · ENFORCE · LIVE"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "CSR-521-CTRL v0 · OBSERVE only · order: design→Δbp→PASS→ENFORCE"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        url = self.analysis_webhook_url or self.quants_agent_webhook_url
         ok = self._post(url, {"embeds": [embed]})
         self.post_dryrun_multicast({"embeds": [embed]})
         return ok

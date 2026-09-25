@@ -66,6 +66,7 @@ def parse_log_trades(log_path: str = LOG) -> pd.DataFrame:
                             "exit_ts": exit_ts,
                             "hold_sec": hold,
                             "side": open_pos["side"],
+                            "entry_price": open_pos["entry_price"],
                             "pnl_bp": float(m.group(2)),
                             "exit_reason_full": m.group(3).strip()[:80],
                         }

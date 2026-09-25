@@ -2,68 +2,65 @@
 TF2BP with PEG_v2 Strategy (Model 3: EffectiveReach + Model 1: DynamicRatio)
 =============================================================================
 TF2BP (CSR-499) の微小モメンタム判定に、
-バックテストで最高改善 (+54bp) を実証した【PEG_v2 指値執行エンジン】を搭載した
-観測検証（OBSERVATION）専用戦略。
+【PEG_v2 指値執行エンジン】を搭載した OBSERVATION 観測専用戦略。
+
+CSR-521-PEGFIX（2026-09-24）:
+  悪化主因だった「スプレッド奥刺し → tip評価即含み損 → trail 4bp 即死」を修正。
+  PEG (Model 1+3) は維持し、**真 maker 領域**で最大限活用する。
 
 【PEG_v2 の構成要素】:
-  1. Model 1 (Dynamic Ratio):
-     - 対向板厚（Depth 1）が薄ければ深く差し込み（0.975〜0.980）、
-       厚い壁があれば手前（0.915〜0.920）で先頭キューを奪取。
-  2. Model 3 (Effective Reach):
-     - テイカー攻撃性（Taker Aggressiveness）が高い瞬間は板が抜けるため、
-       さらに +0.015〜+0.020 ブーストして最速約定を刈り取る。
-  3. TF2BP 厳格エグジット規律:
-     - 建値防衛 (BE5: MFE >= 5.0bp 後、利益ゼロ反落で be_stop 即時脱出)
-     - 利益目標利確 (Target 15.0bp)
-     - トレーリングストップ (Peak から 4.0bp ドローダウン)
-     - 逆選択先回り退避 (Adverse Score >= 0.70)
+  1. Model 1 (Dynamic Ratio): 対向板厚で improve 幅を可変（薄い→深く / 厚い→手前）
+  2. Model 3 (Effective Reach): テイカー攻撃性で improve を小幅ブースト（クロス禁止）
+  3. Maker clamp: 対向 tip の 1tick 手前でクリップ
+  4. 出口: trail は MFE 武装後のみ · tip 評価に half-spread バッファ
 """
 import time
-import math
 from typing import Dict, Any, Optional, List
 
 
 class TF2BP_PEG_v2_Strategy:
-    """
-    TF2BP + PEG_v2 (Model 3+1) 観測検証用戦略
-    """
+    """TF2BP + PEG_v2 (Model 3+1) 観測検証用戦略（maker-safe）。"""
 
     def __init__(self, parameters: Optional[Dict[str, Any]] = None):
         self.strategy_name = "TF2BP_PEG_v2"
         self.frozen_mode = True
-        self.last_user_directive = "OBSERVATION: TF2BP + PEG_v2 (Model 3+1) 並行検証稼働"
+        self.last_user_directive = (
+            "OBSERVATION: TF2BP + PEG_v2 (Model 3+1) maker-safe · CSR-521-PEGFIX"
+        )
+        self.peg_version = "peg_v2_maker_safe_v1"
 
-        # 確定パラメータ
         self.params = {
-            "micro_mom_bp": 2.0,            # 2bp初動モメンタム
-            "target_bp": 15.0,              # 利益目標 (15bp)
-            "trail_stop_bp": 4.0,           # トレーリングストップ (4bp)
-            "be_arm_bp": 5.0,               # 建値防衛アーム (MFE 5bp到達で発動)
-            "flow_window": 5,               # フロー観測窓
-            "reverse_noise_max": 0.25,      # 逆方向ノイズ上限
-            "order_size_btc": 0.001,        # 基本ロット
-            "max_hold_sec": 1200.0,         # 最大保有秒数 (20分)
-            "max_wait_sec": 30.0,           # PEG指値の最長待ち時間
+            "micro_mom_bp": 2.0,
+            "target_bp": 15.0,
+            "trail_stop_bp": 4.0,
+            "trail_arm_mfe_bp": 4.0,
+            "min_hold_before_trail_sec": 8.0,
+            "be_arm_bp": 5.0,
+            "flow_window": 5,
+            "reverse_noise_max": 0.25,
+            "order_size_btc": 0.001,
+            "max_hold_sec": 1200.0,
+            "max_wait_sec": 45.0,
+            "peg_improve_min": 0.12,
+            "peg_improve_max": 0.48,
+            "peg_depth_ref_btc": 0.20,
+            "peg_aggr_boost_max": 0.08,
         }
         if parameters:
             self.params.update(parameters)
 
-        # 履歴バッファ
         self.price_history: List[float] = []
         self.flow_history: List[float] = []
-
-        # PEG 指値待機管理
         self.pending_order: Optional[Dict[str, Any]] = None
 
-        # 内部建玉状態
         self.position_side: Optional[str] = None
         self.entry_price: float = 0.0
         self.entry_time: float = 0.0
         self.peak_price: float = 0.0
         self.peak_mfe_bp: float = 0.0
         self.be_armed: bool = False
+        self.trail_armed: bool = False
 
-        # 成績記録
         self.total_trades: int = 0
         self.win_trades: int = 0
         self.total_pnl: float = 0.0
@@ -80,35 +77,59 @@ class TF2BP_PEG_v2_Strategy:
         cancel_rate: float = 0.0,
         refill_rate: float = 0.0,
     ) -> float:
-        """
-        【PEG_v2 計算式】Model 1 (Dynamic Ratio) + Model 3 (Effective Reach)
-        """
+        """Model 1 + Model 3 · maker-safe improve from own tip."""
         spread = best_ask - best_bid
-        if spread <= 0:
-            return best_ask if side == "buy" else best_bid
+        tick = 1.0
+        if spread <= tick:
+            return round(best_bid if side == "buy" else best_ask)
 
-        # 1. キャンセル・リフィルを考慮した実効板厚 (Effective Depth)
         eff_depth = opp_depth * (1.0 - cancel_rate + 0.5 * refill_rate)
         eff_depth = max(eff_depth, 0.001)
 
-        # 2. Model 1 (Dynamic Ratio): 板厚連動 (0.915 〜 0.975)
-        # 対向板が薄い(0.05BTC未満)なら 0.975、厚い(0.5BTC超)なら 0.915
-        depth_factor = min(max(eff_depth / 0.20, 0.0), 1.0)
-        base_ratio = 0.975 - depth_factor * 0.060
+        depth_ref = float(self.params["peg_depth_ref_btc"])
+        depth_factor = min(max(eff_depth / depth_ref, 0.0), 1.0)
+        improve_min = float(self.params["peg_improve_min"])
+        improve_max = float(self.params["peg_improve_max"])
+        # thick → improve_min (手前) / thin → improve_max (深く)
+        base_improve = improve_max - depth_factor * (improve_max - improve_min)
 
-        # 3. Model 3 (Effective Reach): テイカー攻撃性による到達距離ブースト (+0.00 〜 +0.02)
-        aggr_boost = min(max(taker_aggressiveness * 0.020, 0.0), 0.020)
+        aggr_boost = min(
+            max(float(taker_aggressiveness) * float(self.params["peg_aggr_boost_max"]), 0.0),
+            float(self.params["peg_aggr_boost_max"]),
+        )
+        improve = min(max(base_improve + aggr_boost, improve_min), improve_max)
 
-        # 合成比率 (最小 0.910, 最大 0.985)
-        final_ratio = min(max(base_ratio + aggr_boost, 0.910), 0.985)
-
-        # 4. 指値価格算出 (四捨五入整数ティック)
         if side == "buy":
-            price = best_bid + spread * final_ratio
+            raw = best_bid + spread * improve
+            price = min(raw, best_ask - tick)
+            price = max(price, best_bid)
         else:
-            price = best_ask - spread * final_ratio
-
+            raw = best_ask - spread * improve
+            price = max(raw, best_bid + tick)
+            price = min(price, best_ask)
         return round(price)
+
+    @staticmethod
+    def maker_fill_hit(
+        side: str,
+        peg_price: float,
+        best_bid: float,
+        best_ask: float,
+        last_sell: float = 0.0,
+        last_buy: float = 0.0,
+    ) -> bool:
+        """真 maker。クロス自己約定は禁止。"""
+        if side == "buy":
+            if last_sell > 0 and last_sell <= peg_price:
+                return True
+            if best_ask > 0 and best_ask <= peg_price:
+                return True
+            return False
+        if last_buy > 0 and last_buy >= peg_price:
+            return True
+        if best_bid > 0 and best_bid >= peg_price:
+            return True
+        return False
 
     def on_tick(
         self,
@@ -125,10 +146,9 @@ class TF2BP_PEG_v2_Strategy:
         adverse_score: float = 0.0,
         cancel_recommendation: bool = False,
         avoidance_on: bool = False,
+        last_sell_price: float = 0.0,
+        last_buy_price: float = 0.0,
     ) -> Dict[str, Any]:
-        """
-        1 Tick ごとの戦略評価 & 約定・エグジット判定
-        """
         now = time.time()
         self.price_history.append(mid_price)
         if len(self.price_history) > 30:
@@ -140,137 +160,208 @@ class TF2BP_PEG_v2_Strategy:
         if len(self.flow_history) > self.params["flow_window"]:
             self.flow_history.pop(0)
 
-        # -------------------------------------------------------------
-        # 1. 指値待機中 (PENDING) の約定・キャンセル判定
-        # -------------------------------------------------------------
+        half_spread_bp = 0.0
+        if mid_price > 0 and best_ask > best_bid:
+            half_spread_bp = ((best_ask - best_bid) / mid_price) * 5000.0
+
+        # --- PENDING PEG ---
         if self.pending_order:
             p_side = self.pending_order["side"]
-            p_price = self.pending_order["price"]
-            created = self.pending_order.get("created_at")
-            if not created:
-                created = now
+            p_price = float(self.pending_order["price"])
+            created = float(self.pending_order.get("created_at") or now)
+            if "created_at" not in self.pending_order:
                 self.pending_order["created_at"] = now
-            waited = now - float(created)
+            waited = now - created
 
-            # 約定判定 (相手気配が自分の指値にタッチしたか)
-            filled = False
-            if p_side == "buy" and (p_price >= best_ask or best_bid >= p_price):
-                filled = True
-            elif p_side == "sell" and (p_price <= best_bid or best_ask <= p_price):
-                filled = True
+            last_re = float(self.pending_order.get("last_reprice_at") or created)
+            if now - last_re >= 2.0:
+                opp = ask_depth_1 if p_side == "buy" else bid_depth_1
+                new_px = self.calculate_peg_v2_price(
+                    side=p_side,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    opp_depth=opp,
+                    taker_aggressiveness=taker_aggressiveness,
+                    cancel_rate=cancel_rate,
+                    refill_rate=refill_rate,
+                )
+                self.pending_order["price"] = new_px
+                self.pending_order["last_reprice_at"] = now
+                p_price = new_px
 
-            if filled:
-                # 約定成功！
+            if self.maker_fill_hit(
+                p_side, p_price, best_bid, best_ask, last_sell_price, last_buy_price
+            ):
                 self.position_side = p_side
                 self.entry_price = p_price
                 self.entry_time = now
                 self.peak_price = p_price
                 self.peak_mfe_bp = 0.0
                 self.be_armed = False
+                self.trail_armed = False
                 self.pending_order = None
                 return {
                     "action": "fill",
                     "side": p_side,
                     "fill_price": p_price,
-                    "reason": f"PEG_V2_FILLED (@¥{p_price:,.0f})",
+                    "reason": f"PEG_V2_MAKER_FILL (@¥{p_price:,.0f} · {self.peg_version})",
                 }
 
-            # 逆選択スコア急騰または待機タイムアウトによる注文キャンセル
             if waited >= float(self.params["max_wait_sec"]):
-                reason = f"PEG_V2_CANCEL (Wait:{waited:.1f}s)"
                 self.pending_order = None
-                return {"action": "cancel_pending", "reason": reason}
+                return {"action": "cancel_pending", "reason": f"PEG_V2_CANCEL (Wait:{waited:.1f}s)"}
+
+            if len(self.price_history) >= 5 and self.price_history[0] > 0:
+                mom_bp = (
+                    (self.price_history[-1] - self.price_history[0]) / self.price_history[0]
+                ) * 10000.0
+                if p_side == "buy" and mom_bp <= -self.params["micro_mom_bp"]:
+                    self.pending_order = None
+                    return {"action": "cancel_pending", "reason": "PEG_V2_CANCEL (mom reverse)"}
+                if p_side == "sell" and mom_bp >= self.params["micro_mom_bp"]:
+                    self.pending_order = None
+                    return {"action": "cancel_pending", "reason": "PEG_V2_CANCEL (mom reverse)"}
 
             return {"action": "wait_fill", "reason": f"PEG_V2_WAITING (@¥{p_price:,.0f})"}
 
-        # -------------------------------------------------------------
-        # 2. 既存ポジションの防護 ＆ BE5 建値防衛 ＆ エグジット
-        # -------------------------------------------------------------
+        # --- POSITION EXITS ---
         if self.position_side:
             elapsed = now - self.entry_time
-            eval_price = best_bid if self.position_side == "buy" else best_ask
+            tip = best_bid if self.position_side == "buy" else best_ask
+            eval_mid = mid_price if mid_price > 0 else tip
+            trail_dd = float(self.params["trail_stop_bp"]) + max(0.0, half_spread_bp)
 
             if self.position_side == "buy":
-                if eval_price > self.peak_price:
-                    self.peak_price = eval_price
-                
-                # MFE (含み益 bp)
+                if tip > self.peak_price:
+                    self.peak_price = tip
                 mfe_bp = ((self.peak_price - self.entry_price) / self.entry_price) * 10000.0
                 self.peak_mfe_bp = max(self.peak_mfe_bp, mfe_bp)
-
-                # BE5 建値防衛アーム発動 (MFE >= 5.0bp)
                 if self.peak_mfe_bp >= self.params["be_arm_bp"]:
                     self.be_armed = True
+                if (
+                    self.peak_mfe_bp >= float(self.params["trail_arm_mfe_bp"])
+                    and elapsed >= float(self.params["min_hold_before_trail_sec"])
+                ):
+                    self.trail_armed = True
 
-                pnl = (eval_price - self.entry_price) * self.params["order_size_btc"]
-                pnl_bp = (pnl / (self.params["order_size_btc"] * self.entry_price)) * 10000.0
-                target_price = self.entry_price * (1.0 + self.params["target_bp"] * 0.0001)
-                trail_stop_price = self.peak_price * (1.0 - self.params["trail_stop_bp"] * 0.0001)
+                pnl = (tip - self.entry_price) * self.params["order_size_btc"]
+                pnl_bp = (
+                    (pnl / (self.params["order_size_btc"] * self.entry_price)) * 10000.0
+                    if self.entry_price
+                    else 0.0
+                )
+                mid_pnl_bp = (
+                    ((eval_mid - self.entry_price) / self.entry_price) * 10000.0
+                    if self.entry_price
+                    else 0.0
+                )
+                peak_mfe_mid = max(self.peak_mfe_bp, mid_pnl_bp)
 
-                # (A) 逆選択退避
-                # Adverse は研究フラグのみ。
-
-                # (B) BE5 建値防衛エグジット (MFE 5bp到達後、利益が0.2bp以下に反落したら即時微小利確撤退)
                 if self.be_armed and pnl_bp <= 0.2:
-                    return {"action": "exit", "reason": f"BE5_STOP (MFE:{self.peak_mfe_bp:.1f}bp後 建値防衛)", "pnl": max(0.0, pnl)}
-
-                # (C) ターゲット到達利確 (15bp)
-                if eval_price >= target_price:
-                    return {"action": "exit", "reason": f"TARGET_15BP_REACHED (+¥{pnl:.1f})", "pnl": pnl}
-
-                # (D) トレーリングストップ (4bp反落)
-                if eval_price <= trail_stop_price:
-                    return {"action": "exit", "reason": f"TRAIL_STOP_HIT (Peak:¥{self.peak_price:,.0f}, PnL:{pnl_bp:+.1f}bp)", "pnl": pnl}
-
-            else:  # sell ポジション
-                if eval_price < self.peak_price:
-                    self.peak_price = eval_price
-
+                    return {
+                        "action": "exit",
+                        "reason": f"BE5_STOP (MFE:{self.peak_mfe_bp:.1f}bp後 建値防衛)",
+                        "pnl": max(0.0, pnl),
+                        "price": tip,
+                    }
+                target_price = self.entry_price * (1.0 + self.params["target_bp"] * 0.0001)
+                if tip >= target_price:
+                    return {
+                        "action": "exit",
+                        "reason": f"TARGET_15BP_REACHED (+¥{pnl:.1f})",
+                        "pnl": pnl,
+                        "price": tip,
+                    }
+                if self.trail_armed and peak_mfe_mid - mid_pnl_bp >= trail_dd:
+                    return {
+                        "action": "exit",
+                        "reason": (
+                            f"TRAIL_STOP_HIT (PeakMFE:{self.peak_mfe_bp:.1f}bp, "
+                            f"PnL:{pnl_bp:+.1f}bp, buf:{trail_dd:.1f}bp)"
+                        ),
+                        "pnl": pnl,
+                        "price": tip,
+                    }
+            else:
+                if tip < self.peak_price or self.peak_price <= 0:
+                    self.peak_price = tip
                 mfe_bp = ((self.entry_price - self.peak_price) / self.entry_price) * 10000.0
                 self.peak_mfe_bp = max(self.peak_mfe_bp, mfe_bp)
-
                 if self.peak_mfe_bp >= self.params["be_arm_bp"]:
                     self.be_armed = True
+                if (
+                    self.peak_mfe_bp >= float(self.params["trail_arm_mfe_bp"])
+                    and elapsed >= float(self.params["min_hold_before_trail_sec"])
+                ):
+                    self.trail_armed = True
 
-                pnl = (self.entry_price - eval_price) * self.params["order_size_btc"]
-                pnl_bp = (pnl / (self.params["order_size_btc"] * self.entry_price)) * 10000.0
-                target_price = self.entry_price * (1.0 - self.params["target_bp"] * 0.0001)
-                trail_stop_price = self.peak_price * (1.0 + self.params["trail_stop_bp"] * 0.0001)
-
-                # Adverse は研究フラグのみ。
+                pnl = (self.entry_price - tip) * self.params["order_size_btc"]
+                pnl_bp = (
+                    (pnl / (self.params["order_size_btc"] * self.entry_price)) * 10000.0
+                    if self.entry_price
+                    else 0.0
+                )
+                mid_pnl_bp = (
+                    ((self.entry_price - eval_mid) / self.entry_price) * 10000.0
+                    if self.entry_price
+                    else 0.0
+                )
+                peak_mfe_mid = max(self.peak_mfe_bp, mid_pnl_bp)
 
                 if self.be_armed and pnl_bp <= 0.2:
-                    return {"action": "exit", "reason": f"BE5_STOP (MFE:{self.peak_mfe_bp:.1f}bp後 建値防衛)", "pnl": max(0.0, pnl)}
+                    return {
+                        "action": "exit",
+                        "reason": f"BE5_STOP (MFE:{self.peak_mfe_bp:.1f}bp後 建値防衛)",
+                        "pnl": max(0.0, pnl),
+                        "price": tip,
+                    }
+                target_price = self.entry_price * (1.0 - self.params["target_bp"] * 0.0001)
+                if tip <= target_price:
+                    return {
+                        "action": "exit",
+                        "reason": f"TARGET_15BP_REACHED (+¥{pnl:.1f})",
+                        "pnl": pnl,
+                        "price": tip,
+                    }
+                if self.trail_armed and peak_mfe_mid - mid_pnl_bp >= trail_dd:
+                    return {
+                        "action": "exit",
+                        "reason": (
+                            f"TRAIL_STOP_HIT (PeakMFE:{self.peak_mfe_bp:.1f}bp, "
+                            f"PnL:{pnl_bp:+.1f}bp, buf:{trail_dd:.1f}bp)"
+                        ),
+                        "pnl": pnl,
+                        "price": tip,
+                    }
 
-                if eval_price <= target_price:
-                    return {"action": "exit", "reason": f"TARGET_15BP_REACHED (+¥{pnl:.1f})", "pnl": pnl}
-
-                if eval_price >= trail_stop_price:
-                    return {"action": "exit", "reason": f"TRAIL_STOP_HIT (Peak:¥{self.peak_price:,.0f}, PnL:{pnl_bp:+.1f}bp)", "pnl": pnl}
-
-            # タイムアウト
             if elapsed >= self.params["max_hold_sec"]:
-                return {"action": "exit", "reason": f"TIMEOUT ({elapsed:.0f}s経過)", "pnl": pnl}
-
+                return {
+                    "action": "exit",
+                    "reason": f"TIMEOUT ({elapsed:.0f}s経過)",
+                    "pnl": pnl,
+                    "price": tip,
+                }
             return {"action": "hold", "reason": "POSITION_RUNNING", "current_pnl": pnl}
 
-        # -------------------------------------------------------------
-        # 3. 新規エントリー判定 (2bpモメンタム ➔ PEG_v2 指値発注)
-        # -------------------------------------------------------------
+        # --- NEW PEG ARM ---
         if len(self.price_history) < 5 or len(self.flow_history) < 3:
             return {"action": "hold", "reason": "WARMING_UP"}
 
         start_p = self.price_history[0]
         curr_p = self.price_history[-1]
+        if start_p <= 0:
+            return {"action": "hold", "reason": "WARMING_UP"}
         mom_bp = ((curr_p - start_p) / start_p) * 10000.0
-
         flow_sum = sum(self.flow_history)
-        noise_ratio = len([f for f in self.flow_history if (f < 0 if mom_bp > 0 else f > 0)]) / len(self.flow_history)
+        noise_ratio = len(
+            [f for f in self.flow_history if (f < 0 if mom_bp > 0 else f > 0)]
+        ) / len(self.flow_history)
 
-        # Adverse は研究フラグのみ。
-
-        # 買いシグナル検知 ➔ PEG_v2 指値算出
-        if mom_bp >= self.params["micro_mom_bp"] and flow_sum >= 2.0 and noise_ratio <= self.params["reverse_noise_max"]:
+        if (
+            mom_bp >= self.params["micro_mom_bp"]
+            and flow_sum >= 2.0
+            and noise_ratio <= self.params["reverse_noise_max"]
+        ):
             peg_px = self.calculate_peg_v2_price(
                 side="buy",
                 best_bid=best_bid,
@@ -284,16 +375,23 @@ class TF2BP_PEG_v2_Strategy:
                 "side": "buy",
                 "price": peg_px,
                 "created_at": now,
+                "last_reprice_at": now,
             }
             return {
                 "action": "post_peg",
                 "side": "buy",
                 "price": peg_px,
-                "reason": f"PEG_V2_BUY_ARM (Mom:{mom_bp:+.1f}bp, PEG_Px:¥{peg_px:,.0f})",
+                "reason": (
+                    f"PEG_V2_BUY_ARM (Mom:{mom_bp:+.1f}bp, PEG_Px:¥{peg_px:,.0f}, "
+                    f"{self.peg_version})"
+                ),
             }
 
-        # 売りシグナル検知 ➔ PEG_v2 指値算出
-        elif mom_bp <= -self.params["micro_mom_bp"] and flow_sum <= -2.0 and noise_ratio <= self.params["reverse_noise_max"]:
+        if (
+            mom_bp <= -self.params["micro_mom_bp"]
+            and flow_sum <= -2.0
+            and noise_ratio <= self.params["reverse_noise_max"]
+        ):
             peg_px = self.calculate_peg_v2_price(
                 side="sell",
                 best_bid=best_bid,
@@ -307,18 +405,21 @@ class TF2BP_PEG_v2_Strategy:
                 "side": "sell",
                 "price": peg_px,
                 "created_at": now,
+                "last_reprice_at": now,
             }
             return {
                 "action": "post_peg",
                 "side": "sell",
                 "price": peg_px,
-                "reason": f"PEG_V2_SELL_ARM (Mom:{mom_bp:+.1f}bp, PEG_Px:¥{peg_px:,.0f})",
+                "reason": (
+                    f"PEG_V2_SELL_ARM (Mom:{mom_bp:+.1f}bp, PEG_Px:¥{peg_px:,.0f}, "
+                    f"{self.peg_version})"
+                ),
             }
 
         return {"action": "hold", "reason": "WAIT_MOMENTUM_2BP"}
 
     def record_trade(self, side: str, fill_price: float, pnl: float, mid_price: float = 0.0):
-        """約定および損益の記録 (bp換算対応)"""
         now = time.time()
         eval_price = mid_price if mid_price > 0 else fill_price
         order_val_jpy = self.params["order_size_btc"] * eval_price if eval_price > 0 else 12500.0
@@ -330,48 +431,51 @@ class TF2BP_PEG_v2_Strategy:
                 self.win_trades += 1
             self.total_pnl += pnl
             self.total_pnl_bp += pnl_bp
+            hold_sec = round(now - self.entry_time, 3) if self.entry_time > 0 else None
             self.trades_history.append({
                 "ts": now,
+                "entry_ts": self.entry_time if self.entry_time > 0 else None,
+                "hold_sec": hold_sec,
                 "side": self.position_side,
                 "exit_side": side,
                 "fill_price": fill_price,
                 "pnl_jpy": round(pnl, 1),
                 "pnl_bp": round(pnl_bp, 2),
                 "is_win": (pnl > 0),
+                "peg_version": self.peg_version,
             })
             self.position_side = None
             self.entry_price = 0.0
+            self.entry_time = 0.0
             self.peak_price = 0.0
             self.peak_mfe_bp = 0.0
             self.be_armed = False
-
+            self.trail_armed = False
         elif side in ("buy", "sell"):
             self.position_side = side
             self.entry_price = fill_price
             self.peak_price = fill_price
             self.peak_mfe_bp = 0.0
             self.be_armed = False
+            self.trail_armed = False
             self.entry_time = now
 
     def get_window_stats(self, hours: float = 1.0) -> Dict[str, Any]:
-        """指定ウィンドウ (1h または 24h) の成績を集計"""
         now = time.time()
         cutoff = now - (hours * 3600.0)
         recent = [t for t in self.trades_history if t["ts"] >= cutoff]
-
         total_t = len(recent)
         win_t = sum(1 for t in recent if t["is_win"])
-        loss_t = total_t - win_t
         pnl_jpy = sum(t["pnl_jpy"] for t in recent)
         pnl_bp = sum(t["pnl_bp"] for t in recent)
         wr = (win_t / total_t * 100.0) if total_t > 0 else 0.0
-
         return {
             "window_hours": hours,
             "total_trades": total_t,
             "win_trades": win_t,
-            "loss_trades": loss_t,
+            "loss_trades": total_t - win_t,
             "win_rate_pct": round(wr, 1),
             "pnl_jpy": round(pnl_jpy, 1),
             "pnl_bp": round(pnl_bp, 2),
+            "peg_version": self.peg_version,
         }

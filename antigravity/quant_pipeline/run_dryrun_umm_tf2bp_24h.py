@@ -36,7 +36,7 @@ from .mm_quote_store import MMQuoteStore
 from .trend_research_store import TrendResearchStore
 from ..strategies.umm_strategy import UMMStrategy
 from ..strategies.tf2bp_strategy import TF2BPStrategy
-from ..strategies.tf2bp_peg_v2_strategy import TF2BP_PEG_v2_Strategy
+from ..strategies.tf2bp_peg_v3_strategy import TF2BP_PEG_v3_Strategy
 
 JST = timezone(timedelta(hours=9))
 BASE_DIR = "/home/azureuser/antigravity"
@@ -70,7 +70,8 @@ class DryRunObservation24h:
         # 戦略インスタンス初期化 (固定パラメータ)
         self.umm = UMMStrategy(self.config_data.get("umm_config", {}))
         self.tf2bp = TF2BPStrategy(self.config_data.get("tf2bp_config", {}))
-        self.tf2bp_v2 = TF2BP_PEG_v2_Strategy(self.config_data.get("tf2bp_config", {}))
+        # CSR-527: Baseline tf2bp_config を丸ごと渡さない（正本汚染防止）
+        self.tf2bp_v3 = TF2BP_PEG_v3_Strategy(self.config_data.get("tf2bp_peg_v3_config") or {})
 
         # インフラ
         self.bus = EventBus()
@@ -108,7 +109,7 @@ class DryRunObservation24h:
         # 仮想口座
         self.umm_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
         self.tf2bp_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
-        self.tf2bp_v2_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        self.tf2bp_v3_account = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}
         self.umm_bid = None
         self.umm_ask = None
 
@@ -225,8 +226,8 @@ class DryRunObservation24h:
                     )
                     self._process_strategy_action("TF2BP", self.tf2bp, tf2bp_res, snap)
 
-                    # 4. TF2BP_PEG_v2 戦略評価 (OBSERVATION: Model 3+1 検証レーン)
-                    tf2bp_v2_res = self.tf2bp_v2.on_tick(
+                    # 4. TF2BP_PEG_v3 戦略評価 (OBSERVATION: AgingGuard+BE3+FakeLiq · CSR-522)
+                    tf2bp_v3_res = self.tf2bp_v3.on_tick(
                         mid_price=snap.mid_price,
                         best_bid=snap.best_bid,
                         best_ask=snap.best_ask,
@@ -239,8 +240,11 @@ class DryRunObservation24h:
                         refill_rate=snap.refill_rate,
                         adverse_score=adv_score,
                         avoidance_on=adv_on,
+                        last_sell_price=float(getattr(snap, "last_sell_price", 0.0) or 0.0),
+                        last_buy_price=float(getattr(snap, "last_buy_price", 0.0) or 0.0),
+                        imbalance=float(getattr(snap, "imbalance", 0.0) or 0.0),
                     )
-                    self._process_strategy_action("TF2BP_PEG_v2", self.tf2bp_v2, tf2bp_v2_res, snap)
+                    self._process_strategy_action("TF2BP_PEG_v3", self.tf2bp_v3, tf2bp_v3_res, snap)
 
                     # 5. コンソール表示
                     elapsed_h = int(elapsed_sec // 3600)
@@ -270,12 +274,12 @@ class DryRunObservation24h:
 
                     umm_pos_str = _pos_str(self.umm, self.umm.total_pnl_bp)
                     tf_pos_str = _pos_str(self.tf2bp, self.tf2bp.total_pnl_bp)
-                    tf_v2_pos_str = _pos_str(self.tf2bp_v2, self.tf2bp_v2.total_pnl_bp)
+                    tf_v2_pos_str = _pos_str(self.tf2bp_v3, self.tf2bp_v3.total_pnl_bp)
 
                     if now - self._last_status_print >= 1.0:
                         print(
                             f" [{time_str}] | {snap.mid_price:12,.0f} | ¥{spread_val:5,.0f} | {adv_str:7} | "
-                            f"{umm_pos_str:15} | {tf_pos_str:15} | PEG_v2:{tf_v2_pos_str}",
+                            f"{umm_pos_str:15} | {tf_pos_str:15} | PEG_v3:{tf_v2_pos_str}",
                             flush=True
                         )
                         self._persist_state(snap, elapsed_sec)
@@ -306,8 +310,8 @@ class DryRunObservation24h:
             acc = self.umm_account
         elif name == "TF2BP":
             acc = self.tf2bp_account
-        elif name == "TF2BP_PEG_v2":
-            acc = self.tf2bp_v2_account
+        elif name == "TF2BP_PEG_v3":
+            acc = self.tf2bp_v3_account
         else:
             acc = self.tf2bp_account
 
@@ -417,14 +421,14 @@ class DryRunObservation24h:
         elif action == "post_peg":
             p_side = res.get("side", "")
             p_price = res.get("price", 0.0)
-            log_line = f"[{name}] 📝 PEG_v2 指値提示: {p_side.upper()} @ ¥{p_price:,.0f} ({res.get('reason')})"
+            log_line = f"[{name}] 📝 PEG_v3 指値提示: {p_side.upper()} @ ¥{p_price:,.0f} ({res.get('reason')})"
             self._log_to_file(log_line)
 
         elif action == "fill":
             fill_price = res.get("fill_price", snap.mid_price)
             p_side = res.get("side", strat.position_side or "UNKNOWN")
             acc["trades"] += 1
-            log_line = f"[{name}] 📥 PEG_v2 指値約定: {p_side.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
+            log_line = f"[{name}] 📥 PEG_v3 指値約定: {p_side.upper()} @ ¥{fill_price:,.0f} ({res.get('reason')})"
             self._log_to_file(log_line)
             # S1. Adverse Excursion (AE) 追跡開始
             theory_spread_bp = ((snap.best_ask - snap.best_bid) / snap.mid_price) * 10000.0 if snap.mid_price > 0 else 2.0
@@ -442,7 +446,7 @@ class DryRunObservation24h:
             )
 
         elif action == "cancel_pending":
-            log_line = f"[{name}] 🚫 PEG_v2 待機取消: ({res.get('reason')})"
+            log_line = f"[{name}] 🚫 PEG_v3 待機取消: ({res.get('reason')})"
             self._log_to_file(log_line)
 
         elif action in ("exit", "cancel"):
@@ -465,7 +469,7 @@ class DryRunObservation24h:
                 log_line = f"[{name}] 📤 エグジット/キャンセル ({action}): PnL: {pnl:+.1f}円 ({pnl_bp:+.2f}bp) @ ¥{fill_price:,.0f} ({res.get('reason')})"
                 self._log_to_file(log_line)
 
-                # S3. Capture Rate 分析 ＆ AE 終了 (UMM, TF2BP, PEG_v2)
+                # S3. Capture Rate 分析 ＆ AE 終了 (UMM, TF2BP, PEG_v3)
                 trade_id = f"{name}_{acc['trades']}"
                 theory_spread_bp = ((snap.best_ask - snap.best_bid) / snap.mid_price) * 10000.0 if snap.mid_price > 0 else 2.0
                 self.adverse_agent.on_close(
@@ -523,7 +527,7 @@ class DryRunObservation24h:
         mapping = {
             "umm": self.umm,
             "tf2bp": self.tf2bp,
-            "tf2bp_peg_v2": self.tf2bp_v2,
+            "tf2bp_peg_v3": self.tf2bp_v3,
         }
         for key, strat in mapping.items():
             block = state.get(key) or {}
@@ -588,8 +592,8 @@ class DryRunObservation24h:
             umm_24h = self.umm.get_window_stats(24.0)
             tf_1h = self.tf2bp.get_window_stats(1.0)
             tf_24h = self.tf2bp.get_window_stats(24.0)
-            tf_v2_1h = self.tf2bp_v2.get_window_stats(1.0)
-            tf_v2_24h = self.tf2bp_v2.get_window_stats(24.0)
+            tf_v2_1h = self.tf2bp_v3.get_window_stats(1.0)
+            tf_v2_24h = self.tf2bp_v3.get_window_stats(24.0)
 
             state = {
                 "timestamp": int(time.time() * 1000),
@@ -633,19 +637,19 @@ class DryRunObservation24h:
                     "user_directive": self.tf2bp.last_user_directive,
                     "trades": self._ledger_rows(self.tf2bp),
                 },
-                "tf2bp_peg_v2": {
-                    "position": self.tf2bp_v2.position_side or ("PENDING" if self.tf2bp_v2.pending_order else "FLAT"),
-                    "pending_order": self.tf2bp_v2.pending_order,
-                    "total_trades": self.tf2bp_v2.total_trades,
-                    "win_trades": self.tf2bp_v2.win_trades,
-                    "total_pnl": round(self.tf2bp_v2.total_pnl, 1),
-                    "total_pnl_bp": round(self.tf2bp_v2.total_pnl_bp, 2),
+                "tf2bp_peg_v3": {
+                    "position": self.tf2bp_v3.position_side or ("PENDING" if self.tf2bp_v3.pending_order else "FLAT"),
+                    "pending_order": self.tf2bp_v3.pending_order,
+                    "total_trades": self.tf2bp_v3.total_trades,
+                    "win_trades": self.tf2bp_v3.win_trades,
+                    "total_pnl": round(self.tf2bp_v3.total_pnl, 1),
+                    "total_pnl_bp": round(self.tf2bp_v3.total_pnl_bp, 2),
                     "stats_1h": tf_v2_1h,
                     "stats_24h": tf_v2_24h,
-                    "params": self.tf2bp_v2.params,
-                    "frozen": self.tf2bp_v2.frozen_mode,
-                    "user_directive": self.tf2bp_v2.last_user_directive,
-                    "trades": self._ledger_rows(self.tf2bp_v2),
+                    "params": self.tf2bp_v3.params,
+                    "frozen": self.tf2bp_v3.frozen_mode,
+                    "user_directive": self.tf2bp_v3.last_user_directive,
+                    "trades": self._ledger_rows(self.tf2bp_v3),
                 },
             }
             tmp = f"{STATE_PATH}.tmp"
@@ -665,13 +669,11 @@ class DryRunObservation24h:
 
     def _send_start_discord_notification(self):
         embed = {
-            "title": "🚀 【UMM ＆ TF2BP ＋ TF2BP_PEG_v2 24時間 連続Dry-run 観察開始】",
+            "title": "🚀 【UMM ＆ TF2BP ＋ TF2BP_PEG_v3 24時間 連続Dry-run 観察開始】",
             "description": (
-                f"GIT正本（CSR-504 / CSR-499）から UMM および TF2BP を導入し、\n"
-                f"さらにバックテスト最高改善 (+54bp) の **PEG_v2 (Model 3+1)** を搭載した\n"
-                f"**`TF2BP_PEG_v2` を OBSERVATION (並行観測) レーン** として稼働開始しました。\n\n"
-                f"🔒 **パラメータ運用方針**: **自動調整禁止 (FROZEN / OBSERVATION)**\n"
-                f"（DuckDB / Evolver による自動変更は遮断、完全手動・固定パラメータ）"
+                f"CSR-499 Baseline **維持** · PEG_v2 は **昇格却下** · "
+                f"**`TF2BP_PEG_v3` OBSERVATION** を差し替え投入（CSR-522）。\n\n"
+                f"🔒 FROZEN / OBSERVATION · WIRE=NO · ENFORCE=0 · Economic PASSなし"
             ),
             "color": 0x3498DB,
             "fields": [
@@ -681,17 +683,18 @@ class DryRunObservation24h:
                     "inline": False,
                 },
                 {
-                    "name": "② TF2BP (2bp Micro Trend - CSR-499 Baseline: FROZEN)",
-                    "value": f"• 10秒足 / 買いのみ / 入口 {self.tf2bp.params['thr']} / P2 {self.tf2bp.params['p2_min']} / 出口 {self.tf2bp.params['exit']}\n• 紙上成行は中値 | ロット: `{self.tf2bp.params['order_size_btc']} BTC`",
+                    "name": "② TF2BP Baseline (CSR-499 · FROZEN · 非改変)",
+                    "value": f"• validated 24h +133.80bp 帯を維持 · 手を加えない\n• 入口 thr={self.tf2bp.params.get('thr')} / ロット `{self.tf2bp.params['order_size_btc']} BTC`",
                     "inline": False,
                 },
                 {
-                    "name": "🔬 ③ TF2BP_PEG_v2 (Model 3+1 観測レーン: OBSERVATION)",
+                    "name": "🔬 ③ TF2BP_PEG_v3 (OBSERVATION · CSR-522)",
                     "value": (
-                        f"• ロジック: **Model 3 (EffectiveReach) + Model 1 (DynamicRatio)**\n"
-                        f"• 指値比率: 動的 `0.910 〜 0.985` (板厚連動 ＋ テイカー攻撃性ブースト)\n"
-                        f"• エグジット: **BE5 建値防衛** (MFE $\\ge$ 5bp到達で利益ゼロ反落時即座に微小利確撤退)\n"
-                        f"• 運用方針: `🔒 OBSERVATION (Baseline と同一板並行 A/B テスト)`"
+                        f"• **S** AgingGuard (age≥3s ∧ pnl<0.5bp)\n"
+                        f"• **S** BE3 (arm +3.0bp · trigger +0.2bp)\n"
+                        f"• **A** FakeLiquidityFilter (imb>0.40 ∧ cxl>0.30 ∧ taker=0)\n"
+                        f"• **A** AdaptiveRatio noise 0.915–0.975 / trend 0.985–0.995\n"
+                        f"• EXEC_AUDIT → `data/mm_research/exec_audit_peg_v3.jsonl`"
                     ),
                     "inline": False,
                 },
@@ -709,8 +712,8 @@ class DryRunObservation24h:
         umm_24h = self.umm.get_window_stats(24.0)
         tf_1h = self.tf2bp.get_window_stats(1.0)
         tf_24h = self.tf2bp.get_window_stats(24.0)
-        v2_1h = self.tf2bp_v2.get_window_stats(1.0)
-        v2_24h = self.tf2bp_v2.get_window_stats(24.0)
+        v2_1h = self.tf2bp_v3.get_window_stats(1.0)
+        v2_24h = self.tf2bp_v3.get_window_stats(24.0)
 
         diff_1h_bp = v2_1h["pnl_bp"] - tf_1h["pnl_bp"]
         diff_24h_bp = v2_24h["pnl_bp"] - tf_24h["pnl_bp"]
@@ -743,12 +746,14 @@ class DryRunObservation24h:
                     "inline": False,
                 },
                 {
-                    "name": "🔬 ③ TF2BP_PEG_v2 (Model 3+1 観測レーン)",
+                    "name": "🔬 ③ TF2BP_PEG_v3 (AgingGuard+BE3+FakeLiq · CSR-522)",
                     "value": (
                         f"• 1h: **`{v2_1h['pnl_bp']:+.2f} bp`** ({v2_1h['total_trades']}戦/{v2_1h['win_rate_pct']:.0f}% / ¥{v2_1h['pnl_jpy']:+,.0f})\n"
                         f"• 24h: **`{v2_24h['pnl_bp']:+.2f} bp`** ({v2_24h['total_trades']}戦/{v2_24h['win_rate_pct']:.0f}% / ¥{v2_24h['pnl_jpy']:+,.0f})\n"
-                        f"• 建玉: `{self.tf2bp_v2.position_side or ('PENDING' if self.tf2bp_v2.pending_order else 'FLAT')}`\n"
-                        f"• **Baseline比較差分**: 1h: **`{diff_1h_bp:+.2f} bp`** | 24h: **`{diff_24h_bp:+.2f} bp`**"
+                        f"• 建玉: `{self.tf2bp_v3.position_side or ('PENDING' if self.tf2bp_v3.pending_order else 'FLAT')}`\n"
+                        f"• AgingExits=`{v2_24h.get('aging_exits', 0)}` · BEExits=`{v2_24h.get('be_exits', 0)}` · FakeSkip=`{v2_24h.get('fake_liq_skips', 0)}`\n"
+                        f"• **Baseline比較差分**: 1h: **`{diff_1h_bp:+.2f} bp`** | 24h: **`{diff_24h_bp:+.2f} bp`**\n"
+                        f"• version=`{getattr(self.tf2bp_v3, 'peg_version', '?')}`"
                     ),
                     "inline": False,
                 },

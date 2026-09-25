@@ -294,6 +294,51 @@ GIT正本（`FIX.me` 2026年9月11日〜14日停止直前確定記録 CSR-504 / 
 
 ## 13. TF2BP_PEG_v2 (Model 3+1) OBSERVATION 並行観測稼働 ＆ 毎時検証通知の配備 (2026-09-19 21:10 JST)
 
+
+### CSR-521-PEGFIX（2026-09-24）— maker-safe で PEG を最大限活用
+**原因:** 旧実装は ratio≈0.91–0.985 で対向寄りに刺さり、fill 条件がクロス許容、trail 4bp が tip 即死。
+**改修（OBSERVATION · ENFORCE=0）:**
+1. Model 1+3 維持だが improve を **自側 tip から 12–48%**（対向 1tick 手前 clamp）
+2. 真 maker fill（`last_sell/ask` タッチのみ · クロス禁止）
+3. trail は MFE≥4bp かつ hold≥8s で武装 · mid 評価 + half-spread バッファ
+4. PEG 2s 再価格・mom 逆転キャンセル · wait 45s
+**版:** `peg_v2_maker_safe_v1` · 正本=`tf2bp_peg_v2_strategy.py`
+
+### CSR-522 RESULT — PEG_v2 却下 · PEG_v3 OBSERVE 投入（2026-09-24 · ユーザー判定ロック）
+
+```json
+{
+  "baseline": {"status": "validated", "24h_pnl": "+133.80bp"},
+  "peg_v2": {
+    "status": "structurally_broken",
+    "promotion": "rejected_for_promotion",
+    "root_causes": ["adverse_fill", "no_aging_guard", "late_BE_arm"]
+  },
+  "execution_quality": "improved",
+  "signal_capture": "degraded",
+  "new_priority": ["AgingGuard", "BE3", "FakeLiquidityFilter"],
+  "confidence": 0.94
+}
+```
+
+**一言:** Execution Alpha はあるが Signal Alpha を破壊。PEG_v2 は Fake Liquidity（imb偏重∧cancel高∧taker不在）で奥待ち→板崩壊→逆選択約定。Baseline は Spread≤1.2bp＋実需瞬間のみ参加で見せ板を無視できる。
+
+**優先（再評価後）**
+| 級 | 項目 | 仕様 |
+|----|------|------|
+| **S** | AgingGuard | age≥3s ∧ unrealized_pnl_bp<0.5 → 即脱出 |
+| **S** | BE3 | arm +3.0bp · trigger +0.2bp |
+| **A** | FakeLiquidityFilter | imb>0.40 ∧ cancel>0.30 ∧ taker_total==0 → skip_entry |
+| **A** | Adaptive DynamicRatio | noise 0.915–0.975 / trend 0.985–0.995 |
+
+**レーン**
+- Baseline TF2BP (CSR-499): **非改変・維持**
+- 観測レーン: `TF2BP_PEG_v2` → **`TF2BP_PEG_v3`** 差し替え
+- 監査: `data/mm_research/exec_audit_peg_v3.jsonl`（FILLED / MISSED_TIMEOUT / SKIP_FAKE_LIQUIDITY / BE / AGING / 反事実10s/30s）
+- ENFORCE=0 · WIRE=NO · Economic PASSなし
+
+正本: `tf2bp_peg_v3_strategy.py` · `run_dryrun_umm_tf2bp_24h.py` · CSR-522
+
 ユーザーからの**「効果を検証したいのでOBSERVATIONで、TF2BPにMODEL３＋１をのせたPEG＿V2を稼働させて、１時間毎に検証結果を通知して」**という指示に対応。
 
 ### 1. バックテスト（BT）全6モデル実板検証の結果
@@ -983,30 +1028,315 @@ IRS は **OBSERVE固定 · ENFORCE=0**。今はアルファ生成ではなく損
 **第一候補は新シグナル追加ではない。**  
 **「30秒超保有状態」をどう扱うかという在庫制御問題**である。
 
+**順序ロック（崩さない）:**  
+`制御案OBSERVE実装 → Δbp観察 → Economic PASS → 初めてENFORCE検討`
+
 | 優先 | 内容 | 状態 |
 |------|------|------|
-| **P0** | hold>30s の在庫制御（size縮小 / 片側撤収 / max_hold短縮 / would_flatten） | **OBSERVE設計 · ENFORCE=0** |
-| P1 | IRS（hold一次 · csnt/fake_bo二次）を制御器入力に配線 | OBSERVE |
+| **P0** | hold>30s の在庫制御観測（Virtual Exit / ladder / IPS） | **OBSERVE再現 COMPLETE · 経済検証 IN_PROGRESS · ENFORCE=0** |
+| P1 | IRS v0.1（hold一次 · 二次inactive） | OBSERVE |
 | 後回し | 新エントリーシグナル · 方向予測器 · ピン変更 | しない |
 
-根拠: PnL×Hold（0–30s黒字 / 30s+赤字）∧ Conditional Hazard（P(HS) 14%→42%→52%）。  
-WIRE=NO · 経済PASS不出 · LIVE未触。
+### CSR-521 RESULT（ユーザー文言ロック · 2026-09-24）
 
-正本: `data/mm_research/daily/2026-09-23_umm_hard_stop_hazard.json` · `umm_hard_stop_hazard.py`
+```
+CSR-521 RESULT
+
+因果確認:     COMPLETE
+OBSERVE再現:  COMPLETE
+経済検証:     IN_PROGRESS
+制御施行:     NOT_APPROVED
+```
+
+**研究ステータス（一言・正本）:**  
+「30秒超保持 → HARD_STOPテール」が損失機構であることは確認済みであり、Virtual Exit@30s は session・半窓・四分位・短時間窓のすべてで Actual 比改善を再現している。ただしこれは損失削減仮説の再現確認であり、Economic PASS や ENFORCE 判断ではない。
+
+| ゲート | 状態 | 根拠 |
+|--------|------|------|
+| 因果確認 | **COMPLETE** | PnL×Hold · Conditional Hazard · 損失機構ロック |
+| OBSERVE再現 | **COMPLETE** | Virtual@30 Δ session=+489 · 半窓/Q1–Q4/1–12h すべて正 · `2026-09-24_virtual_exit30_reproduce.json` |
+| 経済検証 | **IN_PROGRESS** | Would-Δ 継続観測 · **表示監査完了(2026-09-25)** · 経済ゲート未決 |
+| 制御施行 | **NOT_APPROVED** | ENFORCE=0 · WIRE=NO · LIVE未触 |
+
+### CSR-521 Δ 監査（2026-09-25 · S0完了）
+**現象**: Actual(+29.73) と Virtual@30(+0.40) を引くと −29.33 なのに表示Δ=+18.01。
+
+**根因**: Δ算出（eligible 同一集合）は正しいが、表示が **Actual_full** と **Virtual_eligible_only** を並べていた。
+恒等式: `V_full = A_(hold≤30)+V_(hold>30)` · `Δ = V_full−A_full = Σ(V−A|eligible)`。
+
+**修正**: `virtual_30_full_ledger_bp` · `delta_identity_ok` · L2+L3のみΔ · Discordに「eligible足し引き禁止」。
+
+**ユーザーPDCA採択ロック**:
+`TF2BP=FROZEN` · `UMM=Inventory Control継続（一律30sではなく悪い滞留選別）` · `PEG_v3=OBSERVE/昇格不可` · `CSR-521=OBSERVE維持/ENFORCE禁止` · `Arena=個体選別継続`
+
+### CSR-521-CTRL v0（OBSERVE版 · 2026-09-23）
+
+**目的:** HARD_STOP流入を減らす観測 · **目的ではない:** 方向予測 / アルファ生成
+
+| CTRL | 内容 | 実発注 |
+|------|------|--------|
+| **1** MaxHold Risk Ladder | L0–L4 · count/PnL/HS/exit_reason | なし（計算のみ） |
+| **2** Would-Unwind | Virtual Exit @30/60/120 vs Actual | なし · **最優先=@30s** |
+| **3** IPS | `f(hold)` のみ（L0=0 … L4=1） | なし |
+| **4** Virtual Size Decay | 30→75% / 60→50% / 120→25% | なし |
+| **5** One-Side Retreat | long/short 分離 HS・hold | なし |
+
+**IRS v0.1:** Primary=`hold` · Secondary inactive=`csnt,fake_bo,spread,tip_thin,imbalance`  
+**禁止:** 新アルファ · 価格予測利用 · ENFORCE · LIVE
+
+#### 初回〜再現観測（記述 · PASSではない）
+Hold Ladder: L0 Σ=+49 / HS=12% · **L2 Σ=−115 / HS=33%** · L4 Σ=−89 / HS=52%（L2以上急悪化を再現）  
+Would@30s 再現（2026-09-24）: n=386 · Actual −440 vs Virtual +49 · **session Δ=+489** · 半窓 +270/+219 · Q1–Q4 全正 · virt優位≈61%  
+One-side: long Σ≈−185 · short Σ≈−35（long側が重い）
+
+毎時: `hourly_dryrun_reporter` → Discord CTRL OBSERVE（ENFORCE=0）
+
+正本: `umm_ctrl_observe.py` · `data/mm_research/daily/*_umm_ctrl_observe.json` · `*_virtual_exit30_reproduce.json` · CSR-521 RESULT
 
 ### InventoryRiskScore（OBSERVE · 在庫制御器）
 
+**IRS v0.1（現行）**
+
 ```
-InventoryRiskScore = f(hold_time, csnt, fake_breakout, spread, tip_thin, imbalance)
+Primary   : hold
+Secondary : csnt, fake_bo, spread, tip_thin, imbalance  ← inactive
+IPS       : L0=0 · L1=0.25 · L2=0.50 · L3=0.75 · L4=1.0
 ```
 
-- **価格予測器にしない** · UMM の size/pause/max_hold 制御へ接続が本命
-- Hazard 根拠で一次確定: **hold** · csnt/fake_bo は二次候補（跳ね未確認）
-- P0 `spread×inventory_proxy` をここに吸収
-- IRS Q5: Σ≈**−148bp** · mean hold≈118s（記述のみ）
-- **ENFORCE=0** · ピン未変更
+- **価格予測器にしない** · 在庫制御観測のみ
+- **ENFORCE=0** · ピン未変更 · Economic PASS不出
 
 ### しないこと
-InventorySkew断罪 · 経済PASS/FAIL · LIVE/ピン変更 · フィルタ自動ON
+InventorySkew断罪 · 経済PASS/FAIL · LIVE/ピン変更 · フィルタ自動ON · 新アルファ
 
-正本: `umm_pnl_x_hold.py` · `umm_hard_stop_hazard.py` · CSR-521-GO / CSR-521-HAZARD
+正本: `umm_ctrl_observe.py` · `umm_pnl_x_hold.py` · `umm_hard_stop_hazard.py` · CSR-521-CTRL v0
+
+## 32. UMM 1hプラス帯 · 連続クォート息継ぎ観測（CSR-523 · 2026-09-24）
+
+ユーザー見解（支持・ロック）: ノイズ/レンジで MM エッジが復帰。連続クォート＋在庫スキュー＋厳格 maker 判定が噛み合った。Economic PASS ではない。
+
+### 観測スナップ（記述 · 2026-09-24 22:23 JST）
+| レーン | 1h | 24h窓 | 備考 |
+|--------|-----|-------|------|
+| **UMM** | n=177 · **+10.6bp** · WR59% | n=2034 · **≈−37〜−42bp** | continuous_quote=true · 在庫スクエア往復 |
+| **TF2BP Baseline** | n=7 · +21.7bp | n=190 · **+131bp** | CSR-499 FROZEN · 非改変 |
+| PEG_v3 | n=1 · −1.5bp | 観測開始直後 | CSR-522 OBSERVE |
+
+### 時系列（UMM 時計時・ledger）
+- **14時 +34.1bp** (n=140 WR64%) — ユーザー指摘の転換点と一致
+- 15–16時 プラス継続 · **17–18時 左テール**（−31 / **−135bp**）← 「毎時プラス」ではない
+- 19時以降 修復（20 +16 · 21 +6 · 22途中 +13）
+- 24h窓は深い赤字から **-40bp 台**までリバウンド（セッション傷は残る）
+
+### なぜプラスが出るか（機構・OBSERVE）
+1. **pressure_none 支配 · taker 薄い** → 両面すれ違いが効く
+2. **連続クォート + CSR-504 スキュー** → 高回転でも在庫を即座にスクエアへ
+3. **厳格 maker fill**（売≤買指 / 買≥売指）→ 甘い即約定ではない実力値
+
+### 役割分担（ポートフォリオ）
+- **レンジ/ノイズ → UMM** がスプレッド回収
+- **ブレイク/急変 → TF2BP Baseline** が抜く（今夜 +131bp 帯）
+- 理想の凹凸補完が **実証されつつある**（PASS宣言ではない）
+
+### 警戒（固定）
+- 急変・板崩壊時の片肺逆選択は未解消（CSR-521 hold>30s / FakeLiquidity と接続）
+- 17–18時テール再発を監視
+- **ENFORCE=0 · WIRE=NO · 経済PASS不出 · Baseline/UMMピン変更禁止**
+
+正本: `dryrun_umm_tf2bp_state.json` · CSR-523 · CSR-514 連続クォート
+
+## 33. 優先ロック CSR-524（2026-09-25）— UMM=CTRL深掘り / PEG=Exit摩擦 / Baseline凍結
+
+```
+UMM:     Alpha探索より Inventory Control → CTRL-521 深掘り
+PEG_v3:  Entryをさらに変えない → Exit摩擦を分解
+Baseline:FROZEN 維持
+```
+
+### S — UMM Virtual Exit Δbp（確定・記述）
+| 閾値 | n_joined | Actual | Virtual | **Δ** | virt優位 |
+|------|----------|--------|---------|-------|----------|
+| **@30s** | 221 | −261 | +152 | **+413** | 53% |
+| @60s | 42 | −46 | +10 | **+56** | 50% |
+| @120s | 2 | +7 | +10 | +3 | 50% |
+
+Ladder session: **L0 +89** / **L1 −276** / **L2 −215** / L3 −53  
+→ 「即時解消は黒・滞留が食う」は支持。ただし **L1(15–30s)も深い赤字**（@30だけでは取り切れない層あり）。
+
+Economic PASS: **未** · ENFORCE=0 · 順序=`Δ観察→PASS→ENFORCE` 厳守。
+
+### A — PEG_v3 Exit摩擦
+- AgingGuard@3s: n=118 · Σ**−316bp** · WR**6%** · holdμ=3.2s
+- hold≥5s 残存: n=6 · Σ**+37bp**（少数だが黒）
+- tip@3s mid相対 vs actual の差 ≈ **−196bp** → **成行脱出のスプレッド摩擦**が主因クラス
+- tip@5s vs tip@3s: Δ合計わずか **+6bp**（5s延長だけでは不足）
+- 3s+1s Aggressive Maker tip proxy: Δ合計 **+2.5bp**（tip相対は弱いが、成行→maker切替で摩擦196bp級を削る仮説が本命）
+
+**次:** Aggressive Maker 脱出を OBSERVE 実装候補 · 5sは副次 · Entry再改修禁止。
+
+正本: `2026-09-25_csr524_ctrl_peg_exit.json` · CSR-524
+
+## 34. 最強Architecture ロック（CSR-526 · 2026-09-25）
+
+ユーザー正本。予測精度単体ではなく **多層防御** が現フェーズの主戦場。
+
+### 執行スタック（LIVE/Dryrun 共通の論理順）
+```
+TrendFollow (Direction)
+        │
+        ▼
+Microstructure Hard Veto
+        │
+        ▼
+Adverse Gate (Shadow)     ← avoidance 実遮断は未ENFORCE（観測優先）
+        │
+        ▼
+Spread Gate
+        │
+        ▼
+Execution (market / maker / PEG family)
+        │
+        ▼
+Inventory Control (CSR-521 Virtual@30s / hold ladder)
+```
+
+### 研究スタック
+```
+Execution log → Parquet → DuckDB → Counterfactual → Economic PASS
+```
+既存 `fusion_log` / realized_pnl / DuckDB Librarian と整合。2vCPU制約下では **新Alpha量産より既存Alpha×Execution variant** が先。
+
+### 研究レーン（Discovery 3系統 · Architecture下位）
+| ID | レーン | 役割 |
+|----|--------|------|
+| A | 1m Alpha Discovery | 方向・バー足仮説（後回し可） |
+| B | Microstructure Alpha Discovery | 板・veto・fake-liq |
+| **C** | **Execution Optimization** | **本命** · TF2BP×market/maker/PEG/aging/BE/FakeLiq を同一Alphaの Execution Family として比較 |
+
+### 現時点の優先順位（崩さない）
+| 優先 | 対象 | 内容 |
+|------|------|------|
+| **S** | CSR-521 Virtual@30s | UMM救済核心 · **Δ表示監査完了(2026-09-25)** · OBSERVE維持 · Economic PASS未 · ENFORCE禁止 |
+| **S** | Adverse Shadow Gate | 帯別 0–20 / 20–40 / 60–80 の性能差を継続検証（Shadow維持） |
+| A | 4AGENT confidence分解 | trend_conf / micro_conf / adverse_score / veto_reason / final_conf を別ログ化 |
+| A | Veto counterfactual | FAKE_BREAKOUT停止シグナルの仮想PnL |
+| B | Spread Gate counterfactual | 弾いた取引の仮想結果 |
+| **FROZEN** | TF2BP Baseline | 変更不要 · 成功例の特徴構造のみ研究利用 |
+
+### ブレークスルー候補（ロック）
+**新Alphaではない。** Virtual@30s と Adverse Shadow Gate の2本。
+
+### 一言
+TrendFollowがエッジ提示 → Microstructureが偽物拒否 → Adverseが逆選択拒否 → Inventory Controlが時間左テール切断。
+
+ENFORCE=0 · WIRE=NO · Economic PASS未 · Baseline非改変。
+正本: CSR-526 · `2026-09-25_csr526_architecture_lock.json`
+
+---
+
+## Agy Multi-Asset OS 基本方針（2026-09-25 固定）
+
+> **POLICY-AGY-MA-20260925-001**  
+> 正本: [`docs/agy_multi_asset_os_policy.md`](docs/agy_multi_asset_os_policy.md)  
+> SPEC追随: [`docs/multi_asset_os_architecture.md`](docs/multi_asset_os_architecture.md)  
+> 契約コード: `antigravity/multi_asset/contracts/`
+
+### 原則（変更禁止級）
+```
+Strategy belongs to Pod.
+Risk belongs to Platform.
+Execution connectivity belongs to Adapter.
+Knowledge belongs to Agy.
+```
+
+- **Pod 増設の前に** Control Plane（RiskBudget / Orchestrator）と Execution Plane（MICRO/ALPHA/EXEC）の境界を固定。
+- **BTC = Reference Pod（非破壊）**。共通OSへ移植しない。外側に Interface を先に作る。
+- News（fx/index/us_equity/jp_equity/crypto/macro_data）は同一構造化・影響度・hooks → **Shock Bus → 全 Pod**。
+- 共通基盤順: **TradeLedger → VenueAdapter → InstrumentSpec/MarginModel → RiskBudget**。
+- 実装順: P0 BTC修繕（Ledger含む）→ P1 Foundation → P2 FX → P3 JP強化 → P4 Futures → P5 Cross-Asset Root Cause。
+- **いまは FX ロジックを書かない。** `run_xxx.py` 増殖禁止。
+
+### MT5 段階パイプライン（2026-09-25 · 発注なし）
+
+```
+MT5 → MT5Adapter → MarketDataIngestion → Parquet(mt5_tick)
+  → (後続) Fusion仮想照合 → (十分検証後) デモ発注
+```
+
+| 段階 | 状態 | 備考 |
+| :--- | :--- | :--- |
+| Tick / Bid / Ask → Parquet | **稼働可（paper）** | `run_mt5_tick_recorder` · 表 `data/parquet/mt5_tick/` |
+| Fusion 照合 | 観測のみ | `compare_mt5_vs_fusion` · 現状 fusion_log は BTC 中心 |
+| デモ発注 | **禁止** | `ENABLE_MT5_REAL` 既定 false · Linux に MetaTrader5 無し |
+
+- コード: `antigravity/multi_asset/adapters/mt5_adapter.py` / `mt5_market_ingestion.py` / `run_mt5_tick_recorder.py`
+- 正本: [`docs/mt5_adapter.md`](docs/mt5_adapter.md)
+- Windows + 証券デモ口座ログイン後に `ENABLE_MT5_REAL=true` で実 Tick へ切替（注文は別ゲート）
+
+## 35. PEG_v3 正本≠定期レポート 不一致（CSR-527 · 2026-09-25）
+
+**最大発見:** −560bp クラスの損益より先に、**計器のラベル汚染**がある。
+
+| 層 | 内容 |
+|----|------|
+| **正本 (code/state)** | `peg_v3_obs_v1` · AgingGuard≥3s · **BE3**(+3.0) · FakeLiq · AdaptiveRatio |
+| **旧定期レポート** | タイトル PEG_v3 なのに本文 **Model 3+1 / 建値防衛 BE5 / +5.0bpアーム**（v2時代のコピペ） |
+| **副作用** | 読者が「BE5失敗」と誤診断しうる · 実測は AgingGuard 成行摩擦が主因（CSR-524） |
+
+### 改修
+- `hourly_dryrun_reporter` / Discord PEG対比 / runner 要約を **正本文言へ同期**
+- PEG_v3 初期化に `tf2bp_config` を丸ごと渡さない（Baselineピン混入防止）
+
+### しないこと
+損益数字だけの再解釈 · Baseline改変 · ENFORCE · Economic PASS
+
+正本: CSR-527 · `hourly_dryrun_reporter.py`
+
+## 36. 統合改善指示書（CSR-528 · 2026-09-25 20:00 JST）
+
+**全文正本:** [`docs/ops/agy_integrated_improvement_instruction_csr528.md`](file:///home/azureuser/antigravity/docs/ops/agy_integrated_improvement_instruction_csr528.md)
+
+### 運用ロック
+LIVE=OFF · WIRE禁止 · AUTO_TUNE=OFF · PASS前ENFORCE禁止 · Baseline変更禁止 · 改善=OBSERVE/SHADOWのみ  
+順序: 観測→CF→Economic PASS→ENFORCE候補→再観測
+
+### ステータス
+| 戦略 | STATUS |
+|------|--------|
+| TF2BP CSR-499 | **VALIDATED / FROZEN / CONTROL BASELINE** |
+| UMM CSR-504 | CONDITIONAL EDGE · Inventory Control 研究 |
+| PEG_v2 | REJECTED · ARCHIVE |
+| PEG_v3 | REJECTED · RESEARCH ONLY · strategy=FAIL / execution IQ=KEEP |
+
+### S0 結果（同日実施）
+- **PEG_v3:** `REPORT_BUG`（実行は BE3+AgingGuard · BE5はレポート汚染）· EXPERIMENT_INVALID ではない
+- **CSR-521 Δ:** matched n=380 · Δ@30=**+287.3** · `VALID_COMPARISON=true` · 式=`virtual_matched−actual_matched`
+
+### 当面ゴール
+TF2BP Controlを保存しつつ、UMMの L0利益を残し L1/L2/L3 左テールを切る。Micro/Adverseを損失回避層として完成。新Alpha探索は後回し。
+
+正本JSON: `data/mm_research/daily/2026-09-25_csr528_s0_audits.json`
+
+## 37. 改善実行手順書（CSR-528-EXEC · 2026-09-25 20:58:00 JST）
+
+正本: [`docs/ops/agy_improvement_execution_procedure_csr528.md`](file:///home/azureuser/antigravity/docs/ops/agy_improvement_execution_procedure_csr528.md)
+
+### PHASE進捗
+- **P0 PASS** · **P1 CONFIG_MATCH=TRUE** (REPORT_BUG) · **P3 VALID** · **P4–7 OBSERVE**
+- Session ladder (n=975): L0 **+217bp** · L1−92 · L2−67 · L3−10 → L0利益 / L1+左テール仮説を支持（未PASS）
+- **Virtual30_L2PLUS:** Δ=**+65.8bp** · HS avoided 11 · winner_trunc 45 · MDD改善 +31 · PF 0.56→0.98（研究候補 · ≠ENFORCE）
+- Spread×Ladder: 全spreadで L0+ / L1–L2−（「30秒だから危険」より「滞留が危険」）
+- Side: BUY/SELL対称的に L0+ L1+− → 方向Alpha禁止 · Inventory Controlのみ
+
+JSON: `data/mm_research/daily/2026-09-25_csr528_s1_ctrl2b.json` · `..._phase0_lock.json`
+
+### GIT対応（CSR-528 · 2026-09-25 21:04:46 JST）
+
+| Repo | 対象 | 内容 |
+|------|------|------|
+| **antigravity** | MEM.me(=MEM.md) §35–37 · `umm_ctrl_observe` · PEG_v3 · hourly/Discord正本同期 · `docs/ops/*csr528*` | 研究コード+正本ドキュメント |
+| **gapcore-platform** | `CSR.md` CSR-521〜528 · `FIX.me` · `CURSOR.me` | CSR記録同期（実行コード非改変） |
+
+- `data/mm_research/daily/*.json` は `.gitignore`（正本パスのみMEM/CSRに記載）
+- WIRE=NO · ENFORCE=0 · Baseline FROZEN をコミットメッセージにも明示
+
