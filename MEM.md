@@ -1339,4 +1339,5 @@ JSON: `data/mm_research/daily/2026-09-25_csr528_s1_ctrl2b.json` · `..._phase0_l
 
 - `data/mm_research/daily/*.json` は `.gitignore`（正本パスのみMEM/CSRに記載）
 - WIRE=NO · ENFORCE=0 · Baseline FROZEN をコミットメッセージにも明示
+- **commits:** antigravity `466bfcc` · gapcore-platform `4bda7bc`
 
