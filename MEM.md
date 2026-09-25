@@ -1341,3 +1341,5 @@ JSON: `data/mm_research/daily/2026-09-25_csr528_s1_ctrl2b.json` · `..._phase0_l
 - WIRE=NO · ENFORCE=0 · Baseline FROZEN をコミットメッセージにも明示
 - **commits:** antigravity `466bfcc` · gapcore-platform `4bda7bc`
 
+- **PUSH/MERGE (2026-09-25 21:10:46 JST):** antigravity `main` → `d3d5818` · gapcore [PR #66](https://github.com/tspmltd/gapcore-platform/pull/66) MERGED → `10c4204`
+
