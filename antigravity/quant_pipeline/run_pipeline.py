@@ -151,7 +151,14 @@ def main():
                 adv_state = adverse_agent.latest_state
                 adv_side = adv_state.get("adverse_side", "none")
                 adv_score = adv_state.get("adverse_score", 0.0)
-                adv_str = f"{adv_side[:1].upper()}:{adv_score:.2f}"
+                # CSR-546: council SHADOW_OFF → NULL display (agent research_score may still be numeric)
+                if verdict and not getattr(verdict, "adverse_score_valid", True):
+                    adv_str = f"{(adv_side or 'n')[:1].upper()}:NULL"
+                else:
+                    try:
+                        adv_str = f"{(adv_side or 'n')[:1].upper()}:{float(adv_score):.2f}"
+                    except (TypeError, ValueError):
+                        adv_str = f"{(adv_side or 'n')[:1].upper()}:NULL"
 
                 # 最新意思決定を取得
                 latest_dec = fusion_engine.evaluate()

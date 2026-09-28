@@ -14,6 +14,7 @@ CSR-113 / Adverse Agent 改善指示書 v1.0 完全準拠
 - C1. Agent責任分析    : 戦略別 (UMM, SpreadCaptureMM, TF2BP, PEG_v2, MicroTrend, Scalping) 集計
 """
 
+import math
 import os
 import time
 import json
@@ -516,21 +517,67 @@ class AdverseExcursionTracker:
             else:
                 latency_stats[k] = {"count": 0, "avg_ae_1s": 0.0}
 
-        # 7. Capture Rate 分析 (S3)
+        # 7. Capture Rate 分析 (S3) — CSR-535: 平均単独爆発をやめロバスト統計を主表示
         cr_records = [r for r in records if r.capture_rate is not None]
         if cr_records:
-            avg_cr = round(sum(r.capture_rate for r in cr_records) / len(cr_records), 1)
-            cr_grade = "優秀" if avg_cr >= 80.0 else ("普通" if avg_cr >= 50.0 else "要改善")
+            vals = sorted(float(r.capture_rate) for r in cr_records)
+            n_cr = len(vals)
+
+            def _pct(p: float) -> float:
+                if n_cr == 1:
+                    return vals[0]
+                idx = (n_cr - 1) * p
+                lo, hi = int(math.floor(idx)), int(math.ceil(idx))
+                if lo == hi:
+                    return vals[lo]
+                return vals[lo] * (hi - idx) + vals[hi] * (idx - lo)
+
+            # winsorize 1% tails
+            lo_w, hi_w = _pct(0.01), _pct(0.99)
+            wins = [min(hi_w, max(lo_w, v)) for v in vals]
+            avg_cr = round(sum(vals) / n_cr, 1)
+            median_cr = round(_pct(0.50), 1)
+            win_mean = round(sum(wins) / n_cr, 1)
+            # near-zero denominator proxy: |capture| > 500% often means tiny theory spread
+            zero_div = sum(1 for v in vals if abs(v) >= 500.0)
+            # grade on median (robust), not raw mean
+            cr_grade = "優秀" if median_cr >= 80.0 else ("普通" if median_cr >= 50.0 else "要改善")
+            if zero_div > n_cr * 0.05:
+                cr_grade = "INVALID_PENDING_AUDIT"
+            # CSR-545: Capture Rate masked from Economic PASS / Promotion until definition audit
+            kpi_status = "INVALID_PENDING_AUDIT" if zero_div > n_cr * 0.05 else "ROBUST_OK"
             cr_stats = {
-                "total_completed": len(cr_records),
-                "avg_capture_rate_pct": avg_cr,
-                "grade": cr_grade,
+                "total_completed": n_cr,
+                "avg_capture_rate_pct": avg_cr,  # legacy field — NOT for economic gate
+                "median_capture_rate_pct": median_cr,
+                "winsorized_mean_pct": win_mean,
+                "p10": round(_pct(0.10), 1),
+                "p25": round(_pct(0.25), 1),
+                "p50": median_cr,
+                "p75": round(_pct(0.75), 1),
+                "p90": round(_pct(0.90), 1),
+                "zero_div_clipped_count": zero_div,
+                "kpi_status": kpi_status,
+                "governance_mask": True,  # CSR-545 — exclude from strategy gate
+                "governance_use": "FORBIDDEN_UNTIL_AUDIT",
+                "definition": "realized_pnl_bp / theory_spread_bp * 100 (NOT fill-rate)",
+                "grade": "MASKED_CSR545" if True else cr_grade,
+                "grade_raw": cr_grade,
                 "excellent_count": sum(1 for r in cr_records if r.capture_grade == "優秀"),
                 "normal_count": sum(1 for r in cr_records if r.capture_grade == "普通"),
                 "poor_count": sum(1 for r in cr_records if r.capture_grade == "要改善"),
+                "display_primary": "MASKED",
             }
         else:
-            cr_stats = {"total_completed": 0, "avg_capture_rate_pct": 0.0, "grade": "判定不能"}
+            cr_stats = {
+                "total_completed": 0,
+                "avg_capture_rate_pct": 0.0,
+                "median_capture_rate_pct": 0.0,
+                "grade": "MASKED_CSR545",
+                "kpi_status": "NO_DATA",
+                "governance_mask": True,
+                "governance_use": "FORBIDDEN_UNTIL_AUDIT",
+            }
 
         # 8. Agent 責任分析 (C1)
         agents = ["UMM", "SpreadCaptureMM", "TF2BP", "TF2BP_PEG_v2", "MicroTrend", "Scalping"]
@@ -562,17 +609,27 @@ class AdverseExcursionTracker:
         ]
         score_validation_table = {}
         expected_pnls = []
+        # CSR-539: never default missing → 30.0 (that collapsed all mass into 20-40)
+        unknown_n = 0
+        for r in records:
+            if r.meta and r.meta.get("adverse_score") is not None:
+                continue
+            if r.fill_quality in ("TOXIC_FILL", "GOOD_FILL"):
+                continue
+            unknown_n += 1
 
         for label, low, high in score_bins:
             bin_records = []
             for r in records:
-                score = 30.0
-                if r.meta and "adverse_score" in r.meta:
+                score = None
+                if r.meta and r.meta.get("adverse_score") is not None:
                     score = float(r.meta["adverse_score"])
                 elif r.fill_quality == "TOXIC_FILL":
                     score = 75.0
                 elif r.fill_quality == "GOOD_FILL":
                     score = 15.0
+                else:
+                    continue
 
                 if (low <= score < high) or (high == 100.0 and score >= high):
                     bin_records.append(r)
@@ -633,6 +690,8 @@ class AdverseExcursionTracker:
             "agent_attribution": agent_attribution,
             "score_validation": {
                 "table": score_validation_table,
+                "unknown_score_count": unknown_n,
+                "default_30_disabled": True,
                 "is_monotonic_decline": is_monotonic,
                 "status": "VALIDATED" if is_monotonic is True else ("ACCUMULATING" if is_monotonic is None else "CHECK_REQUIRED"),
             },

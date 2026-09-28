@@ -75,8 +75,15 @@ class AlphaVsAdverseAnalyzer:
             pnl = float(t.get("realized_pnl_bp", 0.0))
             meta = t.get("meta") or {}
 
-            # Adverse Score
-            adv = float(meta.get("adverse_score") or (75.0 if t.get("fill_quality") == "TOXIC_FILL" else 30.0))
+            # Adverse Score — missing ≠ 30.0（CSR-539: default30が20-40崩壊の主因）
+            if "adverse_score" in meta and meta.get("adverse_score") is not None:
+                adv = float(meta["adverse_score"])
+            elif t.get("fill_quality") == "TOXIC_FILL":
+                adv = 75.0
+            elif t.get("fill_quality") == "GOOD_FILL":
+                adv = 15.0
+            else:
+                continue  # skip unscored from correlation / certification population
             # Signal Score (合議確信度または初期値0.65)
             sig = float(meta.get("signal_confidence") or meta.get("confidence") or 0.65)
 
@@ -92,6 +99,11 @@ class AlphaVsAdverseAnalyzer:
             adv_scores.append(adv)
             pnls.append(pnl)
 
+        n = len(data_points)
+        n_skipped_unscored = len(trades) - n
+        if n < 3:
+            return self._generate_insufficient_data_result(n)
+
         # 1. 統計的相関の算出 (Adverse Score vs PnL bp)
         corr_r, p_value, slope, intercept = self._calculate_linear_regression(adv_scores, pnls)
         spearman_rho = self._calculate_spearman(adv_scores, pnls)
@@ -99,7 +111,7 @@ class AlphaVsAdverseAnalyzer:
         # 2. 3軸 4象限マトリクス (Signal × Adverse)
         quadrants = self._calculate_quadrants(data_points)
 
-        # 3. 司令塔認定判定 — 統計ゲート必須（p・n・象限件数）。緩い r だけでは認定しない。
+        # 3. 司令塔認定判定 — 統計ゲート必須。CSR-539: Economic PASSはintegrity別監査まで禁止
         q1_pnl = quadrants["Q1_SweetSpot"]["expected_pnl_bp"]
         q2_pnl = quadrants["Q2_ToxicTrap"]["expected_pnl_bp"]
         q1_n = quadrants["Q1_SweetSpot"]["count"]
@@ -116,32 +128,43 @@ class AlphaVsAdverseAnalyzer:
             gate_fails.append("quadrant_n_low")
         if not (q1_pnl > q2_pnl):
             gate_fails.append("q1_not_gt_q2")
-        is_commander_certified = len(gate_fails) == 0
+        # CSR-539: statistical gates may pass after Fisher-z fix, but Council Economic PASS stays blocked
+        integrity_note = (
+            "CSR-539: integrity audit required (score missing/default30 collapse · Capture provenance). "
+            "Adverse Economic PASS=NO until integrity_ok."
+        )
+        is_commander_certified = False  # hard block until CSR-539 clears
+        if len(gate_fails) == 0:
+            gate_fails.append("integrity_hold_csr539")
 
         result = {
             "timestamp": int(time.time() * 1000),
             "updated_at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"),
             "total_completed_trades": n,
+            "n_skipped_unscored": n_skipped_unscored,
             "correlation_analysis": {
                 "pearson_r": round(corr_r, 3),
                 "spearman_rho": round(spearman_rho, 3),
                 "r_squared": round(corr_r ** 2, 3),
-                "slope_beta_bp_per_score": round(slope, 3),  # 1スコア上昇あたりの損益悪化(bp)
+                "slope_beta_bp_per_score": round(slope, 3),
                 "intercept": round(intercept, 2),
-                "p_value_estimate": round(p_value, 4),
+                "p_value_estimate": round(p_value, 12) if p_value >= 1e-12 else 0.0,
+                "p_value_method": "fisher_z_two_sided_erfc (CSR-535; replaces bogus 1/(1+t^2/df))",
+                "p_value_legacy_note": "pre-CSR-535 pseudo-p was INVALID for certification",
                 "relationship": "NEGATIVE_CORRELATION (Score上昇で損益悪化)" if corr_r < -0.25 and p_value < 0.05 else "WEAK_OR_UNPROVEN",
             },
             "quadrant_matrix": quadrants,
             "commander_certification": {
                 "is_certified": is_commander_certified,
                 "gate_fails": gate_fails,
-                "title": "【司令塔認定】" if is_commander_certified else "【未認定 / 検証中】",
+                "economic_pass": False,
+                "title": "【未認定 / 整合性監査中 CSR-539】",
                 "summary": (
-                    f"ゲートPASS: r={corr_r:.2f}, p={p_value:.4f}, n={n}, Q1={q1_pnl:+.2f}bp (n={q1_n}) > Q2={q2_pnl:+.2f}bp (n={q2_n})."
-                    if is_commander_certified else
-                    f"ゲートFAIL {gate_fails}: r={corr_r:.2f}, p={p_value:.4f}, n={n}. 認定不可。"
-                )
-            }
+                    f"統計ゲート: {gate_fails}. r={corr_r:.2f}, p={p_value:.4g}, n={n}. "
+                    + integrity_note
+                ),
+            },
+            "adverse_economic_pass": False,
         }
 
         self._persist(result)
@@ -180,9 +203,13 @@ class AlphaVsAdverseAnalyzer:
         return res
 
     def _calculate_linear_regression(self, x: List[float], y: List[float]) -> Tuple[float, float, float, float]:
-        """Pearson r, 擬似p値, slope, intercept"""
+        """Pearson r, **two-sided** p-value, slope, intercept.
+
+        CSR-535: 旧「擬似p」`1/(1+t^2/df)` は正規Pearson pではない（r≈-0.28 で p≈0.92 になりうる誤表示）。
+        両側対立仮説 H1: r ≠ 0。大標本は Fisher z → 正規近似。
+        """
         n = len(x)
-        if n < 2:
+        if n < 3:
             return 0.0, 1.0, 0.0, 0.0
 
         mean_x = sum(x) / n
@@ -196,14 +223,20 @@ class AlphaVsAdverseAnalyzer:
             return 0.0, 1.0, 0.0, mean_y
 
         r = num / math.sqrt(den_x * den_y)
+        # numerical clamp
+        r = max(-0.999999, min(0.999999, r))
         slope = num / den_x
         intercept = mean_y - slope * mean_x
 
-        # t統計量によるp値の簡易推定
-        df = max(1, n - 2)
-        t_stat = r * math.sqrt(df / max(1e-9, 1.0 - r ** 2)) if abs(r) < 1.0 else 999.0
-        # 簡易近似
-        p_val = max(0.0001, round(1.0 / (1.0 + (abs(t_stat) ** 2) / df), 4))
+        # Fisher z transform → two-sided normal p (valid for moderate |r|, n>=10)
+        z = 0.5 * math.log((1.0 + r) / (1.0 - r))
+        se = 1.0 / math.sqrt(max(1.0, n - 3))
+        z_stat = abs(z) / se
+        # erfc tail: P(|Z| > z_stat) = erfc(z_stat / sqrt(2))
+        p_val = math.erfc(z_stat / math.sqrt(2.0))
+        # floor for JSON readability; true tiny p stays very small
+        if p_val < 1e-300:
+            p_val = 0.0
 
         return r, p_val, slope, intercept
 

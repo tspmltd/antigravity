@@ -1343,3 +1343,466 @@ JSON: `data/mm_research/daily/2026-09-25_csr528_s1_ctrl2b.json` · `..._phase0_l
 
 - **PUSH/MERGE (2026-09-25 21:10:46 JST):** antigravity `main` → `d3d5818` · gapcore [PR #66](https://github.com/tspmltd/gapcore-platform/pull/66) MERGED → `10c4204`
 
+## 38. PEG研究スコープ改定（CSR-530 · 2026-09-26 22:56:05 JST）
+
+### 判定
+研究価値は **Entry品質ではない**。  
+限定: **良い AE を最終 PnL へ変換できない理由** の **Exit / Opportunity Cost 分解**。
+
+| 項目 | 扱い |
+|------|------|
+| PEG_v3 フル戦略昇格 | REJECTED（継続） |
+| Entry Quality 比較本線 | **廃止**（副次メモ可） |
+| Exit / OppCost 分解 | **本線** |
+| AE_1s / AE_3s 知見 | KEEP（execution IQ） |
+| 実績値の正本 | **今回提示レポート** |
+| M365 アーカイブ | TF2BP_PEG_v3 / CSR-522/524/527 時系列対応資料 **未取得** → レポート正 |
+
+### 既存設計との整合
+Execution結果を教師ラベルとして Parquet 蓄積 → DuckDB で勝敗差解析（`FusionDecisionLog.realized_pnl` 事後紐付け = CSR-529）。  
+ΔW / approved_weights / 自動学習より **ラベル修復が先**。執行パラメータは触らない。
+
+### しないこと
+PEG_v4+ · Baseline改変 · Entry方向の新Alpha · ENFORCE · LIVE
+
+## 39. PEG最大発見 = Maker AE↑ / PnL↓ 矛盾（CSR-530-CORE · 2026-09-26 22:56:32 JST）
+
+### 一文
+**Maker化すると AE は明確に良くなるのに、最終 PnL は悪化する。**  
+これを Entry 改造で誤魔化さない。
+
+### 回収手順（固定）
+1. AgingGuard 退出トレードを母集団に固定  
+2. Exit 後 Counterfactual（成行→Aggressive Maker / 閾値 3s→5s 等）  
+3. 分解: AE改善量 vs 最終PnL悪化量 vs Opportunity Cost  
+4. 再利用可能知見だけ抽出 → **PEG Execution IQ = KEEP**  
+5. PEG strategy 昇格は引き続き REJECTED
+
+### 禁止
+Entry再改修 · PEG_v4+ · Baseline結合変更 · ENFORCE · 「AE良いから採用」短絡
+
+### 正本数値
+提示レポート / CSR-524 Exit摩擦 JSON（`2026-09-25_csr524_ctrl_peg_exit.json`）。  
+M365時系列アーカイブは未取得のため、提示系を正とする（CSR-530）。
+
+関連: CSR-524 AgingGuard成行摩擦 · CSR-527 計器汚染 · CSR-529 教師ラベル修復
+
+## 40. 4AGENT Action Schema 分離（CSR-531 · 2026-09-26 23:00:55 JST）
+
+### バグ
+毎時レポートが `verdict.recommended_action`（存在しない）を読み **常に HOLD**。  
+下段ディレクティブの BUY/SELL/EXIT/VETO と矛盾。この HOLD を教師ラベルに流すな。
+
+### 修正スキーマ
+`candidate_action` → `decision_action` → `veto` → `execution_allowed` → `final_action`  
+HOLD ≠ EXIT。OBSERVE中 `execution_allowed=false` → `final=HOLD` でも candidate/decision は保持。
+
+### ロール
+Trend=Direction · Micro=Risk/Veto · Adverse=Shadow · DuckDB=Librarian · Council=Orchestrator
+
+### 今夜やらない
+W_PRESSURE変更 · AUTO_TUNE · ENFORCE · LIVE · TF2BP/UMM Entry改変
+
+## 41. 今夜運用ロック（CSR-532 · 2026-09-26 23:03:03 JST）
+
+| 優先 | 状態 |
+|------|------|
+| **P0 CSR-521 24h** | **RUN · 触らない** |
+| P1–P2 | WAIT |
+| **P3/P4** | **PREPAREのみ**（V2切替はP0完了後） |
+| P5–P7 | WAIT |
+
+FROZEN: TF2BP · UMM Entry · Council weights · WIRE=NO · ENFORCE=0 · LIVE=OFF · AUTO_APPLY=OFF
+
+### P3/P4 準備内容（未配線）
+- `FusionDecisionLogV2` + join keys (`decision_id`…) + `execution_gate_reason`
+- `CounterfactualLog` 別テーブル（ネスト禁止 · 例示PnL禁止 · status=NULL/INVALID/VALID）
+- モジュール: `fusion_v2_prepare.py` · `live_writer=False` · cutover=`ENABLE_FUSION_V2`+`CSR521_P0_COMPLETE.flag`
+- **現行 `fusion_engine` → fusion_log v1 のまま**
+
+## 42. PEG AE Capture 分解（CSR-533 · 2026-09-26 23:04:50 JST）
+
+### 結論（v2履歴追加で強化）
+PEG_v2/v3 共通で **AE_3s ≈ +1.20bp 改善が反復**するのに **最終PnLはBaseline劣後**。  
+昇格研究ではなく **Execution品質 × Alpha Capture 分解**へ一本化。
+
+| 版 | Strategy | AE_1s | AE_3s | PnL | Research |
+|----|----------|-------|-------|-----|----------|
+| v2 | REJECT | MIXED | **+1.20 STRONG** | BAD | KEEP |
+| v3 | REJECT | POSITIVE | **+1.20 STRONG** | BAD | KEEP |
+| v4 | **FORBIDDEN** | — | — | — | — |
+
+### 新問い
+`+1.20bp AE改善はどこで失われるか？` → P7-A Entry / P7-B Exit Friction / P7-C Opportunity Cost
+
+### KPI
+- Capture Rate → **INVALID_PENDING_AUDIT**（Economic除外）
+- Toxic回避スコア → **CONTEXT ONLY**
+- 正本数値 = 提示レポート（M365追加資料なし）
+
+P0 CSR-521完走を優先。P7実行はP0後。ENFORCE=0 · WIRE=NO · LIVE=OFF
+
+## 43. 今夜本線・LIVE維持OFF（CSR-534 · 2026-09-26 23:09:32 JST）
+
+**LIVE=OFF 継続は妥当。** 新Alpha追加禁止。
+
+### 証拠（CSR-521 OBSERVE · ≠本番改善量）
+Actual≈**−29bp** · Virtual@30≈**+13bp** · Δ@30≈**+42bp** · L2+L3 Δ≈**+46bp**  
+→ 「どこで入るか」より「いつ諦めるか」に巨大候補。ENFORCE=0のまま。
+
+### 今夜触る3本だけ
+1. **Exit Controller CF** — 10/20/30/45/60/90/120s · 目的=HARD_STOP損失削減  
+2. **Adverse 健全性** — r/p異常監査後のみ Councilへ SAFE/WARN/VETO（方向は言わせない）  
+3. **Fake-BO veto attribution** — saved-bp CF（回数だけでは不十分）
+
+### Adverse p監査メモ
+`p_value_estimate` は **CSR-535で正規Pearson両側p（Fisher-z→erfc）へ修正済**。旧「擬似p `1/(1+t²/df)`」は無効。認定は健全性ゲート再実行後のみ。Council本番ゲート直結は **SHADOW継続**。
+
+### 触らない
+Spread緩める · Trend再設計今夜 · Capture平均値で戦略変更 · AdverseをBUY/SELL化 · WIRE/ENFORCE/LIVE · News Agent実行配線
+
+### ロール
+Trend=Direction · Micro=Entry Veto · Adverse=Risk Veto · Inventory=Hold/Unwind · DuckDB=Research only
+
+## 44. アーキテクチャ承認固定 + 今夜実装着手（CSR-535 · 2026-09-26 23:15:00 JST）
+
+ユーザー承認により以下を**統率構成として固定**（新Alpha禁止 · LIVE=OFF）。
+
+```
+Market → Trend(Direction) | Micro(Entry Veto) | Adverse(Risk Veto) | Spread(Cost)
+       → Candidate → ENTRY → Inventory Controller + Adverse Monitor → EXIT
+DuckDB/Librarian = 外側の非同期反事実のみ（auto_apply=OFF · WIRE=NO）
+```
+
+### 実装着手（P0 dryrun非中断）
+| P | 内容 | 状態 |
+|---|------|------|
+| P0 | Would-Unwind 10/20/30/45/60/90/120 + L2+L3 | `umm_ctrl_observe` 多窓追加 · 24h完走継続 |
+| P1 | Adverse pバグ修正 | Fisher-z two-sided · smoke PASS（擬似pが0.9級を説明） |
+| P2 | Fake-BO Saved-bp CF | `micro_veto_cf_audit` · rising-edge · 1/3/10/30s |
+| P3 | Capture robust | median / winsorized / p10–p90 · Discord主表示切替 |
+| P4 | Action schema | CSR-531 Candidate/Decision/Final 維持 |
+
+### 証拠メモ（OBSERVE · ≠PASS）
+23:00 Δ=+45.44（L2+L3 +51.87）· 23:01 Δ=+42.19（L2+L3 +45.92）
+
+### GOVERNANCE
+LIVE=OFF · WIRE=NO · ENFORCE=0 · auto_apply=OFF · Adverse Council入口=SHADOW until health PASS
+
+正本: `data/mm_research/daily/2026-09-26_csr535_architecture_tonight_lock.json`
+
+## 45. Would-Unwind符号安定 → Conditional Unwind（CSR-536 · 2026-09-27 22:15:00 JST）
+
+**CSR-535 Architectureは変更不要。むしろ Inventory=Exit Controller を強く支持。**
+
+### 04:00–22:00 / 18窓 再集計（OBSERVE · ≠PASS）
+| Horizon | Δ+窓 | 平均Δ | 中央値Δ | 最悪 | 最大 |
+|---------|------|-------|---------|------|------|
+| 30s | **17/18** | +14.06 | +8.93 | −3.46 | +49.61 |
+| 60s | 16/18 | +10.09 | +8.97 | −6.84 | +32.50 |
+| 120s | 14/18 | +5.71 | +3.01 | −8.90 | +22.74 |
+
+符号: 30s `+++++++++++++++++-` · **平均値より符号安定が本命。**
+
+### 反例の価値（10:00）
+Actual **+10.85** · Virtual@30 **−1.19** · Δ **−12.04**  
+→ 早期Unwindが利益破壊。**「30秒で全部切れ」本番化禁止。**
+
+良い在庫例: 16時 Δ≈+0.7 / 17時 Δ≈−3.5（Actual緑）  
+大改善候補: 08時 +39.7 · 15時 +22.1 · 18時 **+49.6**
+
+### 次の問い
+`WHEN TO UNWIND?` → **Conditional Unwind**（Healthy→HOLD / Deteriorating→切る）  
+設計正本: `conditional_unwind_design.py`（DESIGN_ONLY · ENFORCE=0）
+
+### 併記ロック
+- UMM: 勝率58–61%でもPnL大振れ → **左尾=悪い在庫滞留**仮説（event-level要確認）
+- TF2BP Baseline **FROZEN**（CSR-499 param change=NO）· 22時 +87bp級
+- PEG_v3: Baseline差 **Δ≈−111** · BE=0/FakeSkip=0/Aging大半 → **昇格さらに遠ざかる** · v4禁止 · P7 post-mortem
+- FakeFilter: Micro≠PEG定義 → **overlap監査のみ**（`fakefilter_overlap_audit.py`）· バグ断定禁止
+- Arena: TF2BP+SpreadCaptureMM+Inventory が面白い · 相関/重複未測で昇格禁止
+- Micro新候補（pressure/stack_collapse等）: **特徴保存のみ** · 実装/weights/Council禁止
+
+### 優先度（更新）
+P0-A 24h完走 · P0-B horizon比較 · **P0-C Conditional classifier設計**  
+P1 Adverse health · P2 Micro Veto CF · P3 Fusion CF JOIN · P4 Action schema  
+P5 UMM tail-loss · P6 Arena corr · P7 PEG post-mortem（Aging/FakeFilter overlap）
+
+### GOVERNANCE（不変）
+CSR-521 PASS=**NO** · 30s hard-code=**NO** · Economic PASS=**NO** · ENFORCE=0 · WIRE=NO · LIVE=OFF · CSR-535 Lock=KEEP
+
+正本: `data/mm_research/daily/2026-09-27_csr536_conditional_unwind_lock.json`
+
+## 46. PEG_v3 Economic Gap — AE↑/PnL↓ 帰属固定（CSR-537 · 2026-09-27 22:20:00 JST）
+
+**CSR-535 Architecture 維持。PEGを Direction Agent 化しない。**
+
+### 判定（固定）
+| 対象 | 判定 |
+|------|------|
+| TF2BP Baseline | **KEEP FROZEN** · CSR-499 param=NO |
+| PEG_v3 | **OBSERVATION ONLY** · PROMOTION=NO · PARAM_CHANGE=NO |
+| AgingGuard | **PRIMARY SUSPECT** · NOT CONVICTED |
+| BE3 | INACTIVE / NEED ATTRIBUTION |
+| FakeLiquidity | ZERO-FIRE / NEED CONDITION AUDIT（閾値即変禁止） |
+| Capture raw mean | **INVALID FOR GATING**（−1083%〜+6418%等は歴史ログのみ） |
+| LIVE / WIRE / ENFORCE | OFF / NO / 0 |
+
+### なぜ Adverse ではないか（22:00）
+Baseline **+87.13** · PEG **−24.15** · Δ **−111.28**  
+AE_1s差 **+1.30** · AE_3s差 **+1.20** · しかも n: 105 vs **17**  
+→ 約定後逆行改善でも収益が残らない。**悪い約定を掴んだ負けではない。**
+
+### 活動コンポーネント
+AgingGuard 主働 · BEExits≈0 · FakeSkip≈0（前完走 Aging=28 / BE=0 / Fake=0）
+
+### 次の分解（コード非改変・CFのみ）
+```
+PEG ECONOMIC GAP
+├── Entry Selection (baseline_only / peg_only / both)
+├── Execution Quality (entry improve / AE_1s / AE_3s)
+└── Exit Friction (AgingGuard / BE3 / other)
+```
+最重要CF: `actual_peg_pnl` · `cf_no_aging_pnl` · `cf_baseline_exit_pnl` · Δs · `exit_reason`  
+正本実装: `peg_economic_gap_cf.py` · Fake A/B/C: `fakefilter_overlap_audit.py`
+
+### 優先
+**P0 CSR-521 完走が最上位のまま。** PEGは P7 従属・戦略params触らない。
+
+正本: `data/mm_research/daily/2026-09-27_csr537_peg_economic_gap_lock.json`
+
+## 47. Council意味論監査 + Micro Veto CF本丸（CSR-538 · 2026-09-27 22:25:00 JST）
+
+**final単独教師=禁止（CSR-531 KEEP）。値変更段階ではなく測る段階。**
+
+### 一次データ
+提示Councilログ。M365に対応追加記録なし。
+
+### candidate=HOLD(0.00) 監査結果
+コード上 Trend up→buy / down→sell は正しい。  
+**原因= `run_pipeline` が 9/26 17:33起動のまま** → stateに `candidate_action` 欠落（LEGACY）。hourlyがHOLD既定・final=BUY残留を表示。  
+→ **バグ断定ではなく STALE_SCHEMA**。`run_pipeline` 再起動で csr538_v1 書込へ。
+
+### フィールド責務（固定）
+| フィールド | 責務 |
+|------------|------|
+| hypothesis_direction | Trend Direction |
+| candidate | Direction→buy/sell/hold |
+| decision | 経済意図（Veto前） |
+| execution_allowed | Hands（OBSERVE=false） |
+| final | 執行表現のみ（教師禁止） |
+| veto | Micro Entry Veto |
+
+### P2 本丸
+Strong Trend × Micro Veto（特に **19:00 UP1.00** / **22:00 DOWN1.00**）の 1/3/10/30s CF  
+`would_enter_side` · `saved_bp` · `missed_profit_bp` · `net_veto_value_bp` — **勝敗未判定**
+
+### その他
+- Adverse SAFE/0 = 成功扱い禁止 · Economic PASS=NO · SHADOW KEEP
+- DuckDB表記: `Research reference weights` · auto_apply=OFF（値不変）
+- Micro/Adverse/Council Economic PASS = **すべて NO**
+- LIVE=OFF · WIRE=NO · ENFORCE=0 · CSR-535 KEEP
+
+正本: `2026-09-27_csr538_council_semantics_p2_lock.json`
+
+## 48. P0再定義 = Adverse整合 + Inventory@30s（CSR-539 · 2026-09-27 22:30:00 JST）
+
+**PEGはP2後回し。新Alpha探索ではなく Veto/Exit のbp因果分解。**
+
+### GOVERNANCE（不変）
+LIVE=OFF · WIRE=NO · ENFORCE=0 · auto_apply=OFF · Spread Gate FROZEN  
+Adverse/Micro/Inventory/Council Economic PASS = **すべて NO**
+
+### P0-A Adverse integrity（FAIL → PASS禁止）
+| 所見 | 内容 |
+|------|------|
+| r/p矛盾 | Discord p≈0.92は旧擬似p。ディスク再計算Fisher-zでp≈0になりうるが **Economic PASS禁止継続** |
+| score欠落 | pre21 miss≈76% · post21 miss≈74% |
+| 20-40崩壊 | missing → default **30.0** 代入が主因（相場断定禁止） |
+| post定数 | 書込済みscoreが 34.4 固定例あり |
+| Capture | raw mean無効 · median/winsorizedのみ · 20→21変化はprovenance監査 |
+
+対策: default30廃止 · unscored除外 · commander認定に `integrity_hold_csr539` · hourly reporter再起動済 · dryrun 24h非中断
+
+### P0-B Inventory 30s primary（PROMISING · NOT PASS）
+24h matched OBSERVE（本番改善量ではない）:
+- **ALL@30** matched=423 · Δ=**+272.5bp** · HS_avoided=42 · winner_trunc=153
+- **L4@30** Δ=+189.5 · HS_av=21（L3/L4が怪しい仮説と整合）
+- long +75 / short +197 · @60 +198 · @120 +156
+- **30s全面決済ハードコード禁止**（CSR-536反例）
+
+### 優先
+P0-A integrity → P0-B 30s CF蓄積 → P1 Micro Net Veto Value → P2 PEG後回し  
+Latency: ≤80ms / >80ms 分離（22時 median110ms）
+
+正本: `2026-09-27_csr539_p0_adverse_inventory_lock.json` · `adverse_pipeline_integrity_audit.py` · `inventory_30s_primary_eval.py`
+
+## 49. Discovery Pipeline = Research Librarian（CSR-540 · 2026-09-27 22:36:00 JST）
+
+**Cycle 125–129 全REJECTは正しい。次は戦略スパムではなく Pipeline 品質。**
+
+### 判定（固定）
+| 項目 | 判定 |
+|------|------|
+| Autonomous Discovery | **KEEP** |
+| Safety rejection | **GOOD** |
+| Strategy PASS / LIVE candidate | **0 / 0** |
+| Mean Reversion | WATCH / NOT PASS（勝率≠Alpha） |
+| MM / MicroTrend / Spread / Grid / Momentum / Trend / VolBO | REJECT |
+| Cost model | **INSUFFICIENT FOR PROMOTION**（Stage1 sanityのみ） |
+| Evolution reporting | **FIXED**（Unknown / WR0 / +0円） |
+| 新indicator探索 | **P3 · 今はやらない** |
+
+### P0 実装済
+1. Discovery↔Evolution 共有schema `csr540_v1`（strategy_id/name/trades/win_rate/net_pnl/PF/Sharpe/MDD/reject_reason）
+2. provenance: code/param/dataset/trade_sequence/signal hash + retry_reason
+3. Theme matcher修正: `micro` が Market Making と Micro Trend を同一コードへ潰していた → InventorySkew vs MicroTrendOrderFlow 分離
+4. Discord Discovery に実 commission/slippage を表示（0.0%ハードコード廃止）
+5. ExperimentLedger JSONL + novelty（同strategy_fingerprintは NEW_DATA 等なしで予算消費しない）
+6. Cycle番号永続化（restartでCycle1に戻らない）
+
+### Stage階層（昇格ロック）
+Stage0 Idea → 1 Sanity BT（現行） → 2 Cost-aware → 3 OOS → 4 Micro/Adverse CF → 5 Observation → Economic PASS → Human
+
+### P1（次・未実装）
+Micro Parquet接続（imbalance/taker/tip/cancel/refill/latency/adverse）· cost-aware評価  
+experiment_type: FULL_STRATEGY / FEATURE / VETO / EXIT / EXECUTION
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · 採択ゼロ維持可  
+正本: `logs/2026-09-27_csr540_discovery_pipeline_lock.json` · `pipeline/experiment_schema.py`
+
+## 50. UMM Champion Candidate 凍結（CSR-541 · 2026-09-27 22:39:00 JST）
+
+**09:00 24h −106.47bp → 22:00 +50.74bp（Δ+157.21bp）。改善より保存。**
+
+### 一次情報
+提示統合ログを primary（M365別資料なし）。rolling state は secondary。
+
+| 系統 | 22:00 24h | STATUS |
+|------|-----------|--------|
+| UMM CSR-504 | **+50.74bp** | **CHAMPION_CANDIDATE · FREEZE FIRST · LIVE=NO** |
+| TF2BP CSR-499 | +87.13bp | VALIDATED / FROZEN · CHANGE=NO |
+| PEG_v3 | −24.15bp | OBSERVATION / REJECT · PROMOTION=NO |
+| Arena | +91.24bp | PROMISING RESEARCH · AUTO PROMOTE=NO |
+| 全体 | +229.11bp | 勝者/敗者が分離し始めた |
+
+Arena上位=SpreadCapture / MicroSpread / InventorySkew（MM部品仮説）。単純合計≠Arena分解。
+
+### FREEZE
+- code_hash / parameter_hash / policy_hash 保存
+- Champion本体のパラメータ最適化 **禁止**
+- `UMM_CHAMPION_UNLOCK=1` なしの override **BLOCK**
+- 研究は CF のみ: L3 / L4 / L3L4+MAE / L3L4+Adverse·Micro
+
+### CSR-521
+HIGH PRIORITY CF · **Conditional Unwind** · **30s ALL-EXIT = NO** · ENFORCE=0
+
+### PnL Attribution（初版·heuristic）
+buffer≈2000: Spread_Capture_Likely + · Hard_Stop − · Adverse/Friction − · Long>Short  
+Inventory_Skew / Adverse_Selection は Fusion/quote JOIN 待ち。
+
+正本: `data/mm_research/daily/2026-09-27_csr541_umm_champion_freeze_lock.json` · `umm_pnl_attribution.py` · champions/
+
+## 51. Adverse≠Latency 二重計上回避テンプレート（CSR-542 · 2026-09-27 22:45:00 JST）
+
+**Adverse = Actual outcome（恒等式に1回）· Latency = Condition（控除禁止）· CF = Research only。**
+
+### 22:00 実測（primary）で閉じたもの
+Hold Ladder L0..L4 = +46.48bp = UMM 1h Net · residual **0.00** · identity_ok=TRUE  
+L0+L1 = +38.02bp が主収益 · L3 は薄利+HS10%
+
+### 埋めないもの（推定禁止）
+Gross Spread / Adverse Markout / Latency KPI · UMM trade-level join 待ち  
+`latency_cost_bp` は Actual 表で **FORBIDDEN**
+
+### CSR-521 CF（Actualに足さない）
+Δ30=+12.36 · Virtual@30=58.84 · L2+L3 Δ=+13.29（独立CF）· id_ok
+
+正本: `umm_economic_attribution_template.py` · `2026-09-27_csr542_*_template_v2.{json,md}` · lock JSON
+GOV: Champion freeze維持 · LIVE=OFF · ENFORCE=0
+
+## 52. 夜間判定 — UMM Inventory FAIL · CSR-521 Hazardへ（CSR-543 · 2026-09-28 07:05:00 JST）
+
+**Arena部品は勝つ。統合UMMはInventory tailで負ける。CSR-521は有望だが23:00反例で未証明。**
+
+### 公式評価
+| 対象 | 判定 |
+|------|------|
+| UMM CSR-504 | Spread PROMISING · Inventory **FAILING** · 24h **−67.06bp** · WR60% · **Economic PASS=NO** · params凍結維持 |
+| CSR-521 | **PROMISING/OBSERVE** · 30s 8/9 · ΣΔ+213.91 · 23:00 −9.76反例 · **完璧証明ではない** |
+| 次の521 | 固定horizon禁止 → **Hazard Unwind Risk Score**（L2/L3 ∧ MAE ∧ Adverse ∧/∨ Micro） |
+| Arena MM | STRONG RESEARCH · SpreadCapture/InventorySkew/Micro · AUTO PROMOTE=NO |
+| TF2BP / PEG | FROZEN / REJECT |
+| Latency | CSR-542維持 · Actual控除禁止（測定系1ms表示の真偽未確定） |
+
+### P0
+1. CSR-521 Hazard CF（L0/L1保護 · Loss-tail compression）
+2. UMM vs Arena decomposition（部品勝ち vs 統合負け）
+3. Observation restart audit（wall-clock≠process uptime）
+
+### P0-Ops incident
+`exit_reason=` をPEG/TF2BPへ渡し TypeError FATAL → 再起動ループ。TypeError fallbackで止血。継続性は未証明。
+
+正本: `2026-09-28_csr543_overnight_verdict_lock.json` · `csr521_hazard_unwind_design.py` · `umm_vs_arena_decomposition.py` · `observation_restart_audit.py`  
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF
+
+## 53. CSR-544 — 24h完走 NOT PASS · CU v2 Risk Score · 3軸Condition（2026-09-28 07:10:00 JST）
+
+**最終 24h −67.06bp / 1628戦 / WR60% · Economic PASS=NO。一律30s REJECT。**
+
+### 4点安全修正（採択）
+1. P0トリガー = **Risk Points**（OR禁止 · hold≥60s単独で切らない）
+2. `current_pnl` / `mae` / `mfe` / `pnl_slope_5s` **分離**
+3. Aggressive Maker = **CF grid 0.5/1/2/3s**（2s固定しない）
+4. HardStop = **`exit_reason='HARD_STOP'`**（PnL≤−4.8推定禁止）· Adverse LOW/MID/HIGH
+
+### 実装順
+P0-A Virtual score OBSERVE → P0-B Maker CF grid → P1 3軸SQL → P2 Pearson監査(仮説) → 最後にEconomic PASS
+
+### Latency
+Actual恒等式に入れない · Condition sliceのみ（CSR-542 KEEP）
+
+正本: `csr521_conditional_unwind_v2.py` · `umm_3axis_attribution_sql.py` · `2026-09-28_csr544_*`  
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · FROZEN=YES
+
+## 54. CSR-545 — PEG_v3 REJECT · Aging CF（2026-09-28）
+
+- PEG_v3 REJECT · Aging PRIMARY_SUSPECT · CF 3/5/10/20/30 + BestMaker + Baseline
+- Capture INVALID/MASKED · LIVE=OFF · ENFORCE=0
+- 正本: `2026-09-28_csr545_peg_*`
+
+## 55. CSR-546 — Council Teacher · Adverse NULL · Independent Veto（2026-09-28）
+
+- Architecture GOOD · Teacher=candidate/decision · final禁止 · SHADOW_OFF→NULL
+- Fake-BO Veto CF独立 · Librarian RESEARCH ONLY · WIRE=NO · ENFORCE=0
+- 正本: `2026-09-28_csr546_council_teacher_schema_lock.json`
+
+## 56. CSR-547 — Hazard 10–20s · 30s blanket NOT ROBUST（2026-09-28）
+
+- CF 16窓: 10s/20s全勝 · 30sは15:00反例 · L1壊滅(11:00) → Ladder格下げ
+- P0 = Inventory Hazard Detection · Latency provenance · ENFORCE=0
+- 正本: `2026-09-28_csr547_*`
+
+## 57. CSR-548 — PEG_v3 HARD REJECT · Aging CF一変数（2026-09-28）
+
+- Δ−303bp · AE残存→Entry凍結 · Aging 94 = P0 SUSPECT未有罪 · PEG_v4禁止
+- CF matrix: 3s Taker vs Best-Maker · Capture EXCLUDED · ENFORCE=0
+- 正本: `2026-09-28_csr548_peg_v3_hard_reject_lock.json`
+
+## 58. CSR-549 — Council 08–22h teacher（2026-09-28）
+
+- 14教師行 · 13:00 STALE除外 · Fake-BO CF優先12/18/20 · cand≠dec=confゲート
+- Adverse NULL · final=HOLD 教師禁止 · WIRE=NO
+- 正本: `2026-09-28_csr549_council_0800_2200_teacher_lock.json`
+
+## 59. CSR-550 — Adverse×Ladder×MAE · integrity HOLD（2026-09-28 22:23:14 JST）
+
+- P0: CU(L2+MAE+Adv) · CSR-539 integrity · UMM Worst-MAE path
+- Adverse Economic HOLD · CSR-521 STRONGLY PROMISING · PEG REJECT · ENFORCE=0
+- 正本: `2026-09-28_csr550_*`
+
+## 60. CSR-551 — Council CF Scorecard · 538 CANONICAL（2026-09-28 22:23:14 JST）
+
+- CSR-531 TRAINING NO · STALE/final汚染除外 · Direction=future mid CF only
+- Scorecard A–E template · Conf 0.65 CF · Fake-BO P0 · Adverse wait valid=True
+- 正本: `2026-09-28_csr551_council_cf_scorecard_lock.json`

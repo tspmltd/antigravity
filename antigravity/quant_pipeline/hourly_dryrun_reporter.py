@@ -153,11 +153,45 @@ class HourlyDryRunReporter:
                 f"   • 24h: **`{r_24h_bp:+.2f} bp`** ({r_24h_t}戦/{r_24h_wr:.0f}% / ¥{r_24h_jpy:+,.0f})"
             )
 
-        # 3. 4AGENT 評議会合議データ
-        verdict = council.get("verdict", {})
-        regime = verdict.get("market_regime", "normal")
-        adv_score = verdict.get("adverse_score", 0.0)
-        action = verdict.get("recommended_action", "HOLD")
+        # 3. 4AGENT 評議会合議データ（CSR-531: state は flat CouncilVerdict）
+        # 旧バグ: verdict.recommended_action を読んで常に HOLD デフォルト → 廃止
+        regime = (
+            council.get("trend_regime")
+            or council.get("active_regime")
+            or (council.get("verdict") or {}).get("market_regime")
+            or "range"
+        )
+        adv_valid = bool(council.get("adverse_score_valid", False))
+        raw_adv = council.get("adverse_score")
+        if raw_adv is None and not adv_valid:
+            adv_score = None
+        else:
+            try:
+                adv_score = float(raw_adv) if raw_adv is not None else None
+            except (TypeError, ValueError):
+                adv_score = None
+            if not adv_valid:
+                adv_score = None  # CSR-546: SHADOW_OFF の 0 を成功扱いにしない
+        candidate_action = str(council.get("candidate_action") or "hold")
+        decision_action = str(council.get("decision_action") or "hold")
+        final_action = str(council.get("final_action") or "hold")
+        veto = bool(council.get("veto") or council.get("hard_veto_active"))
+        veto_reason = council.get("veto_reason")
+        exec_allowed = bool(council.get("execution_allowed", False))
+        cand_conf = float(council.get("candidate_confidence") or 0.0)
+        dec_conf = float(council.get("decision_confidence") or 0.0)
+        schema_v = str(council.get("schema_version") or "LEGACY_PRE_CSR531")
+        hyp_dir = str(
+            council.get("trend_direction")
+            or (council.get("conclusions") or {})
+            .get("TrendFollowAgent", {})
+            .get("metrics", {})
+            .get("trend_direction")
+            or "unknown"
+        )
+        # CSR-538: 旧stateは candidate欠落→HOLD既定 · final=BUY 残留 — 教師に使うな
+        stale_schema = "candidate_action" not in council or schema_v.startswith("LEGACY")
+        action = decision_action if "decision_action" in council else "hold"
 
         # 4. 全Dry-run 合算損益 (1h & 24h)
         total_1h_bp = umm_tf_1h_bp + arena_1h_bp
@@ -166,6 +200,7 @@ class HourlyDryRunReporter:
         total_24h_jpy = umm_tf_24h_jpy + arena_24h_jpy
 
         color = 0x2ECC71 if total_24h_bp >= 0 else 0xE74C3C
+        adv_disp = "NULL(SHADOW_OFF)" if adv_score is None else f"{adv_score:.2f}"
 
         embed = {
             "title": f"📊 【DRYRUN 1時間毎 統合定期レポート】 ({trigger_reason})",
@@ -173,7 +208,7 @@ class HourlyDryRunReporter:
                 f"🕒 **集計時刻**: `{now_str}`\n"
                 f"🎯 **直近 1時間 (1h) 全体合算**: **`{total_1h_bp:+.2f} bp`** (`¥{total_1h_jpy:+,.1f}`)\n"
                 f"📈 **過去24時間 (24h) 累積合算**: **`{total_24h_bp:+.2f} bp`** (`¥{total_24h_jpy:+,.1f}`)\n"
-                f"🏛️ **4AGENT合議**: 相場レジーム:`{regime}` | 逆選択スコア:`{adv_score:.2f}` | 判定:`{action}`\n"
+                f"🏛️ **4AGENT合議**: 相場レジーム:`{regime}` | 逆選択スコア:`{adv_disp}` | 判定:`{action}`\n"
                 f"🔒 **運用方針**: **自動調整完全禁止 (FROZEN / MANUAL-ONLY)**"
             ),
             "color": color,
@@ -269,32 +304,57 @@ class HourlyDryRunReporter:
         self.notifier.post_observation({"embeds": [obs_embed]})
 
         # 3. 4AGENT 確定結論チャンネル (結論) へ合議判定を送信
+        veto_disp = f"YES/{veto_reason}" if veto else "NO"
+        stale_banner = (
+            "⚠️ **STALE_SCHEMA**: council state lacks CSR-531 fields "
+            "(candidate defaulted HOLD · do NOT teach on final) · restart run_pipeline\n"
+            if stale_schema else ""
+        )
+        adv_lvl = council.get("adverse_risk_level", "SHADOW_OFF")
         conc_embed = {
             "title": f"🏛️ 【4AGENT 合同評議会 確定結論】 ({trigger_reason})",
             "description": (
-                f"🕒 **確定時刻**: `{now_str}`\n"
-                f"🎯 **合議確定アクション**: **`{action.upper()}`** (確信度: `{council.get('final_confidence', 0.0):.2f}`)\n"
-                f"📈 **市場レジーム**: `{regime}` | **逆選択リスク**: `{council.get('adverse_risk_level', 'SAFE')}` (Score: `{adv_score:.2f}`)"
+                f"🕒 **確定時刻**: `{now_str}` · schema=`{schema_v}`\n"
+                f"{stale_banner}"
+                f"🧭 **hypothesis_direction**: `{hyp_dir}` · "
+                f"**candidate**: **`{candidate_action.upper()}`** ({cand_conf:.2f}) · "
+                f"**decision**: **`{decision_action.upper()}`** ({dec_conf:.2f})\n"
+                f"🛡️ **veto**: `{veto_disp}` · **execution_allowed**: `{exec_allowed}`\n"
+                f"🎯 **final_action**: `{final_action.upper()}` "
+                f"(⚠️ OBSERVE時は常にHOLD — **final単独教師禁止**)\n"
+                f"📈 **regime**: `{regime}` | **Adverse**: `{adv_lvl}` "
+                f"score=`{adv_disp}` · valid=`{adv_valid}` · **Economic PASS=NO** (SHADOW_OFFの0≠安全)"
             ),
-            "color": 0x2ECC71 if action.lower() == "buy" else (0xE74C3C if action.lower() == "sell" else 0x95A5A6),
+            "color": (
+                0xE67E22 if veto
+                else (
+                    0x2ECC71 if decision_action.lower() in ("buy", "sell")
+                    else (0x9B59B6 if decision_action.lower() == "exit" else 0x95A5A6)
+                )
+            ),
             "fields": [
                 {
                     "name": "各エージェント結論 (Agent Conclusions)",
                     "value": (
-                        f"• **MicrostructureAgent**: `{council.get('conclusions', {}).get('MicrostructureAgent', {}).get('verdict', 'NEUTRAL')}` ({council.get('conclusions', {}).get('MicrostructureAgent', {}).get('explanation', '-')})\n"
-                        f"• **TrendFollowAgent**: `{council.get('conclusions', {}).get('TrendFollowAgent', {}).get('verdict', 'NEUTRAL')}` ({council.get('conclusions', {}).get('TrendFollowAgent', {}).get('explanation', '-')})\n"
-                        f"• **DuckDBOptimizerAgent**: `{council.get('conclusions', {}).get('DuckDBOptimizerAgent', {}).get('verdict', 'OPTIMAL')}` ({council.get('conclusions', {}).get('DuckDBOptimizerAgent', {}).get('explanation', '-')})\n"
-                        f"• **AdverseResearchAgent**: `{council.get('conclusions', {}).get('AdverseResearchAgent', {}).get('verdict', 'SAFE')}` ({council.get('conclusions', {}).get('AdverseResearchAgent', {}).get('explanation', '-')})"
+                        f"• **MicrostructureAgent** (Entry Veto): `{council.get('conclusions', {}).get('MicrostructureAgent', {}).get('verdict', 'NEUTRAL')}` ({council.get('conclusions', {}).get('MicrostructureAgent', {}).get('explanation', '-')})\n"
+                        f"• **TrendFollowAgent** (Direction): `{council.get('conclusions', {}).get('TrendFollowAgent', {}).get('verdict', 'NEUTRAL')}` ({council.get('conclusions', {}).get('TrendFollowAgent', {}).get('explanation', '-')})\n"
+                        f"• **DuckDBOptimizerAgent** (Research only): `{council.get('conclusions', {}).get('DuckDBOptimizerAgent', {}).get('verdict', 'OPTIMAL')}` ({council.get('conclusions', {}).get('DuckDBOptimizerAgent', {}).get('explanation', '-')})\n"
+                        f"• **AdverseResearchAgent** (SHADOW): `{council.get('conclusions', {}).get('AdverseResearchAgent', {}).get('verdict', 'SHADOW')}` ({council.get('conclusions', {}).get('AdverseResearchAgent', {}).get('explanation', '-')})"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "戦略執行ディレクティブ",
-                    "value": "\n".join([f"• {d}" for d in council.get("strategy_directives", [])]) or "特記事項なし",
+                    "name": "Action Layers（教師=candidate/decision · final単独禁止 · CSR-538）",
+                    "value": (
+                        f"• hypothesis=`{hyp_dir}` · candidate=`{candidate_action}` · "
+                        f"decision=`{decision_action}` · final=`{final_action}` · HOLD≠EXIT\n"
+                        f"• Research reference weights · auto_apply=`OFF`\n"
+                        + ("\n".join([f"• {d}" for d in council.get("strategy_directives", [])[:8]]) or "特記事項なし")
+                    ),
                     "inline": False,
                 }
             ],
-            "footer": {"text": "⚖️ Antigravity FourAgentsCouncil • 結論アーカイブ"},
+            "footer": {"text": "⚖️ Antigravity FourAgentsCouncil · CSR-538 · WIRE=NO · ENFORCE=0"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.notifier.post_conclusion({"embeds": [conc_embed]})
@@ -344,9 +404,15 @@ class HourlyDryRunReporter:
         except Exception as e:
             alpha_stats = {
                 "total_completed_trades": 0,
-                "correlation_analysis": {"pearson_r": -0.23, "slope_beta_bp_per_score": -0.06, "r_squared": 0.05},
+                "correlation_analysis": {"pearson_r": 0.0, "slope_beta_bp_per_score": 0.0, "r_squared": 0.0},
                 "quadrant_matrix": {},
-                "commander_certification": {"is_certified": True, "title": "👑 【司令塔認定】", "summary": "統計的検証稼働中"}
+                "commander_certification": {
+                    "is_certified": False,
+                    "economic_pass": False,
+                    "title": "【未認定 / 例外】",
+                    "summary": f"analyze失敗: {e}",
+                },
+                "adverse_economic_pass": False,
             }
         self.notifier.post_alpha_vs_adverse(alpha_stats)
 
