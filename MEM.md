@@ -1806,3 +1806,6 @@ GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · FROZEN=YES
 - CSR-531 TRAINING NO · STALE/final汚染除外 · Direction=future mid CF only
 - Scorecard A–E template · Conf 0.65 CF · Fake-BO P0 · Adverse wait valid=True
 - 正本: `2026-09-28_csr551_council_cf_scorecard_lock.json`
+
+### Git
+- antigravity `c2f8817` · gapcore `da2dd01` (CSR-545–551 lock)
