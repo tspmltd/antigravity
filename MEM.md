@@ -1809,3 +1809,27 @@ GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · FROZEN=YES
 
 ### Git
 - antigravity `c2f8817` · gapcore `da2dd01` (CSR-545–551 lock)
+
+## 61. CSR-552 — Arena Shadow Execution（2026-09-28 22:44:24 JST）
+
+- Arena MM = Pricing/Filter control · UMM = Inventory lifecycle under test
+- Shadow JSONL on SpreadCapture/InventorySkew/MicroSpread entry · AE+CF inventory PENDING join
+- P0 Hazard Model · P3 Component Ablation · Latency=Condition · ENFORCE=0
+- 正本: `2026-09-28_csr552_arena_shadow_execution_lock.json` · `data/mm_research/arena_shadow_execution.jsonl`
+
+## 62. CSR-553 — UMM Ablation A0–A5（2026-09-28 22:48:45 JST）
+
+- Phase1=A0/A1/A3 · A3 FROZEN · A5=CSR-521 CF only · same-event compare
+- 正本: `2026-09-28_csr553_umm_ablation_plan_v1_lock.json`
+
+## 63. CSR-554 — CSR-521 CF DuckDB（2026-09-28 22:48:45 JST）
+
+- mm_trade_cf_log · Δ=Virtual−Actual · BIG_DAMAGE gate · Latency=Condition
+- SQL: `antigravity/quant_pipeline/sql/csr521_conditional_unwind_cf.sql`
+- 正本: `2026-09-28_csr554_csr521_cf_duckdb_lock.json`
+
+## 64. CSR-555 — Hazard閾値校正（2026-09-28 22:48:45 JST）
+
+- Snapshot教師 · HARD_STOP実ログ · Economic EV閾値 · Accuracy禁止
+- Bucket→任意Logit · Exit CF併記 · OOS必須 · ENFORCE=0
+- 正本: `2026-09-28_csr555_hazard_threshold_calibration_lock.json`

@@ -689,6 +689,22 @@ class ApprovedStrategyArena:
                 "reason": reason,
             }
         )
+        # CSR-552: Arena Shadow Execution (OBSERVE · Pricing vs Inventory separation)
+        try:
+            from antigravity.quant_pipeline.arena_shadow_execution import on_arena_entry
+            mid_est = price  # bar MM uses limit≈fill; mid refined later via board join
+            on_arena_entry(
+                strategy=str(s.name or ""),
+                strat_id=str(s.strat_id or ""),
+                side=side,
+                quote_price=float(price),
+                mid=float(mid_est),
+                spread=float(spread),
+                reason=reason,
+                signal_ts=float(s.entry_time),
+            )
+        except Exception:
+            pass
         self._log_to_file(f"[{s.strat_id}] 📥 新規約定: {side.upper()} @ ¥{price:,.0f} ({reason}) | Adv:{adverse_score:.1f}")
 
     def _close_position(self, s: SingleStrategyState, price: float, pnl: float, reason: str):
