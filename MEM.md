@@ -1833,3 +1833,5 @@ GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · FROZEN=YES
 - Snapshot教師 · HARD_STOP実ログ · Economic EV閾値 · Accuracy禁止
 - Bucket→任意Logit · Exit CF併記 · OOS必須 · ENFORCE=0
 - 正本: `2026-09-28_csr555_hazard_threshold_calibration_lock.json`
+
+Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
