@@ -194,11 +194,15 @@ class FourAgentsCouncil:
         # --- Micro → risk / veto ---
         p_side = "none"
         p_score = 0.0
+        buy_pressure_v2 = 0.0
+        sell_pressure_v2 = 0.0
         fake_bo = False
         micro_state = "NEUTRAL"
         if micro_c:
             p_side = str(micro_c.metrics.get("pressure_side", "none") or "none")
             p_score = float(micro_c.metrics.get("pressure_score", 0.0) or 0.0)
+            buy_pressure_v2 = float(micro_c.metrics.get("buy_pressure_v2", 0.0) or 0.0)
+            sell_pressure_v2 = float(micro_c.metrics.get("sell_pressure_v2", 0.0) or 0.0)
             fake_bo = bool(micro_c.metrics.get("fake_breakout", False))
             micro_state = str(micro_c.verdict or "NEUTRAL")
             if fake_bo or micro_c.hard_veto:
@@ -244,11 +248,28 @@ class FourAgentsCouncil:
             directives.append(f"decision_action=EXIT conf={decision_confidence:.2f} (低確信度)")
 
         # Veto は decision を書き換えず、執行だけ止める（CF用に candidate/decision を残す）
+        # CSR-558: Effective vs Redundant
+        veto_eff = bool(hard_veto) and decision_action in ("buy", "sell")
         if hard_veto:
             size_mult = 0.0
+            tag = "EFFECTIVE" if veto_eff else "REDUNDANT"
             directives.append(
-                f"Veto CF対象: candidate={candidate_action.upper()} decision={decision_action.upper()}"
+                f"Veto CF ({tag}): candidate={candidate_action.upper()} "
+                f"decision={decision_action.upper()} · "
+                f"veto_effective={veto_eff}"
             )
+
+        # decision_gate_reason (CSR-558)
+        if candidate_action in ("buy", "sell") and decision_action == "hold" and calc_conf < 0.65:
+            decision_gate_reason = "CONFIDENCE_GATE"
+        elif candidate_action == decision_action:
+            decision_gate_reason = "PASS_THROUGH"
+        else:
+            decision_gate_reason = "OTHER_GATE"
+        if hard_veto and not veto_eff:
+            decision_gate_reason = f"{decision_gate_reason}+VETO_REDUNDANT"
+        elif veto_eff:
+            decision_gate_reason = f"{decision_gate_reason}+VETO_EFFECTIVE"
 
         # OBSERVE / LIVE=OFF: 執行は常に不許可（今夜パラメータ変更なし）
         execution_allowed = False
@@ -290,10 +311,12 @@ class FourAgentsCouncil:
             pressure_score=round(p_score, 3),
             veto=hard_veto,
             veto_reason=veto_reason,
+            veto_effective=veto_eff,
             adverse_score=(round(adverse_score, 3) if adverse_score_valid and adverse_score is not None else None),
             adverse_score_valid=adverse_score_valid,
             decision_action=decision_action,
             decision_confidence=decision_confidence,
+            decision_gate_reason=decision_gate_reason,
             execution_allowed=execution_allowed,
             execution_gate_reason=(
                 "HARD_VETO" if hard_veto
@@ -314,7 +337,13 @@ class FourAgentsCouncil:
                 "label": "research_reference_weights_not_applied",
             },
             strategy_directives=directives,
-            schema_version="csr538_v1",
+            schema_version="csr564_v1",
+            wire="NO",
+            enforce=0,
+            state_write_ts_ms=now_ms,
+            freshness_max_age_sec=120.0,
+            buy_pressure_v2=round(buy_pressure_v2, 4),
+            sell_pressure_v2=round(sell_pressure_v2, 4),
         )
 
         self.latest_verdict = verdict
@@ -345,6 +374,7 @@ class FourAgentsCouncil:
                     (micro_c.metrics.get("imbalance") if micro_c else 0.0) or 0.0
                 ),
                 timestamp_ms=now_ms,
+                veto_effective=veto_eff,
             )
         except Exception:
             pass
@@ -380,13 +410,15 @@ class FourAgentsCouncil:
         dec = (v.decision_action or "hold").upper()
         fin = (v.final_action or "hold").upper()
         veto_s = f"YES ({v.veto_reason})" if v.veto else "NO"
+        ve = bool(getattr(v, "veto_effective", False))
+        veto_tag = "EFFECTIVE" if ve else ("REDUNDANT" if v.veto else "—")
         embed = {
             "title": "🏛️ 【4AGENT 合同評議会・最新分析結論＆戦略反映レポート】",
             "description": (
-                f"現在時刻: `{now_str}` · schema=`{getattr(v, 'schema_version', 'csr531_v1')}`\n"
+                f"現在時刻: `{now_str}` · schema=`{getattr(v, 'schema_version', 'csr558_v1')}`\n"
                 f"**candidate**: `{cand}` ({v.candidate_confidence:.2f}) · "
                 f"**decision**: `{dec}` ({v.decision_confidence:.2f}) · "
-                f"**veto**: `{veto_s}`\n"
+                f"**veto**: `{veto_s}` · **veto_effective**: `{ve}` ({veto_tag})\n"
                 f"**execution_allowed**: `{bool(v.execution_allowed)}` · "
                 f"**final**: `{fin}` ({v.final_confidence:.2f}) · size×`{v.size_multiplier:.1f}`\n"
                 f"⚠️ final=HOLD を戦略判断HOLDとして集計するな（OBSERVE時は常に final=HOLD）\n"

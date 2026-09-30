@@ -42,6 +42,18 @@ class MicrostructureAgent:
             pressure_score = min(1.0, max(0.0, raw_score))
         # imb 単独では pressure を立てない（成行確認なしは観測のみ）
 
+        # CSR-564 P2 SHADOW — continuous dual pressure (does NOT replace v1 pressure_side)
+        # Symmetric scores for Trend×Pressure quadrant EV later. Not wired to veto/decision.
+        taker_net = float(taker_buy) - float(taker_sell)
+        buy_pressure_v2 = min(
+            1.0,
+            max(0.0, max(0.0, imb) * 1.15 + max(0.0, taker_net) * 2.0 + max(0.0, snap.taker_aggressiveness) * 0.25),
+        )
+        sell_pressure_v2 = min(
+            1.0,
+            max(0.0, max(0.0, -imb) * 1.15 + max(0.0, -taker_net) * 2.0 + max(0.0, snap.taker_aggressiveness) * 0.25),
+        )
+
         # 2. フェイクブレイク判定 (cancel率が高く、Taker継続性がないだまし)
         fake_breakout = (snap.cancel_rate >= 0.55 and snap.taker_aggressiveness < 0.15)
 
@@ -109,6 +121,8 @@ class MicrostructureAgent:
             "timestamp": snap.timestamp,
             "pressure_side": pressure_side,
             "pressure_score": round(pressure_score, 3),
+            "buy_pressure_v2": round(buy_pressure_v2, 4),
+            "sell_pressure_v2": round(sell_pressure_v2, 4),
             "fake_breakout_flag": fake_breakout,
             "latency_risk_flag": latency_risk,
             "micro_deviation": snap.micro_dev,
@@ -141,6 +155,8 @@ class MicrostructureAgent:
                 "micro_dev": snap.micro_dev,
                 "pressure_side": pressure_side,
                 "pressure_score": pressure_score,
+                "buy_pressure_v2": round(buy_pressure_v2, 4),
+                "sell_pressure_v2": round(sell_pressure_v2, 4),
                 "fake_breakout": fake_breakout,
                 "latency_risk": latency_risk,
                 "adverse_risk_side": adverse_side,

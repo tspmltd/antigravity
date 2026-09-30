@@ -1901,3 +1901,29 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - GOV: WIRE=NO · ENFORCE=0 · LIVE=OFF · auto_apply=OFF · Economic PASS=NO
 - 正本: `2026-09-30_csr562_pdca30_diagnosis_execution_lock.json`
 - Git: antigravity `1c66251` · gapcore `3252e3c`（CSR-558–562）
+
+## 71. CSR-563 — Council STALE freeze · run_pipeline ImportError（2026-10-01）
+
+- **現象:** 03:00–07:00 Council が ¥-2872 / MicroDev-532 / imb-0.01 / strength1.00 で完全同一
+- **判定:** テスト用固定フィードではない。`agents_council_state.json` が **02:01 JST で更新停止**（age≈5.5h）し、hourly reporter が STALE を再掲
+- **根因:** `microstructure_agent.py` がバッチ用 `MicrostructureResearchAgent` に置換 → `run_pipeline` が `MicrostructureAgent` ImportError → Watchdog 再起動ループ（≈1151回）
+- **復旧:** LIVE MicrostructureAgent を git HEAD から復元 · Research は `microstructure_research_agent.py` へ分離 · pipeline 07:35 再稼働 · state age≈秒
+- **教師禁止:** 2026-10-01 03–07h Council 行は STALE（teach 禁止）
+- **GOV維持:** WIRE=NO · ENFORCE=0 · LIVE=OFF · auto_apply=OFF
+- **評価:** SpreadCaptureMM=FROZEN対照 · UMM/PEG_v3=INVESTIGATE/QUARANTINE（Aging摩擦・521）
+- 正本: `2026-10-01_csr563_council_stale_pipeline_import_error_lock.json`
+
+## 72. CSR-564 — OBSERVE collect · State Freshness Acceptance Gate（2026-10-01）
+
+- **局面:** LIVE接近ではない。OBSERVEのまま `candidate/decision/veto → 数十秒後 forward mid` を蓄積
+- **教師経路:** FusionDecisionLog（+ Council layers）→ DuckDB研究者（意思決定者にしない）
+- **P0 Acceptance Gate:** データ鮮度・重複・stale snapshot（信号精度より先）
+  - `state_age_sec ≤ 120` · `freshness_ok` · `teacher_valid`
+  - identical signature streak < 3 · distinct_sig ≥ 2（n≥3）
+  - 03–08h JST 2026-10-01 teach blackout（CSR-563）
+  - Gate PASS前に Economic PASS / signal accuracy 判定禁止
+- **P1:** Trend forward-mid COLLECT（`strength_raw/clipped` · `fwd_1s..60s`）· Trend logic FROZEN
+- **P2:** `buy_pressure_v2` / `sell_pressure_v2` SHADOW（v1残置）· 4象限EVはGate後
+- **P3:** FakeBO CF COLLECT継続 · **P4:** Adverse SHADOW_OFF · NULL→0→SAFE禁止
+- **GOV:** LIVE=OFF · WIRE=NO · ENFORCE=0 · auto_apply=OFF · Economic PASS=NO
+- 正本: `state_freshness.py` · `2026-10-01_csr564_observe_freshness_acceptance_gate_lock.json` · `sql/csr564_state_freshness_trend_micro_v2.sql`

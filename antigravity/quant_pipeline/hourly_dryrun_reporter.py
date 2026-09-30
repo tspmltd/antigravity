@@ -25,6 +25,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from antigravity.quant_pipeline.quant_discord_notifier import QuantDiscordNotifier
+from antigravity.quant_pipeline.state_freshness import teacher_valid as csr564_teacher_valid
 
 JST = timezone(timedelta(hours=9))
 UMM_TF_STATE = os.path.join(BASE_DIR, "data", "dryrun_umm_tf2bp_state.json")
@@ -189,9 +190,14 @@ class HourlyDryRunReporter:
             .get("trend_direction")
             or "unknown"
         )
-        # CSR-538: 旧stateは candidate欠落→HOLD既定 · final=BUY 残留 — 教師に使うな
+        # CSR-538/564: 旧state・STALE age・同一値凍結 — 教師に使うな
         stale_schema = "candidate_action" not in council or schema_v.startswith("LEGACY")
         action = decision_action if "decision_action" in council else "hold"
+        freshness = csr564_teacher_valid(council)
+        state_age = freshness.get("state_age_sec")
+        freshness_ok = bool(freshness.get("freshness_ok"))
+        teacher_ok = bool(freshness.get("teacher_valid"))
+        sig_fp = freshness.get("signature_fp", "")
 
         # 4. 全Dry-run 合算損益 (1h & 24h)
         total_1h_bp = umm_tf_1h_bp + arena_1h_bp
@@ -305,10 +311,24 @@ class HourlyDryRunReporter:
 
         # 3. 4AGENT 確定結論チャンネル (結論) へ合議判定を送信
         veto_disp = f"YES/{veto_reason}" if veto else "NO"
-        stale_banner = (
-            "⚠️ **STALE_SCHEMA**: council state lacks CSR-531 fields "
-            "(candidate defaulted HOLD · do NOT teach on final) · restart run_pipeline\n"
-            if stale_schema else ""
+        stale_banner = ""
+        if stale_schema:
+            stale_banner += (
+                "⚠️ **STALE_SCHEMA**: council state lacks CSR-531 fields "
+                "(candidate defaulted HOLD · do NOT teach on final) · restart run_pipeline\n"
+            )
+        if not freshness_ok:
+            age_s = f"{state_age:.1f}s" if state_age is not None else "NA"
+            stale_banner += (
+                f"⚠️ **STALE_STATE**: age=`{age_s}` · "
+                f"reason=`{freshness.get('freshness_reason')}` · "
+                "**Acceptance Gate FAIL** · do NOT teach / CF this hour\n"
+            )
+        if freshness.get("teach_blackout"):
+            stale_banner += "⚠️ **TEACH_BLACKOUT** CSR-563 window · exclude from teacher lake\n"
+        teach_line = (
+            f"🧪 **teacher_valid**=`{teacher_ok}` · freshness_ok=`{freshness_ok}` · "
+            f"sig=`{sig_fp}` · CSR-564 Acceptance=FRESHNESS/DUP/STALE (not signal accuracy)\n"
         )
         adv_lvl = council.get("adverse_risk_level", "SHADOW_OFF")
         conc_embed = {
@@ -316,6 +336,7 @@ class HourlyDryRunReporter:
             "description": (
                 f"🕒 **確定時刻**: `{now_str}` · schema=`{schema_v}`\n"
                 f"{stale_banner}"
+                f"{teach_line}"
                 f"🧭 **hypothesis_direction**: `{hyp_dir}` · "
                 f"**candidate**: **`{candidate_action.upper()}`** ({cand_conf:.2f}) · "
                 f"**decision**: **`{decision_action.upper()}`** ({dec_conf:.2f})\n"

@@ -21,25 +21,57 @@ JST = timezone(timedelta(hours=9))
 
 LEARNING_COLUMNS: List[str] = [
     "timestamp",
+    # hypothesis
     "hypothesis_direction",
     "hypothesis_strength",
+    "regime",
+    # candidate
     "candidate_action",
     "candidate_confidence",
-    "micro_veto",
-    "veto_reason",
+    # decision
     "decision_action",
     "decision_confidence",
+    "decision_gate_reason",
+    # veto (CSR-558: effective ≠ redundant)
+    "micro_veto",
+    "veto_reason",
+    "veto_effective",
+    # execution
     "execution_allowed",
     "final_action",
+    # adverse
+    "adverse_state",
+    "adverse_score",
+    "adverse_score_valid",
+    # micro
+    "imbalance",
+    "micro_dev",
+    "fake_breakout",
+    # labels (forward mid — Direction Accuracy only)
+    "forward_mid_1s_bp",
+    "forward_mid_3s_bp",
+    "forward_mid_10s_bp",
+    "forward_mid_30s_bp",
+    "forward_mid_60s_bp",
+    # CSR-564 P0 freshness / P1 collect / P2 shadow
+    "state_age_sec",
+    "freshness_ok",
+    "teacher_valid",
+    "signature_fp",
+    "strength_raw",
+    "strength_clipped",
+    "raw_move",
+    "buy_pressure_v2",
+    "sell_pressure_v2",
+    # research CF layers
+    "candidate_cf_30s_bp",
+    "decision_cf_30s_bp",
+    "veto_cf_30s_bp",
+    # legacy aliases kept for older joins
     "cf_1s_bp",
     "cf_3s_bp",
     "cf_10s_bp",
     "cf_30s_bp",
-    "regime",
-    "imbalance",
-    "micro_dev",
-    "adverse_score",
-    "adverse_score_valid",
     "realized_pnl_bp",
 ]
 
@@ -59,7 +91,12 @@ METRICS = {
     "veto_value": {
         "def": "CF_PnL_without_veto − CF_PnL_with_veto",
         "horizons_sec": [1, 3, 10, 30],
-        "note": "persistent negative without-veto ⇒ Micro Veto has economic value",
+        "population": "veto_effective == true ONLY",
+        "note": "Effective Veto only · redundant (decision HOLD + veto) excluded from Veto economics",
+    },
+    "confidence_gate_value": {
+        "def": "candidate BUY/SELL → decision HOLD via conf threshold · EV vs if traded",
+        "label_source": "candidate_action ≠ decision_action",
     },
     "confidence_calibration": {
         "def": "bucket conf 1.00 / 0.70–0.79 / … vs realized EV",
@@ -68,7 +105,17 @@ METRICS = {
     "regime_conditional_ev": {
         "def": "Trend×BUY / Trend×SELL / Range×BUY / Range×SELL",
     },
+    "council_value_decomposition": {
+        "formula": "Candidate Alpha + Confidence Gate Value + Micro Veto Value = Council Value",
+        "micro_veto_value": "Effective Veto only",
+    },
 }
+
+
+def veto_effective(*, veto: bool, decision_action: str) -> bool:
+    """CSR-558: real CF target iff decision was still BUY/SELL when veto fired."""
+    d = str(decision_action or "hold").lower()
+    return bool(veto) and d in ("buy", "sell")
 
 # Primary evidence Fake-BO windows from user log (CF cells empty until mid join)
 FAKE_BO_VETO_CASES = [
@@ -148,6 +195,11 @@ def build_lock() -> Dict[str, Any]:
             "WIRE": "NO",
             "ENFORCE": 0,
             "LIVE": "OFF",
+        },
+        "csr558_extension": {
+            "veto_effective": "veto AND decision_action IN (buy,sell)",
+            "redundant_veto_excluded_from_economics": True,
+            "adverse_population": "WHERE adverse_score_valid = true",
         },
         "core": "Score candidate and Veto independently — never collapse into final_action",
     }

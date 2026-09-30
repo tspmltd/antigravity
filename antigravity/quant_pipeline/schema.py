@@ -288,11 +288,14 @@ class CouncilVerdict:
     pressure_score: float = 0.0
     veto: bool = False
     veto_reason: Optional[str] = None
+    # CSR-558: Effective Veto = veto ∧ decision∈{buy,sell}; redundant (dec HOLD) excluded from Veto CF economics
+    veto_effective: bool = False
     # CSR-546: SHADOW_OFF の 0.0 は「安全」ではなく無効。valid=False なら NULL 扱い。
     adverse_score: Optional[float] = None
     adverse_score_valid: bool = False
     decision_action: str = "hold"
     decision_confidence: float = 0.0
+    decision_gate_reason: str = "PASS_THROUGH"  # CSR-558: CONFIDENCE_GATE / PASS_THROUGH / …
     execution_allowed: bool = False
     execution_gate_reason: str = "OBSERVE_MODE"  # CSR-532 Hands 理由
     final_action: str = "hold"
@@ -305,7 +308,13 @@ class CouncilVerdict:
     emergency_cancel_active: bool = False
     applied_weights: dict = field(default_factory=dict)
     strategy_directives: list = field(default_factory=list)
-    schema_version: str = "csr531_v1"
+    schema_version: str = "csr564_v1"
     wire: str = "NO"
     enforce: int = 0
+    # CSR-564 P0 State Freshness (reader computes age/ok; writer stamps write time)
+    state_write_ts_ms: Optional[int] = None
+    freshness_max_age_sec: float = 120.0
+    # CSR-564 P2 Micro Pressure v2 SHADOW features (not wired to veto/decision)
+    buy_pressure_v2: float = 0.0
+    sell_pressure_v2: float = 0.0
 
