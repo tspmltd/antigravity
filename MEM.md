@@ -1900,3 +1900,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - Arena FROZEN · 521はDuckDB一貫→SHADOW→Council後のみExit配線候補
 - GOV: WIRE=NO · ENFORCE=0 · LIVE=OFF · auto_apply=OFF · Economic PASS=NO
 - 正本: `2026-09-30_csr562_pdca30_diagnosis_execution_lock.json`
+- Git: antigravity `1c66251` · gapcore `3252e3c`（CSR-558–562）
