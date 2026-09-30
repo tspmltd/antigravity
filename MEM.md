@@ -1927,3 +1927,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **P3:** FakeBO CF COLLECT継続 · **P4:** Adverse SHADOW_OFF · NULL→0→SAFE禁止
 - **GOV:** LIVE=OFF · WIRE=NO · ENFORCE=0 · auto_apply=OFF · Economic PASS=NO
 - 正本: `state_freshness.py` · `2026-10-01_csr564_observe_freshness_acceptance_gate_lock.json` · `sql/csr564_state_freshness_trend_micro_v2.sql`
+- Git: antigravity `2ab3cc2` · gapcore `f05d923`
