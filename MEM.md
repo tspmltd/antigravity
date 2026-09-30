@@ -1835,3 +1835,68 @@ GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · FROZEN=YES
 - 正本: `2026-09-28_csr555_hazard_threshold_calibration_lock.json`
 
 Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
+
+## 65. CSR-556 — Early Toxicity · Arena Regime（2026-09-29 07:44:03 JST）
+
+- Arena Edge = regime-dependent（+553 ↔ −161）· 恒常Edge禁止
+- L0/L1良玉モデル BROKEN · CSR-521 = P0-A Early Tox + P0-B Deep Inv
+- @10s CF 8/8比較強 · 4軸 Attribution · Arena Regime Map · PEG REJECT
+- ENFORCE=0 · 正本: `2026-09-29_csr556_early_toxicity_arena_regime_lock.json`
+
+## 66. CSR-558 — Council Accuracy · Effective Veto（2026-09-29）
+
+- Adverse SHADOW_OFF → score=NULL · valid=False **PASS**（0≠安全）
+- cand≠dec 実発火: 01:00 conf gate · 04:00 conf+redundant FakeBO
+- Effective Veto CF: 02:00 BUY+FAKE_BO · 07:00 SELL+FAKE_BO
+- Redundant Veto（dec HOLD）は Veto 経済に入れない
+- P0: Council Accuracy Report · Candidate Alpha + Conf Gate + Micro Veto = Council Value
+- Librarian 00:00 PARTIAL_USEFUL（USEFUL3/NEED_MORE4）· ENFORCE=0
+- 正本: `2026-09-29_csr558_council_accuracy_veto_effective_lock.json`
+
+## 67. CSR-559 — 成績改善PDCA2 アーキテクチャ（2026-09-29）
+
+- PDCA1=一律ルール · PDCA2=realized_pnl教師→DuckDB直交分解→条件更新の閉ループ
+- Do=**NOT_STARTED** · Plan=LOCKED
+- Identity: Realized = Gross − Adverse − Inventory − Exit（residual→0）
+- Gate: P0-a parity → P0-b CSR-553 A0/A1/A3 → P1-a attribution → P1-b latency_ms → P2 CSR-521再スコア
+- GOV: NO CODE/PARAM · WIRE=NO · ENFORCE=0 · LIVE=OFF · auto_apply=OFF
+- 正本: `2026-09-29_csr559_pdca2_architecture_experiment_plan_lock.json`
+
+## 68. CSR-560 — PDCA2.2 Direction/FakeBO/Confidence SQL（2026-09-30）
+
+- P0 DuckDB: candidate forward EV by conf bucket (+ latency split)
+- FakeBO CF: **Effective only** (decision BUY/SELL) · redundant HOLD除外 · PASS n≥20+OOS
+- Confidence校正表: 0–.25 … 1.00 · mono_rate≥0.67 · 1.00 saturation監視(strength_raw)
+- GOV: WIRE=NO · ENFORCE=0 · Economic PASS=NO
+- 正本: `sql/csr560_pdca22_*.sql` · `2026-09-30_csr560_*_lock.json`
+
+## 69. CSR-561 — 成績改善PDCA3 · Inventory tail · Arena protect（2026-09-30）
+
+- **主題転換:** アルファ増産 → 勝率維持のまま UMM inventory **tail loss** を切る
+- **TIER_A PROTECT:** Arena winners FROZEN（SpreadCapture / MicroSpread / InventorySkew）· TF2BP Baseline FROZEN · 比較単位=`strategy_id`+param_hash
+- **P0:** CSR-521 L2/L3 conditional unwind CF · primary horizon **20s/30s** · 10sは比較のみ（固定採用禁止）· L0 KEEP · L4別レーン
+- **PASS:** medianΔ>0 · CF win≥60% · tail/HS改善 · paired trade_id · 多時間帯・多レジーム符号安定 · L0 protect audit · Discord 4–11h mean alone ≠ PASS
+- **並列:** Arena winner/loser contrast · Adverse CSR-539 integrity · Council Trend raw/clipped + FakeBO Effective CF（CSR-560）· PEG A/B/C/D + Aging provenance · tip×one_way SHADOW only
+- **禁止:** UMM全廃 · Arena retune · 10s/30s固定unwind採用 · imb閾値即変更 · PEG_v4 · W_PRESSURE auto · Adverse LIVE · auto_apply · WIRE/ENFORCE
+- **PDCA3:** Plan=LOCKED · Do=OBSERVE_CF_COLLECT · Check=PENDING · Act=CLOSED
+- GOV: WIRE=NO · ENFORCE=0 · LIVE=OFF · Economic PASS=NO
+- 正本: `sql/csr561_pdca3_l23_inventory_cf.sql` · `2026-09-30_csr561_pdca3_inventory_tail_arena_protect_lock.json`
+- **後続:** CSR-562 = PDCA 3.0 確定診断＋dual-P0 実行計画（本節を包含）
+
+## 70. CSR-562 — 成績改善PDCA 3.0 確定診断＆実行計画（2026-09-30）
+
+### 3大ボトルネック（確定）
+1. **UMM inventory tail:** WR高でも −400〜−770bp · L2/L3保有で −15〜−21bp · CSR-521 @30s CFが主ドライバー
+2. **PEG Aging摩擦:** AE_3s改善は偽の救済 · AgingGuard過剰発火 · BE3/FakeSkip=0 · A/B/C/D必須
+3. **Council歪み:** Trend 1.00 clip 62.5% · Micro pressure NONE · tip×one_way/FakeBOはSHADOW/CF · Adverse=539 hold
+
+### Dual P0（分析資源集中）
+- **P0-A:** L2/L3 × side × MAE × hold → @20/@30 CF · 固定秒カット禁止 · L0 KEEP
+- **P0-B:** PEG A/B/C/D + AgingGuard Value=`actual−hold_cf` + 99→0 provenance
+- SQL: `csr562_p0_l23_conditional_hazard_cf.sql` · `csr562_p0_peg_abcd_aging_cf.sql`
+
+### PDCA
+- Plan=LOCKED · Do=OBSERVE_LOG_EXTEND · Check=PENDING_LAKE · Act=CLOSED
+- Arena FROZEN · 521はDuckDB一貫→SHADOW→Council後のみExit配線候補
+- GOV: WIRE=NO · ENFORCE=0 · LIVE=OFF · auto_apply=OFF · Economic PASS=NO
+- 正本: `2026-09-30_csr562_pdca30_diagnosis_execution_lock.json`
