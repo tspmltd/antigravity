@@ -1928,3 +1928,19 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **GOV:** LIVE=OFF · WIRE=NO · ENFORCE=0 · auto_apply=OFF · Economic PASS=NO
 - 正本: `state_freshness.py` · `2026-10-01_csr564_observe_freshness_acceptance_gate_lock.json` · `sql/csr564_state_freshness_trend_micro_v2.sql`
 - Git: antigravity `2ab3cc2` · gapcore `f05d923`
+
+## 73. CSR-565 — 15–22h OBSERVE診断 · Inventory Control P0（2026-10-01/02）
+
+- **窓:** 15:00–22:11 JST 観測（CTRL / Discord hourly）
+- **最強信号:** Inventory Control Would-Unwind @30s mean +12.28 / med +12.96 / 7/8h+ / ΣΔ +98.24 bp
+  - @10s mean +46 bp だが振れ大 → **即10s採用禁止**（multiple testing）· primary固定=30s
+- **UMM:** 24h −770 bp · WR 54% → entry閾値より先に age×ladder×side×DD×horizon 分解
+- **TF2BP:** Baseline=frozen comparator ≠ profitable truth（1h悪化・信用の固定化禁止）
+- **PEG_v3:** 0/8h+ · AgingExits↑ · BE=0 · FakeSkip=0 → monolith改善禁止 · Ablation
+- **Arena強:** SpreadCaptureMM / MicroSpreadMM = P3 promotion候補（LIVEではない）
+- **Micro:** pressure≈none なのに tip_thin×one_way 観測 → tip SHADOW（閾値変更禁止）
+- **Acceptance Gate:** `P3-CTRL-01` n≥1000 · 複数hour/regime · Primary Δ@30s · ENFORCE禁止
+- **GOV:** WIRE=NO · ENFORCE=0 · LIVE=OFF · FROZEN · MANUAL-ONLY · Economic PASS=NO
+- **教師経路:** fusion_log ⊥ execution_log Parquet → realized_pnl → DuckDB研究者
+- CSR-564 freshness Gate はインフラ前提として存続（上書きしない）
+- 正本: `2026-10-01_csr565_15_22h_inventory_control_pdca_lock.json` · `sql/csr565_p3_ctrl01_inventory_control_stability.sql`
