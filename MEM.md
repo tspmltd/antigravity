@@ -1961,3 +1961,16 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **GOV:** WIRE=NO · ENFORCE=0 · LIVE=BLOCKED · FROZEN · Economic PASS=NO
 - 正本: `2026-10-02_csr566_conditional_inventory_umm_abc_latency_lock.json` · `sql/csr566_*.sql`
 - Git: antigravity `03a5509` · gapcore `3430006`
+
+## 75. CSR-567 — AUTONOMOUS MUTATION/VALIDATION · EmaTrend PAUSE（2026-10-02）
+
+- **Loop:** Cycle232 採択0/却下3 → 安全ブロック PASS · 改善能力 UNPROVEN
+  - 呼称: 「自律改善」→ **AUTONOMOUS MUTATION / VALIDATION**
+  - IMPROVED = OOSで親版を上回った時のみ（コード書換≠改善）
+- **EmaTrend_strat_aa70771f:** RESEARCH_PAUSE（INSUFFICIENT_EVIDENCE + NO_IMPROVEMENT）
+  - v1 SR−6.76 → v2/v3 −14.33 · n=4 · 追加EMA探索禁止 → 再開時は regime分解が先
+- **PEG_v3:** PROMOTION REJECT 維持（07:04 Δ−559 · Agingのみ · BE/Fake=0）→ Shadow ablation
+- **UMM:** 依然最大問題研究（−645bp@WR54%）· avg_win/loss/p95/HS/age/MAE/spread_entry
+- **新alpha優先:** 再開後 Arena SpreadCaptureMM / MicroSpreadMM（UMM問題研究とは別トラック）
+- **GOV:** WIRE=NO · ENFORCE=0 · LIVE=BLOCKED · auto_apply=OFF
+- 正本: `2026-10-02_csr567_mutation_loop_ematread_pause_peg_umm_lock.json` · `sql/csr567_*.sql`
