@@ -1945,3 +1945,18 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - CSR-564 freshness Gate はインフラ前提として存続（上書きしない）
 - 正本: `2026-10-01_csr565_15_22h_inventory_control_pdca_lock.json` · `sql/csr565_p3_ctrl01_inventory_control_stability.sql`
 - Git: antigravity `372edbe` · gapcore `318f0e0`
+
+## 74. CSR-566 — Conditional Inventory@30s · UMM A/B/C · PEG Aging-only · latency-clean（2026-10-02）
+
+- **最大変化:** 「30秒unwindすれば直る」は反証。21–07h @30s mean+10.49 / 6/10+ だが 23/00/03/04h 悪化 → **状態識別**へ
+- **UMM:** WR54%×大幅− · L0崩壊(23h/00h)あり → A entry / B hold / C HARD_STOP 分離（inventory単独断定禁止）
+- **PEG_v3 (11h–07h Discord):** BE=0 · FakeSkip=0 全時間 · AgingExitsのみ増加 · 24h Δ≈−380..−655 vs TF2BP → **REJECT PROMOTION / Aging ablation first**
+  - AE緑でもPnL大負は摩擦 · Capture Rate異常値はKPI失格
+  - Discord「検証継続中」バナーより研究ロック優先
+- **Council 15–07h:** Micro pressure≈NONE · FakeBO effective 18/20 · redundant 19/04 · strength 1.00 clip多発 · Adverse NULL
+- **Librarian 10-02:** TrendFollow=NOT_USEFUL · FactorIC Inventory Risk=USEFUL · auto_apply OFF
+- **Arena:** 04:17 reset境界 · `arena_run_id`必須 · SpreadCapture/MicroSpread=候補（非LIVE）
+- **P0:** UMM A/B/C + latency≤80ms primary dataset
+- **P1:** Inventory State Classifier · PEG Aging-only ablation
+- **GOV:** WIRE=NO · ENFORCE=0 · LIVE=BLOCKED · FROZEN · Economic PASS=NO
+- 正本: `2026-10-02_csr566_conditional_inventory_umm_abc_latency_lock.json` · `sql/csr566_*.sql`
