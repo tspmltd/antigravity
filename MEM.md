@@ -1974,3 +1974,16 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **新alpha優先:** 再開後 Arena SpreadCaptureMM / MicroSpreadMM（UMM問題研究とは別トラック）
 - **GOV:** WIRE=NO · ENFORCE=0 · LIVE=BLOCKED · auto_apply=OFF
 - 正本: `2026-10-02_csr567_mutation_loop_ematread_pause_peg_umm_lock.json` · `sql/csr567_*.sql`
+- Git: antigravity `80c3746` · gapcore `828a558`
+
+## 76. CSR-568 — Adverse PROMISING+INTEGRITY BLOCK · FakeBO value · EXIT schema（2026-10-02）
+
+- **正式判定:** Action分離 PASS · final教師禁止 PASS · FakeBO=NEED_VALUE_TEST · Adverse SIGNAL PROMISING / INTEGRITY BLOCKED · Economic PASS=NO · WIRE=NO
+- **P0a:** CSR-539 score provenance（missing/default30 · version · run境界 · Capture）修復まで経済PASS禁止
+- **証拠:** Low Adv EV≈+0.40 / High≈−1.57 だが integrity_hold · 05:00桶崩壊(20–40=1000) · 08h n=3
+- **P0b:** UMM tail = Adverse×inventory×spread×age 分解（Worst MAE整合は観察のみ）
+- **P1:** veto_effective → effective/redundant/harmful CF · Inventory state unwind（30s自動採用禁止）
+- **P2:** Spread Gate rejected-EV（通過率は診断指標）· tip SHADOW
+- **Schema PREPARE:** `position_state` / `candidate_intent` / `decision_intent`（FLAT+EXIT≠建玉EXIT）
+- **GOV:** ENFORCE=0 · LIVE=OFF · auto_apply=OFF · PEG NOT PROMOTABLE
+- 正本: `2026-10-02_csr568_adverse_integrity_fakebo_value_exit_schema_lock.json` · `sql/csr568_*.sql`
