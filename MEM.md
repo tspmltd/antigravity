@@ -1960,3 +1960,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **P1:** Inventory State Classifier · PEG Aging-only ablation
 - **GOV:** WIRE=NO · ENFORCE=0 · LIVE=BLOCKED · FROZEN · Economic PASS=NO
 - 正本: `2026-10-02_csr566_conditional_inventory_umm_abc_latency_lock.json` · `sql/csr566_*.sql`
+- Git: antigravity `03a5509` · gapcore `3430006`
