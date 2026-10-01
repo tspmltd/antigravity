@@ -1987,3 +1987,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **Schema PREPARE:** `position_state` / `candidate_intent` / `decision_intent`（FLAT+EXIT≠建玉EXIT）
 - **GOV:** ENFORCE=0 · LIVE=OFF · auto_apply=OFF · PEG NOT PROMOTABLE
 - 正本: `2026-10-02_csr568_adverse_integrity_fakebo_value_exit_schema_lock.json` · `sql/csr568_*.sql`
+- Git: antigravity `d04fb6b` · gapcore `2f69ec7`
