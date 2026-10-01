@@ -1944,3 +1944,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **教師経路:** fusion_log ⊥ execution_log Parquet → realized_pnl → DuckDB研究者
 - CSR-564 freshness Gate はインフラ前提として存続（上書きしない）
 - 正本: `2026-10-01_csr565_15_22h_inventory_control_pdca_lock.json` · `sql/csr565_p3_ctrl01_inventory_control_stability.sql`
+- Git: antigravity `372edbe` · gapcore `318f0e0`
