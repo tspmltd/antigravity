@@ -1997,3 +1997,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **Gate:** G0 gov · G1 ≥7d dryrun安定 · G2 hour/spread · G3 latency/fee · G4 TF2BP-only+deadman
 - **Soak:** A 2h supervised → B 24h → C scale は **GO3** · GO2前に実発注禁止
 - **正本:** `docs/ops/tf2bp_micro_live_soak_csr569.md` · `csr569_tf2bp_micro_live_soak_design_lock.py`
+- Git: antigravity `c68de57` · gapcore `5801d42`
