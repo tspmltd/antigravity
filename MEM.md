@@ -1988,3 +1988,12 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **GOV:** ENFORCE=0 · LIVE=OFF · auto_apply=OFF · PEG NOT PROMOTABLE
 - 正本: `2026-10-02_csr568_adverse_integrity_fakebo_value_exit_schema_lock.json` · `sql/csr568_*.sql`
 - Git: antigravity `d04fb6b` · gapcore `2f69ec7`
+
+## 77. CSR-569 — TF2BP micro LIVE soak DESIGN（2026-10-02 · GO=設計のみ）
+
+- **GO解釈:** LIVE soak **設計書+Gate固定** · `ENABLE_REAL_TRADING` は **falseのまま**
+- **範囲:** TF2BP baseline only（buy_only · tn6_be5 · 入口FROZEN）· PEG/UMM/Council **除外**
+- **Caps:** size 0.001 · max pos 0.001 · 日次ロス −800円/−60bp · session −25bp · kill list
+- **Gate:** G0 gov · G1 ≥7d dryrun安定 · G2 hour/spread · G3 latency/fee · G4 TF2BP-only+deadman
+- **Soak:** A 2h supervised → B 24h → C scale は **GO3** · GO2前に実発注禁止
+- **正本:** `docs/ops/tf2bp_micro_live_soak_csr569.md` · `csr569_tf2bp_micro_live_soak_design_lock.py`
