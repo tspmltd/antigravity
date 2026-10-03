@@ -2024,3 +2024,21 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 正本: `docs/ops/council_context_label_generator_csr576.md` · `2026-10-04_csr576_council_context_label_generator_lock.json`
 - schema SoT: `antigravity/quant_pipeline/schema.py::FusionDecisionLog`
 - Git: antigravity `29ac745` · gapcore `2ea1f5f`
+
+## 80. CSR-577 — 執行ノード過積載仮説 · slim architecture（2026-10-04）
+
+- **仮説:** VM全体のCPU不足より、**執行ノードに Dry-run/解析を載せすぎ**が主因（WORKING）
+- **04:10–04:16 突合:**
+  - 3エンジン同時停止 = **CSR-570 exchange-break 計画停止**（SIGTERM 04:00:23–24）
+  - OOMなし · journal errなし · PSI 8.70 · sar@04:10 idle≈85% / ldavg1=0.26
+  - 04:15:00 flag解除 → watchdog が pipeline/UMM/Arena を即再起動
+  - **掘る価値は停止前:** 心拍120s stall → UMM/Fusion/Arena/JP 連鎖再起動（JP=122s無更新）
+- **定常共住:** JP(interval10)·UMM dryrun·Arena が **nice 0** · cpu-guardは Cursor のみ
+- **P0（第一候補）:** 執行ノードを既存設計へ回帰 — `1本WS → Micro+Trend → Fusion → 非同期Parquet`
+- **外へ:** 12戦略Arena · UMM/TF2BP 24h dryrun · DuckDB重い集計
+- **P1 nice:** 執行 **-10** · 解析/Arena/DuckDB **+15**（120s途絶防止）
+- **P2:** 東証クローズ中 JP 10s→60s or sleep
+- **P3:** 4 vCPU推奨は P0 後 · スケールだけで共住設計を正当化しない
+- **GOV:** LIVE/WIRE/ENFORCE不変 · Economic PASS=NO
+- 正本: `docs/ops/exec_node_overload_slim_arch_csr577.md` · `csr577_exec_node_overload_slim_arch_lock.py`
+
