@@ -2023,3 +2023,4 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **禁止:** Council PnL最適を主KPI · 鮮度Gate前の accuracy/Economic PASS · CouncilをLIVE slateへ
 - 正本: `docs/ops/council_context_label_generator_csr576.md` · `2026-10-04_csr576_council_context_label_generator_lock.json`
 - schema SoT: `antigravity/quant_pipeline/schema.py::FusionDecisionLog`
+- Git: antigravity `29ac745` · gapcore `2ea1f5f`
