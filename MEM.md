@@ -1997,4 +1997,29 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **Gate:** G0 gov · G1 ≥7d dryrun安定 · G2 hour/spread · G3 latency/fee · G4 TF2BP-only+deadman
 - **Soak:** A 2h supervised → B 24h → C scale は **GO3** · GO2前に実発注禁止
 - **正本:** `docs/ops/tf2bp_micro_live_soak_csr569.md` · `csr569_tf2bp_micro_live_soak_design_lock.py`
-- Git: antigravity `c68de57` · gapcore `5801d42`
+
+## 78. CSR-575 — PEG_v3 Attribution Directive（2026-10-04）
+
+- **役割:** PEG_v3 = **解剖装置** · 昇格候補ではない · **PEG_v4 禁止**（本directive完了まで）
+- **GOV:** Promotion=REJECT · Economic PASS=NO · WIRE=NO · ENFORCE=0 · auto_apply=OFF
+- **P0:** run_id / strategy_version / config_hash / started_at · 異run合算禁止 · rolling_24h縮小≠改善
+- **Maker隔離:** CTRL=TF2BP · ARM-A Maker+BaselineExit · B Aging only · C BE3 only · D Adaptive only
+- **Aging:** `aging_value_bp = actual_exit_bp − cf_baseline_exit_bp` · 発火数単独でPASS/FAILしない
+- **P1:** AE raw再計算（AE_3s +1.20bp provenance）· Captureは経済ゲート外 · FakeLiq閾値変更禁止 · BE3 exits=0→N/A
+- **成功条件:** Maker/Aging EV識別 · BE3露出 · FakeLiqゼロ原因 · AE_3s/Capture異常原因（全体PnL改善ではない）
+- **Lake:** orderbook_micro / fusion_log / execution_log → Parquet → DuckDB（entry/exit attribution）
+- 正本: `docs/ops/peg_v3_attribution_directive_csr575.md` · `2026-10-04_csr575_peg_v3_attribution_directive_lock.json`
+
+## 79. CSR-576 — 4AGENT Council = Common Context Label Generator（2026-10-04）
+
+- **核心:** Councilを直接「勝たせる」より、**全戦略の共通コンテキストラベル生成器**にする方が価値が高い
+- **座標系（CSR-564）:** `trend/range/high_vol/low_vol` + candidate/decision + FakeBO effective/redundant
+- **消費者:** UMM · Arena · PEG を同一軸で比較（TF2BP=CTRL）
+- **FusionDecisionLog:** `trend_direction` · `trend_strength` · `regime_tag` · `pressure_side` · `fake_breakout_flag` · `realized_pnl`
+- **Lake:** orderbook_micro ⊥ fusion_log ⊥ execution_log → Parquet → DuckDB レジーム別比較
+- **前提:** CSR-564 freshness Gate 存続 · final単独教師禁止 · DuckDB=研究者（意思決定者にしない）
+- **並列:** CSR-575 PEG attribution · CSR-572b UMM anatomy
+- **GOV:** WIRE=NO · ENFORCE=0 · LIVE=OFF · auto_apply=OFF · Economic PASS=NO
+- **禁止:** Council PnL最適を主KPI · 鮮度Gate前の accuracy/Economic PASS · CouncilをLIVE slateへ
+- 正本: `docs/ops/council_context_label_generator_csr576.md` · `2026-10-04_csr576_council_context_label_generator_lock.json`
+- schema SoT: `antigravity/quant_pipeline/schema.py::FusionDecisionLog`
