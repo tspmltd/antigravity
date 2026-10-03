@@ -2041,4 +2041,5 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **P3:** 4 vCPU推奨は P0 後 · スケールだけで共住設計を正当化しない
 - **GOV:** LIVE/WIRE/ENFORCE不変 · Economic PASS=NO
 - 正本: `docs/ops/exec_node_overload_slim_arch_csr577.md` · `csr577_exec_node_overload_slim_arch_lock.py`
+- Git: antigravity `7a21920` · gapcore `90e95f3`
 
