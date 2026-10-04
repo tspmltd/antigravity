@@ -2066,3 +2066,16 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 正本: `docs/ops/factoric_inventory_fusion_attribution_spine_csr579.md` · `csr579_factoric_inventory_fusion_attribution_spine_lock.py`
 - Git: antigravity `3f8224c` · gapcore `3261350`
 
+## 83. CSR-580 — 並列 P0-A/B/C（2026-10-05）
+
+- **更新:** Inventory Decay 単独の圧倒的P0をやめ、**3本並列**
+  - **P0-A** Inventory Decay State（切るべき vs 切ってはいけない · 秒固定禁止）
+  - **P0-B** Effective FakeBO Veto CF
+  - **P0-C** FactorIC spread × inventory → EER
+- **P0-B 第一問:** 2026-10-05 **06:20 / 06:25 / 06:35 / 06:50** で FakeBOが止めた4仮想売買は、その後本当に損していたか？
+  - YESなら FakeBO を経済価値Veto候補へ（WIREは別）
+- **暫定probe（近傍proxy · episode突合未完）:** YES_LOST=**1** · NO_PROFIT=**3** · PASS/WIRE不出
+- **Lake:** 既存 Parquet（micro / fusion / execution）→ DuckDB
+- **GOV:** WIRE=NO · ENFORCE=0 · thr retune禁止 · 新戦略禁止
+- 正本: `docs/ops/parallel_p0_inventory_fakebo_factoric_csr580.md` · `csr580_parallel_p0_inventory_fakebo_factoric_lock.py`
+
