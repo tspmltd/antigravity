@@ -2054,3 +2054,13 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **GOV:** WIRE=NO · ENFORCE=0 · Promotion=REJECT · 新alpha禁止
 - 正本: `docs/ops/peg_drop_path_attribution_csr578.md` · `csr578_peg_drop_path_attribution_lock.py`
 
+## 82. CSR-579 — FactorIC → Inventory → FusionParquet Attribution Spine（2026-10-04）
+
+- **最優先:** PEG/TrendFollow ではなく **FactorICResearch → MM Inventory Risk → FusionParquet** による trade-level attribution
+- **完成形:** 「そのtradeはどの market / inventory / micro state で勝敗が決まったか」を1教師テーブルで解析
+- **効果:** PEG・Council・FakeBO・Inventory unwind を別研究として追う必要が薄れる（同テーブルの切片）
+- **基盤:** 2 vCPUは執行ループ軽量 · 特徴/Fusionを非同期Parquet · DuckDB後段 · realized PnL後付け教師
+- **GOV:** WIRE=NO · ENFORCE=0 · Economic PASS=NO · 新alphaは教師テーブル前禁止
+- **BizChatフィードバック:** 正本ドキュメントに貼り付け用テキスト同梱
+- 正本: `docs/ops/factoric_inventory_fusion_attribution_spine_csr579.md` · `csr579_factoric_inventory_fusion_attribution_spine_lock.py`
+
