@@ -2053,6 +2053,7 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **第一手:** candidate整列ログ補完（Aging CFの再発明ではない）· CSR-575 KEEP · PEG_v4禁止
 - **GOV:** WIRE=NO · ENFORCE=0 · Promotion=REJECT · 新alpha禁止
 - 正本: `docs/ops/peg_drop_path_attribution_csr578.md` · `csr578_peg_drop_path_attribution_lock.py`
+- Git: antigravity `20443ac` · gapcore `406b186`
 
 ## 82. CSR-579 — FactorIC → Inventory → FusionParquet Attribution Spine（2026-10-04）
 
@@ -2063,4 +2064,5 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **GOV:** WIRE=NO · ENFORCE=0 · Economic PASS=NO · 新alphaは教師テーブル前禁止
 - **BizChatフィードバック:** 正本ドキュメントに貼り付け用テキスト同梱
 - 正本: `docs/ops/factoric_inventory_fusion_attribution_spine_csr579.md` · `csr579_factoric_inventory_fusion_attribution_spine_lock.py`
+- Git: antigravity `3f8224c` · gapcore `3261350`
 
