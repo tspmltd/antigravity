@@ -2043,3 +2043,14 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 正本: `docs/ops/exec_node_overload_slim_arch_csr577.md` · `csr577_exec_node_overload_slim_arch_lock.py`
 - Git: antigravity `7a21920` · gapcore `90e95f3`
 
+## 81. CSR-578 — PEG Drop-Path Attribution（2026-10-04）
+
+- **核心:** PEGの次問は「なぜ負けるか」ではなく、**Baselineが拾った利益を NO_ENTRY / NO_FILL / AGING_EXIT のどこで落とすか**
+- **判定:** AE改善を残す価値があるか / PEG系を丸ごと終了すべきか（PASS不出）
+- **Lake:** orderbook_micro · fusion_log · execution_log（realized PnLは後付け教師）— 2 vCPUは執行+特徴ログ
+- **JOINキー追加:** `candidate_id` · `order_posted` · `filled` · `exit_reason` · `run_id`
+- **Probe:** `exec_audit_peg_v3.jsonl` n=2711 · FILLED≈2707 · AGING_GUARD≈1291 · SKIP_FAKE=4 → **NO_ENTRY/NO_FILL欠測がギャップ**
+- **第一手:** candidate整列ログ補完（Aging CFの再発明ではない）· CSR-575 KEEP · PEG_v4禁止
+- **GOV:** WIRE=NO · ENFORCE=0 · Promotion=REJECT · 新alpha禁止
+- 正本: `docs/ops/peg_drop_path_attribution_csr578.md` · `csr578_peg_drop_path_attribution_lock.py`
+
