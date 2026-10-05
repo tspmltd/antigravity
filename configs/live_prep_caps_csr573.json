@@ -1,0 +1,56 @@
+{
+  "csr": 573,
+  "updated_jst": "2026-10-05T18:10:00+09:00",
+  "policy": {
+    "ENABLE_REAL_TRADING": false,
+    "auto_apply": false,
+    "Economic_PASS": false,
+    "param_retune": false
+  },
+  "shared_caps": {
+    "order_size_btc": 0.001,
+    "max_position_btc": 0.001,
+    "max_open_orders": 1,
+    "daily_loss_stop_jpy": 800,
+    "daily_loss_stop_bp": 60,
+    "session_loss_stop_bp": 25,
+    "data_soak_max_trades": 0,
+    "max_runtime_sec": 0,
+    "data_soak_note": "0 max_trades/runtime = unlimited until operator STOP · size still 0.001 · ops success ≠ Economic PASS"
+  },
+  "strategies": {
+    "TF2BP_v1": {
+      "role": "first_micro_soak",
+      "side_mode": "buy_only",
+      "exit": "tn6_be5",
+      "thr": 0.55,
+      "p2_min": 0.50,
+      "max_hold_sec": 1200,
+      "cost_bp_one_way_assumption": 0.25,
+      "process": "tf2bp_only",
+      "forbid_coprocess": ["UMM", "PEG_v2", "PEG_v3", "Council_WIRE"]
+    },
+    "strat_cbcd5aed": {
+      "name": "SpreadCaptureMM",
+      "role": "arena_stage1",
+      "file": "strategies/approved/strat_cbcd5aed_approved.py",
+      "cost_bp_one_way_assumption": 0.25,
+      "process": "arena_live_prep_allowlist"
+    },
+    "strat_4d3f2c9f": {
+      "name": "MicroSpreadMM",
+      "role": "arena_stage1",
+      "file": "strategies/approved/strat_4d3f2c9f_approved.py",
+      "cost_bp_one_way_assumption": 0.25,
+      "process": "arena_live_prep_allowlist"
+    }
+  },
+  "allowlist_arena_ids": ["strat_cbcd5aed", "strat_4d3f2c9f"],
+  "kill": [
+    "equity_buffer_breach",
+    "latency_p90_gt_200ms_10min",
+    "exception_storm",
+    "flatten_not_flat_gt_60s",
+    "daily_or_session_loss_stop"
+  ]
+}

@@ -138,3 +138,12 @@ Git CSR-579: antigravity `3f8224c` · gapcore `3261350`
 
 2026-10-05 | CSR-580b | TF2BP LIVE start REFUSE · gates missing | LOCK
 
+
+**CSR-581（2026-10-05 14:18:30 JST）:** TF2BP micro LIVE 起動パス配線。`start-tf2bp-micro-live.sh` → soak `--only TF2BP_v1`。DRY smoke OK。READY_FOR_OPERATOR_GO2。`.env` false · 発注なし。
+
+2026-10-05 | CSR-581 | TF2BP LIVE prep wired · DRY smoke · no real | LOCK
+
+**CSR-581b（2026-10-05 15:36:23 JST）:** `GO2 TF2BP` ACCEPT · `data/GO2_TF2BP.flag` 作成 · process `ENABLE_REAL_TRADING=true`（`.env` は false のまま）。Stage-0 micro LIVE start 記録。size=0.001。Economic_PASS=NO。後続で continuous（max_trades=0）配線・monitor併走。API 429 観測あり。
+
+2026-10-05 | CSR-581b | GO2 TF2BP LIVE start · .env false · process env true | LOCK
+

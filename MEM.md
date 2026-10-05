@@ -2086,3 +2086,79 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - G0–G4 / GO2_TF2BP.flag / real配線 / costed ledger 未達
 - ENABLE_REAL_TRADING=false 維持 · CPU PSI高で起動縮退
 
+
+## 85. CSR-581 — TF2BP LIVE prep wiring（2026-10-05 14:18:30 JST）
+
+- `start-tf2bp-micro-live.sh` を soak runner（`--only TF2BP_v1`）に配線
+- DRY smoke PASS · `TF2BP_LIVE_PREP_READY.json` = READY_FOR_OPERATOR_GO2
+- **LIVE未開始** · ENABLE_REAL_TRADING=false · GO2_TF2BP.flag 未作成
+- 実弾には `GO2 TF2BP` + flag + env true + CONFIRM_GO2=TF2BP が必要
+- 正本: `docs/ops/tf2bp_live_prep_wired_csr581.md`
+
+## 85b. CSR-581b — GO2 TF2BP LIVE start（2026-10-05 15:36:23 JST）
+
+- トークン `GO2 TF2BP` ACCEPT · `data/GO2_TF2BP.flag` 作成
+- process `ENABLE_REAL_TRADING=true` · **`.env` は false のまま**（永続化しない）
+- Stage-0 micro LIVE · size=0.001 · Economic_PASS=NO
+- 成果: `2026-10-05_csr581b_tf2bp_go2_live_start.json`
+- 後続: continuous starter（max_trades=0 / max_runtime=0）· `monitor_tf2bp_micro_live` · stop script
+- 観測: bitFlyer API 429（Over API limit）ログあり · Economic PASS外
+
+## 86. CSR-582 — PEG_v3 Terminal Research Directive（2026-10-05 18:21 JST）
+
+- **Promotion=REJECT · Optimization=CLOSED · PEG_v4=PROHIBITED**
+- WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · CAPTURE_VALID=false
+- **P0:** 15:49 run boundary · Baseline/PEG attribution · OPPORTUNITY_LOSS≠REALIZED_LOSS · Aging CF(+1/+3/+5/+10/+30s) · Metric audit
+- **P1:** Maker Entry ablation（CTRL Baseline Entry+Exit vs ARM Maker Entry+Baseline Exit）
+- BE3 / FakeLiqPEG = N/A（exits=0 / skip=0）· 閾値変更禁止
+- **終端二択:** KEEP_COMPONENT | ARCHIVE_PEG（完了後にparameter searchへ戻らない）
+- 仮説: 救えるのは Maker Entry 部品のみ · パッケージは Baseline比 -303.63bp で終了フェーズ
+- Lake追加キー: run_id / candidate_id / execution_id / exit_reason / failure_class
+- 正本: `docs/ops/peg_v3_terminal_research_directive_csr582.md` · lock · `sql/csr582_peg_v3_terminal_teacher.sql`
+
+## 87. CSR-582b — Aging CF + Maker Entry ablation 実行（2026-10-05 18:25 JST）
+
+- **run_id:** `run_20261005_1549`（15:49境界）· run-localのみ（rolling24h混同なし）
+- **Aging CF (n=29):** actual_sum **-50.16bp** · mean **-1.73bp**
+  - actual−CF_10s mean **-2.39bp** · actual−CF_30s mean **-2.71bp** → 保有延長がAgingExitを上回る（bp評価）
+  - vs baseline_exit_cf (n=6): aging_incremental mean **-1.19bp**（Agingがbaseline出口CFより毀損）
+- **Maker Entry ablation:**
+  - CTRL (Baseline E+X): n=13 · mean **+0.31bp** · sum +4.06bp
+  - ARM (Maker Entry + Baseline Exit): paired n=6 · mean **+0.63bp** · Δ vs CTRL **+0.32bp**
+  - entry_advantage mean **-3.33bp**（Maker約定はBaseline入口より平均で不利）→ 救済は弱い/要サンプル増
+  - PEG実exit sum **-20.2bp**（Aging支配 13/14）
+- **failure_type run-local:** OPPORTUNITY_LOSS_proxy=4 · REALIZED_LOSS=12（混合禁止）
+- **終端二択:** まだ未決（metric audit未完 · ペアn薄い）· KEEP_COMPONENT候補は条件付き
+- 成果: `csr582_peg_v3_aging_cf_and_maker_ablation.py` · `2026-10-05_csr582_peg_aging_cf_maker_ablation.json`
+
+## 88. CSR-583 — Research Librarian Governance v2（2026-10-05 18:27 JST）
+
+- **GLOBAL:** WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · LIVE=OFF · **新Agent不要**
+- **主成果物:** Inventory×Council×Micro×Execution を `execution_id` でJOINした OOS 教師テーブル
+- **NOT_USEFUL政策:** thr/HP/新version/自動search **禁止** · root-cause/ablation/metric·feature audit/label redesign/attribution **許可**
+- **P0:** FactorIC `spread×inventory_proxy` vs spread-only · Inventory CF 10–90s（固定exit教師禁止）· FakeBO `veto_value_bp`
+- **P1:** Trend state（strength1.00≠確率）CONTINUE/WEAKEN/FLIP/REACCELERATE
+- **PEG/TF:** NOT_USEFUL · PEG最適化CLOSED · ¥400/30s tuning禁止
+- **Fusion教師:** candidate+decision+realized_pnl · final_action単独禁止 · run_id/execution_id/candidate_id必須
+- **Adverse:** SHADOW_OFF/NULL/valid=false · NULL→0禁止 · health gate前の経済評価禁止
+- Librarian advise文字列をv2政策に更新（`duckdb_research_librarian.py`）
+- 正本: `docs/ops/research_librarian_governance_v2_csr583.md` · `sql/csr583_librarian_teacher_spine.sql`
+
+## 89. CSR-583b — Librarian teacher spine v1 実体化（2026-10-05 18:30 JST）
+
+- **GO:** 教師テーブル JOIN 実装実行（新Agentなし · WIRE=NO）
+- **run_id:** `run_20261005_1549` · n=**11552**（buy 5159 / sell 6393）
+- **JOIN:** fusion_log_labeled ⋈ ASOF orderbook_micro ⋈ ASOF mm_fill_log(+inventory_proxy)
+- **CF:** 10/20/30/45/60/90s 保存 · early_unwind_better rate≈0.93（best-of-horizons vs label · 解釈注意）
+- **FactorIC OOS:** spread-only rankIC **-0.029** / loss_sep **-0.21** · spread×inv rankIC **+0.013** / loss_sep **+0.09**（交互作用が相対的に良い）
+- **Gaps:** execution_log本番Parquet欠落→キー暫定 · veto_value_bp=NULL（0にしない）· inventory_age未整備
+- 成果: `csr583_build_librarian_teacher_spine.py` · `data/parquet/librarian_teacher_spine/` · `LIBRARIAN_TEACHER_SPINE_LATEST.json`
+
+## 90. CSR-583c — Teacher spine v2 + execution_log修正（2026-10-05 18:32 JST）
+
+- **execution_log:** `theory_spread_bp` 未定義参照で黙殺されていたバグを修正 · 今後 `run_id/execution_id/candidate_id` 付与
+- **Teacher v2:** n=11552 · inventory_age coverage **88%** · FakeBO VALID join economic n=1838 · mean veto_value **-0.53bp**（REDUNDANT=0除外）
+- **State scorecard:** 12 states (n≥30) · 最高 early-unwind P: L1|S0|high_vol **0.964** · 最低: L0|S1|high_vol **0.906**
+- **FactorIC OOS:** spread-only IC **-0.042** / EER≈5.0 · spread×inv_age IC **+0.047** / EER≈1.13（交互作用の説明力が改善）
+- 成果: `csr583_enrich_librarian_teacher_spine_v2.py` · `part_csr583_v2.parquet` · `LIBRARIAN_TEACHER_SPINE_V2_LATEST.json`
+
