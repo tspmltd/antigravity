@@ -2079,3 +2079,10 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **GOV:** WIRE=NO · ENFORCE=0 · thr retune禁止 · 新戦略禁止
 - 正本: `docs/ops/parallel_p0_inventory_fakebo_factoric_csr580.md` · `csr580_parallel_p0_inventory_fakebo_factoric_lock.py`
 
+## 84. CSR-580b — TF2BP LIVE開始 → REFUSE（2026-10-05 13:30:00 JST）
+
+- ユーザー: `TF2B LIVE開始GO` → **REFUSE**（発注なし）
+- 必要トークン: `GO2 TF2BP`（不一致）
+- G0–G4 / GO2_TF2BP.flag / real配線 / costed ledger 未達
+- ENABLE_REAL_TRADING=false 維持 · CPU PSI高で起動縮退
+
