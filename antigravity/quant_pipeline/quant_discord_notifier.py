@@ -98,21 +98,37 @@ class QuantDiscordNotifier:
             return False
         if not webhook_url or not webhook_url.startswith("http"):
             return False
-        try:
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                webhook_url,
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Antigravity-Quant-Notifier/1.0",
-                },
+        data = json.dumps(payload).encode("utf-8")
+        last_err: Optional[Exception] = None
+        # Transient DNS/SSL blips: retry a few times before giving up.
+        for attempt in range(1, 4):
+            try:
+                req = urllib.request.Request(
+                    webhook_url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Antigravity-Quant-Notifier/1.0",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    return resp.status in (200, 204)
+            except Exception as e:
+                last_err = e
+                if attempt < 3:
+                    time.sleep(0.8 * attempt)
+                    continue
+                print(
+                    f"[QuantDiscordNotifier] ⚠️ 送信エラー ({webhook_url[:35]}...): {e}",
+                    flush=True,
+                )
+                return False
+        if last_err is not None:
+            print(
+                f"[QuantDiscordNotifier] ⚠️ 送信エラー ({webhook_url[:35]}...): {last_err}",
+                flush=True,
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                return resp.status in (200, 204)
-        except Exception as e:
-            print(f"[QuantDiscordNotifier] ⚠️ 送信エラー ({webhook_url[:35]}...): {e}", flush=True)
-            return False
+        return False
 
     def post_observation(self, payload: Dict[str, Any]) -> bool:
         """試運転戦略報告 (Observation 専用チャンネル) へ配信"""
@@ -542,19 +558,29 @@ class QuantDiscordNotifier:
             }
         ]
 
-        # 2. Capture Rate (S3) & Toxic Flow (S2)
+        # 2. Capture Rate (S3) & Toxic Flow (S2) — CSR-535: median/winsorized主表示
         cr_stats = summary.get("capture_rate_stats", {})
         if cr_stats.get("total_completed", 0) > 0:
-            cr_val = cr_stats.get("avg_capture_rate_pct", 0.0)
+            cr_median = cr_stats.get("median_capture_rate_pct", cr_stats.get("avg_capture_rate_pct", 0.0))
+            cr_win = cr_stats.get("winsorized_mean_pct")
+            cr_avg = cr_stats.get("avg_capture_rate_pct", 0.0)
             cr_grade = cr_stats.get("grade", "要改善")
-            cr_icon = "🟢" if cr_grade == "優秀" else ("🟡" if cr_grade == "普通" else "🔴")
+            cr_kpi = cr_stats.get("kpi_status", "")
+            cr_icon = (
+                "🟢" if cr_grade == "優秀"
+                else ("🟡" if cr_grade == "普通" else ("⚫" if cr_grade == "INVALID_PENDING_AUDIT" else "🔴"))
+            )
+            win_line = f"• winsorized(1%): `{cr_win:.1f}%`\n" if isinstance(cr_win, (int, float)) else ""
             fields.append({
-                "name": f"🎯 S3. Capture Rate 分析 ({cr_icon} {cr_grade})",
+                "name": f"🎯 S3. Capture Rate ({cr_icon} {cr_grade})",
                 "value": (
-                    f"• **平均 Capture Rate**: **`{cr_val:.1f}%`** (判定: **{cr_grade}**)\n"
-                    f"• 優秀(≥80%): `{cr_stats.get('excellent_count', 0)}回` | "
-                    f"普通(50-80%): `{cr_stats.get('normal_count', 0)}回` | "
-                    f"要改善(<50%): `{cr_stats.get('poor_count', 0)}回`"
+                    f"• **median**: **`{cr_median:.1f}%`** (主KPI · CSR-535)\n"
+                    f"{win_line}"
+                    f"• p10/p25/p75/p90: `{cr_stats.get('p10','—')}` / `{cr_stats.get('p25','—')}` / "
+                    f"`{cr_stats.get('p75','—')}` / `{cr_stats.get('p90','—')}`\n"
+                    f"• raw mean(参考·ゲート禁止): `{cr_avg:.1f}%` · zero_div≈`{cr_stats.get('zero_div_clipped_count', 0)}` · status=`{cr_kpi}`\n"
+                    f"• 優秀/普通/要改善: `{cr_stats.get('excellent_count', 0)}` / "
+                    f"`{cr_stats.get('normal_count', 0)}` / `{cr_stats.get('poor_count', 0)}`"
                 ),
                 "inline": False,
             })
@@ -978,6 +1004,205 @@ class QuantDiscordNotifier:
         self.post_dryrun_multicast({"embeds": [embed]})
         return ok
 
+    def post_tf2b_10_15_shadow(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """TF2B_10.15 State A Shadow Validation (WIRE=NO · research only)."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        verdict = str(report.get("verdict") or "MORE_DATA")
+        cov = report.get("coverage") or {}
+        a = cov.get("A") or {}
+        guard = report.get("sample_guard") or {}
+        latest = report.get("latest_signal")
+
+        kind_title = {
+            "start": "🚀 【TF2B_10.15 Shadow 開始】",
+            "periodic": "📡 【TF2B_10.15 Shadow 検証】",
+            "daily": "📅 【TF2B_10.15 Shadow 日次】",
+            "verdict": "⚖️ 【TF2B_10.15 判定更新】",
+            "final": "🏁 【TF2B_10.15 Shadow 終了】",
+        }.get(kind, "📡 【TF2B_10.15 Shadow】")
+        color = {"REJECT": 0xE74C3C, "PROMOTE_TO_PAPER": 0x2ECC71, "MORE_DATA": 0xF39C12}.get(verdict, 0x3498DB)
+
+        def _m(block, key="validation"):
+            b = (block or {}).get(key) if isinstance(block, dict) and key in (block or {}) else block
+            if not isinstance(b, dict):
+                return "—"
+            return (
+                f"n={b.get('n')} Hit={b.get('hit_rate')} "
+                f"R120={b.get('ret120')} R240={b.get('ret240')} "
+                f"Med={b.get('median_ret120')} MFE={b.get('avg_mfe')} MAE={b.get('avg_mae')}"
+            )
+
+        embed = {
+            "title": f"{kind_title} {verdict}",
+            "description": (
+                f"State A = High Imb + Low Ask + High Bid · **Shadow Only**\n"
+                f"Primary goal: **reproducibility** (not PnL max) · WIRE=NO · ENFORCE=0\n"
+                f"elapsed=`{report.get('elapsed_hours')}h` · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "判定 / Sample Guard",
+                    "value": (
+                        f"• verdict=`{verdict}` · reason=`{report.get('reason')}`\n"
+                        f"• validation_n=`{guard.get('validation_n')}` "
+                        f"pending=`{guard.get('pending')}` "
+                        f"first_judge_ok=`{guard.get('first_judge_ok')}` "
+                        f"promote_review_ok=`{guard.get('promote_review_ok')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Health",
+                    "value": (
+                        f"• obs=`{report.get('observations')}` signals=`{report.get('signals')}`\n"
+                        f"• A=`{report.get('state_a_count')}` B=`{report.get('state_b_count')}` "
+                        f"Baseline=`{report.get('baseline_count')}` open=`{report.get('open_signals')}`\n"
+                        f"• latest=`{latest}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Coverage A / B / Baseline",
+                    "value": (
+                        f"• A validation: `{_m(a, 'validation')}`\n"
+                        f"• A discovery: `{_m(a, 'discovery')}`\n"
+                        f"• B: `{_m(cov.get('B'))}`\n"
+                        f"• Baseline: `{_m(cov.get('Baseline'))}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": (
+                        "• LIVE/PAPER/PEG2/TF2BP/UMM untouched\n"
+                        "• No signal/threshold/state-def retune · PROMOTE_TO_PAPER≠LIVE"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "TF2B_10.15 · State A Shadow Validation · RESEARCH-2"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        ok_m = self.post_dryrun_multicast(payload)
+        return bool(ok_a or ok_m)
+
+    def post_umm_p2_maker_shadow(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """UMM-P2 Shadow: UMM Baseline vs UMM+Maker (Execution-only · WIRE=NO)."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        verdict = str(report.get("verdict") or "MORE_DATA")
+        gate = report.get("gate") or {}
+        delta = report.get("delta") or {}
+        mon = report.get("daily_monitor") or {}
+        c = ((report.get("comparison") or {}).get("CTRL") or {}).get("headline") or {}
+        a = ((report.get("comparison") or {}).get("ARM") or {}).get("headline") or {}
+        sink = mon.get("sink_10s_plus") or {}
+        bucket_ev = mon.get("bucket_ev") or {}
+
+        kind_title = {
+            "start": "🚀 【UMM-P2 Shadow 開始】",
+            "periodic": "📊 【UMM-P2 Shadow 定期検証】",
+            "daily": "📅 【UMM-P2 Shadow 日次検証】",
+            "verdict": "⚖️ 【UMM-P2 Shadow 判定更新】",
+            "final": "🏁 【UMM-P2 Shadow 終了】",
+        }.get(kind, "📊 【UMM-P2 Shadow】")
+
+        color = {
+            "REJECT": 0xE74C3C,
+            "PROMOTE": 0x2ECC71,
+            "MORE_DATA": 0xF39C12,
+        }.get(verdict, 0x3498DB)
+
+        def _f(v, nd=2):
+            if v is None:
+                return "—"
+            if isinstance(v, float):
+                return f"{v:+.{nd}f}" if nd else f"{v:+g}"
+            return str(v)
+
+        def _bucket_line(name: str) -> str:
+            b = bucket_ev.get(name) or {}
+            return f"`{name}` CTRL={_f(b.get('CTRL'),4)} ARM={_f(b.get('ARM'),4)} Δ={_f(b.get('delta'),4)}"
+
+        ng = mon.get("never_green_rate") or {}
+        aw = mon.get("ae_worsen_rate") or {}
+
+        embed = {
+            "title": f"{kind_title} {verdict}",
+            "description": (
+                f"UMM Baseline vs UMM+Maker · **Execution only** · WIRE=NO\n"
+                f"elapsed=`{report.get('elapsed_hours')}h` · sample_floor=`{report.get('sample_floor_met')}`\n"
+                f"auto_PROMOTE=**False** · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "判定",
+                    "value": (
+                        f"• verdict=`{verdict}` · promote_label=`{report.get('promote_label')}`\n"
+                        f"• reason=`{gate.get('reason') or '—'}`\n"
+                        f"• flags=`{gate.get('improve_flags')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Headline Δ(ARM−CTRL)",
+                    "value": (
+                        f"• ΔPnL=`{_f(delta.get('pnl_bp'))}bp` · ΔEV=`{_f(delta.get('ev_bp'),4)}` · "
+                        f"ΔPF=`{_f(delta.get('pf'),4)}` · ΔDD=`{_f(delta.get('dd_bp'))}`\n"
+                        f"• ΔNeverGreen=`{_f(delta.get('never_green_rate'),4)}` · "
+                        f"ΔAEworsen=`{_f(delta.get('ae_worsen_rate'),4)}` · "
+                        f"ΔAE1s=`{_f(delta.get('avg_ae_1s'),4)}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "CTRL / ARM",
+                    "value": (
+                        f"• CTRL n=`{c.get('n')}` EV=`{_f(c.get('ev_bp'),4)}` PnL=`{_f(c.get('pnl_bp'))}` "
+                        f"PF=`{_f(c.get('pf'),4)}` NG=`{_f(c.get('never_green_rate'),4)}`\n"
+                        f"• ARM  n=`{a.get('n')}` EV=`{_f(a.get('ev_bp'),4)}` PnL=`{_f(a.get('pnl_bp'))}` "
+                        f"PF=`{_f(a.get('pf'),4)}` fill=`{_f(a.get('fill_rate'),4)}` "
+                        f"timeouts=`{a.get('timeouts')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Daily primary · 別EV / 10s+ sink",
+                    "value": (
+                        f"• Never-green CTRL=`{_f(ng.get('CTRL'),4)}` ARM=`{_f(ng.get('ARM'),4)}` Δ=`{_f(ng.get('delta'),4)}`\n"
+                        f"• AE worsen CTRL=`{_f(aw.get('CTRL'),4)}` ARM=`{_f(aw.get('ARM'),4)}` Δ=`{_f(aw.get('delta'),4)}`\n"
+                        f"• {_bucket_line('0-10s')}\n"
+                        f"• {_bucket_line('10-30s')}\n"
+                        f"• {_bucket_line('30-120s')}\n"
+                        f"• 10s+ sink ΔPnL=`{_f(sink.get('delta_pnl_bp'))}` ΔEV=`{_f(sink.get('delta_ev_bp'),4)}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": (
+                        "• Signal/Inventory/Skew/Sizing/Exit/Params **FROZEN**\n"
+                        "• LIVE untouched · PEG2 Paper monitor-only · PROMOTE≠LIVE"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "UMM-P2 Maker Shadow · research lane · Execution Alpha validation"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        # Research lane: analysis + dryrun multicast (never LIVE-only path as sole destination intent)
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        ok_m = self.post_dryrun_multicast(payload)
+        return bool(ok_a or ok_m)
+
     def post_umm_ctrl_observe(self, report: Dict[str, Any]) -> bool:
         """CSR-521-CTRL v0 OBSERVE — hold ladder + Virtual Exit@30s (WIRE=NO · ENFORCE=0)."""
         if not report:
@@ -1019,8 +1244,12 @@ class QuantDiscordNotifier:
                 {
                     "name": "CTRL-2 Would-Unwind Δ (Virtual_full − Actual_full)",
                     "value": (
-                        f"• @30s Δ: `{_d(d30)}` ← **最優先** · id_ok=`{hw.get('delta_identity_ok')}`\n"
-                        f"• @60s Δ: `{_d(d60)}` · @120s Δ: `{_d(d120)}`\n"
+                        f"• @10s `{_d(hw.get('would_exit_10_delta_bp'))}` · "
+                        f"@20s `{_d(hw.get('would_exit_20_delta_bp'))}` · "
+                        f"@30s `{_d(d30)}` ← **最優先** · id_ok=`{hw.get('delta_identity_ok')}`\n"
+                        f"• @45s `{_d(hw.get('would_exit_45_delta_bp'))}` · "
+                        f"@60s `{_d(d60)}` · @90s `{_d(hw.get('would_exit_90_delta_bp'))}` · "
+                        f"@120s `{_d(d120)}`\n"
                         f"• L2+L3のみ Δ: `{_d(hw.get('l2_l3_only_delta_bp'))}`\n"
                         f"• Actual_full: `{_d(hw.get('actual_ledger_bp'))}`\n"
                         f"• Virtual@30_full: `{_d(hw.get('virtual_30_full_ledger_bp') or hw.get('virtual_30_ledger_bp'))}`\n"

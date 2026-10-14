@@ -166,3 +166,13 @@ Git CSR-581/581b: antigravity `cf50df5` · gapcore `3a6c601`
 GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · OBSERVE ONLY
 
 Git CSR-585/586: antigravity `0f02ba6`
+
+**CSR-587（2026-10-14 17:52:42 JST）:** RESEARCH Shadow 中間検証ロック（~20.5h）。PROMOTE=False 維持。
+1. **UMM-P2 Maker Shadow:** elapsed≈20.6h · sample_floor未達（要72h/attempts≥2000 · ARM attempts=589）。CTRL n=541 PnL=+240.7bp EV=+0.445 PF=1.278 · ARM n=395 PnL=+172.2bp EV=+0.436 PF=1.271 fill=67.1% timeouts=106。ΔPnL=**-68.5bp** · Never-green 6.3%→**3.0%**（改善）· avgAE1s 改善 · **10s+ sink ΔPnL=-54bp（未改善）**。verdict=**MORE_DATA**（床到達後は ΔPnL≤0 なら REJECT 候補）。
+2. **TF2B_10.15 State A Shadow:** elapsed≈20.6h · Validation N=311（判定可）。Disc Hit=41.9% R120=+0.32 R240=+0.22 · Val Hit=**29.6%** R120=+0.07 R240=**-0.29** · Baseline R120=+0.09 R240=+0.14 · Val MFE 4.05 < Baseline 4.69（MFE優位なし）。verdict=**MORE_DATA**（PROMOTE条件未充足 · CSR-585 CLOSED と整合し昇格なし）。
+3. **Portfolio固定:** LIVE=TF2BP Baseline · PAPER=PEG2-B · RESEARCH-1=UMM-P2（OBSERVE）· RESEARCH-2=TF2B_10.15（OBSERVE/非昇格）· REJECT=PEG_v3/AgingGuard。
+4. **正本:** `docs/ops/umm_p2_maker_shadow_directive.md` · `docs/ops/tf2b_10_15_shadow_validation_directive.md` · `data/mm_research/umm_p2_maker_shadow/` · `data/mm_research/tf2b_10_15_shadow/`。
+
+2026-10-14 | CSR-587 | UMM-P2 + TF2B_10.15 Shadow mid-check MORE_DATA | LOCK
+
+GOV: LIVE=UNTOUCHED · PAPER=PEG2-B monitor · WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · PROMOTE=False

@@ -2238,3 +2238,32 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
   - 6位: **TF2B_10.15**（完全終了）
 - 正本: `four_pillars_investigation_report_20261014.md`
 
+## 94. CSR-587 — UMM-P2 / TF2B_10.15 Shadow 中間検証（2026-10-14 17:52:42 JST）
+
+- **GLOBAL:** WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · **PROMOTE=False** · LIVE/PAPER 非改変
+- **位置づけ:** CSR-586 監査（Maker 後退 · 10.15 非昇格）を受けつつ、両 Shadow は OBSERVE レーンとして継続中。本 CSR は **~20.5h 時点の中間ロック**。
+- **1. UMM-P2 Maker Shadow（RESEARCH-1）**
+  - elapsed ≈ **20.6h** · sample_floor **未達**（要 72h または ARM attempts≥2000 · 現状 attempts=**589**）
+  - CTRL: n=541 · PnL **+240.74 bp** · EV +0.445 · PF 1.278 · DD -64.35 · Never-green 6.28%
+  - ARM:  n=395 · PnL **+172.20 bp** · EV +0.436 · PF 1.271 · DD -64.36 · Never-green **3.04%** · fill **67.1%** · timeouts=106
+  - Δ(ARM−CTRL): PnL **-68.54** · EV -0.009 · PF -0.007 · Never-green **-3.2pt（改善）** · avgAE1s **+0.33（改善）** · 10s+ sink ΔPnL **-54.17（未改善）**
+  - 別EV: 0–10s ΔEV **+0.38**（ARM優位）· 10–30s **-0.15** · 10s+ sink EV **CTRL +0.09 / ARM -0.04**
+  - **判定: MORE_DATA**（入口毒性は改善、損益・sink・床は未達。CF +640bp は未再現）
+- **2. TF2B_10.15 State A Shadow（RESEARCH-2）**
+  - elapsed ≈ **20.6h** · StateA=621 labeled · Validation N=**311**（first_judge/promote_review 可）
+  - Discovery: Hit 41.9% · R120 **+0.32** · R240 **+0.22** · MFE 5.36
+  - Validation: Hit **29.6%** · R120 **+0.07** · R240 **-0.29** · MFE 4.05
+  - Baseline: Hit 37.9% · R120 +0.09 · R240 +0.14 · MFE 4.69（Val MFE 優位なし）
+  - State B (High Imb only): n=1348 · R120 +0.07 · R240 +0.06
+  - **判定: MORE_DATA**（Ret120 は僅差プラスだが Val で Hit/R240 崩壊 · PROMOTE_TO_PAPER 条件未充足 · CSR-585 CLOSED と整合）
+- **3. Portfolio（固定）**
+  - LIVE = TF2BP Baseline（維持）
+  - PAPER = PEG2-B（監視）
+  - RESEARCH-1 = UMM-P2 Maker Shadow（OBSERVE · 昇格なし）
+  - RESEARCH-2 = TF2B_10.15 Shadow（OBSERVE · 昇格なし）
+  - REJECT = PEG_v3 / AgingGuard
+- **4. 次アクション（禁止事項付き）**
+  - UMM-P2: 72h床まで継続。床到達後 ΔPnL≤0 なら REJECT 判定を正式化。Signal/Inventory/Exit/Params 変更禁止。
+  - TF2B_10.15: 閾値・State定義の途中最適化禁止。再現性が出なければ研究終了（CLOSED）維持。
+- 正本: `docs/ops/umm_p2_maker_shadow_directive.md` · `docs/ops/tf2b_10_15_shadow_validation_directive.md` · `data/mm_research/umm_p2_maker_shadow/paired_summary.json` · `data/mm_research/tf2b_10_15_shadow/tf2b_10_15_daily_summary.json`
+
