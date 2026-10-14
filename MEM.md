@@ -2267,3 +2267,15 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
   - TF2B_10.15: 閾値・State定義の途中最適化禁止。再現性が出なければ研究終了（CLOSED）維持。
 - 正本: `docs/ops/umm_p2_maker_shadow_directive.md` · `docs/ops/tf2b_10_15_shadow_validation_directive.md` · `data/mm_research/umm_p2_maker_shadow/paired_summary.json` · `data/mm_research/tf2b_10_15_shadow/tf2b_10_15_daily_summary.json`
 
+## 95. CSR-588 — PEG2-B LIVE Trial v1 開始（2026-10-14 18:18:13 JST）
+
+- **目的:** Paper→LIVE 乖離確認 / **実約定品質**検証（利益最大化ではない）
+- **Strategy:** PEG2-B のみ · lot=0.001 BTC · ENABLE_REAL_TRADING=true（**プロセスenvのみ** · `.env` は false 維持）
+- **Phases:** Phase-1 1h →（継続条件）Phase-2 +2h → Phase-3 +3h · **max 6h**
+- **FROZEN:** Signal / Threshold / Exit / Inventory / Sizing / Skew（maker_offset=0.97 · timeout=3s · CANCEL_AND_WAIT）
+- **Forbidden（OBSERVE ONLY・実装禁止）:** CSR-521 · Alpha vs Adverse · PEG_v3 · TF2B_10.15 · 4AGENT Candidate
+- **即停止→FLAT:** A ≤-30bp · B 4連敗 · C Timeout>80% · D LiveEV < PaperEV-0.50bp · E 異常
+- **成果物:** `data/mm_research/peg2b_live_trial/trial_{1h,3h,6h}_report.md` + 30m KPI + stop_report
+- **正本:** `docs/ops/peg2b_live_trial_v1_directive.md` · runner `antigravity.quant_pipeline.run_peg2b_live_trial`
+- **Paper twin:** 既存 PEG2 Paper 継続（改変なし）· Shadow レーン非接触
+

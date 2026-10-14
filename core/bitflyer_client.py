@@ -4,6 +4,7 @@ import time
 import hmac
 import hashlib
 import json
+import urllib.error
 import urllib.request
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
@@ -16,6 +17,10 @@ if sys.platform == "win32":
 
 # .envファイルの自動ロード
 load_dotenv()
+
+
+class OrderSubmitUnknownError(RuntimeError):
+    """POST may have been accepted by the venue; never auto re-POST."""
 
 
 class BitFlyerClient:
@@ -63,28 +68,79 @@ class BitFlyerClient:
         }
 
     def _request(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Any:
-        """Private APIリクエストを実行"""
+        """Private API. GET may retry; POST order paths must use _request_post_once."""
+        method_u = method.upper()
+        if method_u == "POST":
+            return self._request_post_once(path, body)
+        return self._request_get_retry(path, body=None if body is None else body)
+
+    def _request_get_retry(self, path: str, body: Optional[Dict[str, Any]] = None) -> Any:
+        """GET reads: transient retry allowed."""
         if not self.api_key or not self.api_secret:
             raise ValueError("APIキーとシークレットを設定してください。")
 
         body_str = json.dumps(body) if body else ""
         url = self.BASE_URL + path
-        headers = self._create_headers(method, path, body_str)
+        last_err: Optional[Exception] = None
+        for attempt in range(1, 6):
+            try:
+                headers = self._create_headers("GET", path, body_str)
+                req = urllib.request.Request(
+                    url,
+                    data=body_str.encode("utf-8") if body_str else None,
+                    headers=headers,
+                    method="GET",
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    res_data = response.read().decode("utf-8")
+                    return json.loads(res_data) if res_data else {}
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8")
+                last_err = RuntimeError(f"bitFlyer APIエラー ({e.code}): {err_body}")
+                if e.code == 429 and attempt < 5:
+                    wait = min(60.0, 2.0 ** attempt)
+                    print(
+                        f"[BitFlyerClient] 429 rate-limit attempt={attempt}/5 sleep={wait:.0f}s",
+                        flush=True,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise last_err
+            except Exception as e:
+                last_err = e
+                if attempt < 5:
+                    time.sleep(min(10.0, float(attempt)))
+                    continue
+                raise
+        raise last_err  # pragma: no cover
 
+    def _request_post_once(self, path: str, body: Optional[Dict[str, Any]] = None) -> Any:
+        """POST once — never auto re-POST. Ambiguous IO → OrderSubmitUnknownError."""
+        if not self.api_key or not self.api_secret:
+            raise ValueError("APIキーとシークレットを設定してください。")
+
+        body_str = json.dumps(body) if body else ""
+        url = self.BASE_URL + path
+        headers = self._create_headers("POST", path, body_str)
         req = urllib.request.Request(
             url,
             data=body_str.encode("utf-8") if body_str else None,
             headers=headers,
-            method=method.upper()
+            method="POST",
         )
-
         try:
             with urllib.request.urlopen(req, timeout=10) as response:
                 res_data = response.read().decode("utf-8")
                 return json.loads(res_data) if res_data else {}
         except urllib.error.HTTPError as e:
+            # Definite API rejection (e.g. 400/-205) — not unknown; do not retry POST
             err_body = e.read().decode("utf-8")
-            raise RuntimeError(f"bitFlyer APIエラー ({e.code}): {err_body}")
+            raise RuntimeError(f"bitFlyer APIエラー ({e.code}): {err_body}") from e
+        except Exception as e:
+            # Timeout / connection reset after possible accept → ORDER_UNKNOWN, never re-POST
+            raise OrderSubmitUnknownError(
+                f"order_submit_unknown path={path} err={type(e).__name__}: {e}"
+            ) from e
 
     def get_balance(self) -> List[Dict[str, Any]]:
         """口座残高を取得 (/v1/me/getbalance)"""
@@ -97,6 +153,22 @@ class BitFlyerClient:
     def get_positions(self, product_code: str = "FX_BTC_JPY") -> List[Dict[str, Any]]:
         """保有建玉一覧を取得 (/v1/me/getpositions)"""
         return self._request("GET", f"/v1/me/getpositions?product_code={product_code}")
+
+    def get_child_orders(
+        self,
+        product_code: str = "FX_BTC_JPY",
+        child_order_state: str = "ACTIVE",
+        child_order_acceptance_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """注文一覧 (/v1/me/getchildorders). Optional filter by acceptance id."""
+        path = (
+            f"/v1/me/getchildorders?product_code={product_code}"
+            f"&child_order_state={child_order_state}"
+        )
+        if child_order_acceptance_id:
+            path += f"&child_order_acceptance_id={child_order_acceptance_id}"
+        rows = self._request("GET", path)
+        return rows if isinstance(rows, list) else []
 
     def send_order(
         self,
@@ -143,12 +215,31 @@ class BitFlyerClient:
 
         # 3. 本番発注
         print(f"[BitFlyerClient] 🚨 [REAL ORDER] 本番注文を送信します: {body}")
+        t_send = time.perf_counter_ns()
         res = self._request("POST", "/v1/me/sendchildorder", body)
-        return {
+        t_ack = time.perf_counter_ns()
+        out = {
             "status": "SUBMITTED",
             "child_order_acceptance_id": res.get("child_order_acceptance_id"),
-            "order_details": body
+            "order_details": body,
         }
+        # Phase-0 latency probe only — never alters order semantics.
+        try:
+            from antigravity.quant_pipeline.live_latency_probe import notify_order_ack
+
+            notify_order_ack(
+                {
+                    "t7_ns": t_send,
+                    "t8_ns": t_ack,
+                    "acceptance_id": out.get("child_order_acceptance_id"),
+                    "side": side_upper,
+                    "size": size,
+                    "product_code": product_code,
+                }
+            )
+        except Exception:
+            pass
+        return out
 
     def get_execution_price_by_acceptance_id(
         self,
@@ -174,6 +265,41 @@ class BitFlyerClient:
             except Exception:
                 pass
         return None
+
+    def cancel_child_order(
+        self,
+        product_code: str = "FX_BTC_JPY",
+        child_order_acceptance_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """単一注文キャンセル (/v1/me/cancelchildorder). POST once — never auto re-POST."""
+        if not child_order_acceptance_id:
+            raise ValueError("child_order_acceptance_id required")
+        body = {
+            "product_code": product_code,
+            "child_order_acceptance_id": child_order_acceptance_id,
+        }
+        if not self.enable_real_trading:
+            print(
+                f"[BitFlyerClient] 🛡️ [DRY RUN] cancel_child_order "
+                f"{product_code} id={child_order_acceptance_id}"
+            )
+            return {"status": "SIMULATED", "order_details": body}
+        print(
+            f"[BitFlyerClient] 🚨 [REAL CANCEL] {product_code} "
+            f"id={child_order_acceptance_id}"
+        )
+        self._request("POST", "/v1/me/cancelchildorder", body)
+        return {"status": "CANCEL_SUBMITTED", "order_details": body}
+
+    def cancel_all_child_orders(self, product_code: str = "FX_BTC_JPY") -> Dict[str, Any]:
+        """未約定注文一括キャンセル (/v1/me/cancelallchildorders). POST once."""
+        body = {"product_code": product_code}
+        if not self.enable_real_trading:
+            print(f"[BitFlyerClient] 🛡️ [DRY RUN] cancel_all_child_orders {product_code}")
+            return {"status": "SIMULATED", "order_details": body}
+        print(f"[BitFlyerClient] 🚨 [REAL CANCEL ALL] {product_code}")
+        self._request("POST", "/v1/me/cancelallchildorders", body)
+        return {"status": "CANCEL_ALL_SUBMITTED", "order_details": body}
 
     # ==========================================
     # Public API & 相場・レイテンシ診断機能

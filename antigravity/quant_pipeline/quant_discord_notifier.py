@@ -1285,6 +1285,73 @@ class QuantDiscordNotifier:
         self.post_dryrun_multicast({"embeds": [embed]})
         return ok
 
+    def post_peg2b_live_trial(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """CSR-588 PEG2-B LIVE Trial v1 — fill-quality / Paper→LIVE gap (lot=0.001)."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        kind_title = {
+            "start": "🚀 【PEG2-B LIVE Trial 開始】",
+            "periodic": "📡 【PEG2-B LIVE Trial 30m】",
+            "phase1": "⏱️ 【PEG2-B LIVE Trial Phase-1 Gate】",
+            "final": "🏁 【PEG2-B LIVE Trial 6h】",
+            "stop": "🛑 【PEG2-B LIVE Trial STOP/FLAT】",
+        }.get(kind, "📡 【PEG2-B LIVE Trial】")
+        stop = report.get("stop_reason")
+        color = 0xE74C3C if (stop or kind == "stop") else (0x2ECC71 if kind in ("start", "final") else 0x3498DB)
+        gate = report.get("phase_gate") or {}
+        flatten = report.get("flatten") or {}
+        embed = {
+            "title": kind_title,
+            "description": (
+                f"目的: **Paper→LIVE 乖離 / 実約定品質**（利益最大化ではない）\n"
+                f"lot=`0.001` · phase=`{report.get('phase')}` · elapsed=`{report.get('elapsed_hours')}h`\n"
+                f"Signal/Exit/Sizing **FROZEN** · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "KPI",
+                    "value": (
+                        f"• LIVE PnL=`{report.get('live_pnl_bp')}bp` "
+                        f"(ΔPaper=`{report.get('pnl_diff_live_minus_paper_bp')}`)\n"
+                        f"• Fill=`{report.get('fill_rate')}` · Timeout=`{report.get('timeout_rate')}` "
+                        f"· MakerFill%=`{report.get('maker_fill_pct')}`\n"
+                        f"• Slip=`{report.get('avg_slippage_bp')}bp` · WR=`{report.get('win_rate')}` "
+                        f"· EV=`{report.get('ev_bp')}` (PaperEV=`{report.get('paper_ev_bp_window')}` "
+                        f"Δ=`{report.get('ev_diff_live_minus_paper_bp')}`)\n"
+                        f"• trades=`{report.get('trades')}` orders=`{report.get('maker_orders')}` "
+                        f"consec_loss=`{report.get('consec_losses')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Gate / Stop",
+                    "value": (
+                        f"• stop=`{stop or '—'}`\n"
+                        f"• phase_gate=`{gate or '—'}`\n"
+                        f"• promote_review=`{report.get('promote_review', '—')}`\n"
+                        f"• flat_ok=`{flatten.get('flat_ok', '—')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": (
+                        "• PEG2-B only · CSR-521/PEG_v3/TF2B_10.15/4AGENT **OBSERVE ONLY**\n"
+                        "• `.env` ENABLE_REAL_TRADING 不変 · AUTO_APPLY=OFF"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "CSR-588 · PEG2-B LIVE Trial v1 · max 6h"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        ok_live = self._post(self.live_webhook_url, payload)
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        return bool(ok_live or ok_a)
+
     def post_librarian_daily(self, report: Dict[str, Any]) -> bool:
         """DuckDB Research Librarian 日次 usable / ADVISE。"""
         if not report:
