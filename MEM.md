@@ -2269,13 +2269,14 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 
 ## 95. CSR-588 — PEG2-B LIVE Trial v1 開始（2026-10-14 18:18:13 JST）
 
-- **目的:** Paper→LIVE 乖離確認 / **実約定品質**検証（利益最大化ではない）
-- **Strategy:** PEG2-B のみ · lot=0.001 BTC · ENABLE_REAL_TRADING=true（**プロセスenvのみ** · `.env` は false 維持）
-- **Phases:** Phase-1 1h →（継続条件）Phase-2 +2h → Phase-3 +3h · **max 6h**
-- **FROZEN:** Signal / Threshold / Exit / Inventory / Sizing / Skew（maker_offset=0.97 · timeout=3s · CANCEL_AND_WAIT）
-- **Forbidden（OBSERVE ONLY・実装禁止）:** CSR-521 · Alpha vs Adverse · PEG_v3 · TF2B_10.15 · 4AGENT Candidate
-- **即停止→FLAT:** A ≤-30bp · B 4連敗 · C Timeout>80% · D LiveEV < PaperEV-0.50bp · E 異常
-- **成果物:** `data/mm_research/peg2b_live_trial/trial_{1h,3h,6h}_report.md` + 30m KPI + stop_report
+- **目的:** Paper→LIVE 乖離確認 / **実約定品質**検証（利益追求ではない）
+- **Strategy:** PEG2-B のみ · lot=0.001 BTC · real=true（**プロセスenvのみ** · `.env` は false 維持）
+- **Phases:** Phase-1 1h → Phase-2 +2h（累積3h）→ Phase-3 +3h（累積6h）
+- **FROZEN:** Signal / Exit / Threshold（offset=0.97 · 3s CANCEL_AND_WAIT）
+- **Forbidden（OBSERVE ONLY · WIRE禁止）:** CSR-521 · Alpha vs Adverse · PEG_v3 · TF2B_10.15 · 4AGENT
+- **Phase-1 継続条件（全て）:** LiveEV≥PaperEV−0.50bp · Fill≥20% · Timeout≤70% · PnL>−30bp · mismatchなし
+- **即停止→FLAT:** A PnL≤−30bp · B 4連敗 · C Timeout>80% · D LiveEV<PaperEV−0.50bp · E Execution異常
+- **レポート:** 30m/1h/3h/6h · PaperEV/LiveEV/ΔEV · Good/Bad Fill · Timeout Attribution · Capture · Maker Rate
+- **終了:** 自動 FLAT · **Review Only** · LIVE昇格は別審査
 - **正本:** `docs/ops/peg2b_live_trial_v1_directive.md` · runner `antigravity.quant_pipeline.run_peg2b_live_trial`
-- **Paper twin:** 既存 PEG2 Paper 継続（改変なし）· Shadow レーン非接触
 

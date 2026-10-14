@@ -62,14 +62,17 @@ PARAMS = {
 PHASE_SEC = {1: 3600.0, 2: 7200.0, 3: 10800.0}
 MAX_TOTAL_SEC = 21600.0
 REPORT_EVERY_SEC = 1800.0
-EV_APPROX_BP = 0.25
-EV_GE_EPS_BP = 0.10
+# Phase-1 continue / stop EV gap (spec CSR-588 lock)
+CONTINUE_EV_GAP_BP = 0.50
+EV_GE_EPS_BP = 0.10  # 6h review: Live EV >= Paper EV - eps
 STOP_PNL_BP = -30.0
 STOP_EV_GAP_BP = 0.50
 STOP_TIMEOUT_RATE = 0.80
 STOP_CONSEC_LOSS = 4
 MIN_ATTEMPTS_TIMEOUT_STOP = 10
 MIN_TRADES_EV_STOP = 3
+CONTINUE_FILL_RATE = 0.20
+CONTINUE_TIMEOUT_RATE = 0.70
 
 
 def _jst() -> str:
@@ -285,6 +288,7 @@ class Peg2BLiveTrial:
         self.timeout_attr: List[Dict[str, Any]] = []
         self.phase_reports_done = set()
         self.feed_source = "shared_feeder"
+        self.position_mismatch = False
 
     def request_stop(self, reason: str) -> None:
         if not self.stop_reason:
@@ -440,6 +444,14 @@ class Peg2BLiveTrial:
         paper = _paper_window_stats(self.t0)
         paper_pnl = float(paper.get("pnl_bp") or 0.0)
         paper_ev = float(paper.get("ev_bp") or 0.0)
+        # Capture = realized / MFE when MFE>0 (fill-quality, not PnL chase)
+        caps: List[float] = []
+        for t in self.trades:
+            mfe = float(t.get("mfe_bp") or 0.0)
+            if mfe > 1e-9:
+                caps.append(float(t.get("pnl_bp") or 0.0) / mfe)
+        capture = (sum(caps) / len(caps)) if caps else 0.0
+        maker_rate = fill_rate  # PEG2-B entry is maker-only
         return {
             "ts_jst": _jst(),
             "elapsed_sec": round(time.time() - self.t0, 1),
@@ -453,10 +465,13 @@ class Peg2BLiveTrial:
             "fill_rate": round(fill_rate, 4),
             "timeout_rate": round(timeout_rate, 4),
             "maker_fill_pct": round(fill_rate * 100.0, 2),
+            "maker_rate": round(maker_rate, 4),
+            "capture": round(capture, 4),
             "avg_slippage_bp": round(slip, 4),
             "win_rate": round(wins / n, 4) if n else 0.0,
             "ev_bp": round(ev, 4),
             "paper_ev_bp_window": paper_ev,
+            "delta_ev_bp": round(ev - paper_ev, 4),
             "ev_diff_live_minus_paper_bp": round(ev - paper_ev, 4),
             "trades": n,
             "maker_orders": attempts,
@@ -466,8 +481,11 @@ class Peg2BLiveTrial:
             "api_errors": self.api_errors,
             "rejects": self.rejects,
             "position": self.position_side or "FLAT",
+            "position_mismatch": bool(self.position_mismatch),
             "paper_window": paper,
             "stop_reason": self.stop_reason or None,
+            "review_only": True,
+            "live_promote": False,
         }
 
     def check_stops(self, m: Dict[str, Any]) -> Optional[str]:
@@ -491,17 +509,27 @@ class Peg2BLiveTrial:
         return None
 
     def phase1_continue_ok(self, m: Dict[str, Any]) -> Tuple[bool, str]:
-        ev_ok = abs(float(m["ev_bp"]) - float(m["paper_ev_bp_window"])) <= EV_APPROX_BP
-        # If either side has 0 trades, require live fill quality alone + no catastrophic pnl
-        if m["trades"] == 0 and m["paper_window"].get("n", 0) == 0:
-            ev_ok = abs(float(m["live_pnl_bp"])) <= EV_APPROX_BP
-        fill_ok = float(m["fill_rate"]) > 0.20
-        to_ok = float(m["timeout_rate"]) < 0.70
-        ok = ev_ok and fill_ok and to_ok
+        """Phase-1 → Phase-2: ALL five conditions required (CSR-588 lock)."""
+        live_ev = float(m["ev_bp"])
+        paper_ev = float(m["paper_ev_bp_window"])
+        # If no closed trades on either side yet, treat EV gap as 0 (neutral).
+        if m["trades"] == 0 and int((m.get("paper_window") or {}).get("n") or 0) == 0:
+            ev_ok = True
+        else:
+            ev_ok = live_ev >= (paper_ev - CONTINUE_EV_GAP_BP)
+        fill_ok = float(m["fill_rate"]) >= CONTINUE_FILL_RATE
+        to_ok = float(m["timeout_rate"]) <= CONTINUE_TIMEOUT_RATE
+        pnl_ok = float(m["live_pnl_bp"]) > STOP_PNL_BP
+        mismatch = bool(m.get("position_mismatch"))
+        mismatch_ok = not mismatch
+        ok = ev_ok and fill_ok and to_ok and pnl_ok and mismatch_ok
         reason = (
-            f"ev_approx={ev_ok}(|Δ|={abs(float(m['ev_bp'])-float(m['paper_ev_bp_window'])):.4f}) "
-            f"fill>{0.20}={fill_ok}({m['fill_rate']}) "
-            f"timeout<0.70={to_ok}({m['timeout_rate']})"
+            f"1:live_ev>=paper_ev-{CONTINUE_EV_GAP_BP}={ev_ok}"
+            f"(L={live_ev:.4f} P={paper_ev:.4f}) "
+            f"2:fill>={CONTINUE_FILL_RATE}={fill_ok}({m['fill_rate']}) "
+            f"3:timeout<={CONTINUE_TIMEOUT_RATE}={to_ok}({m['timeout_rate']}) "
+            f"4:pnl>{STOP_PNL_BP}={pnl_ok}({m['live_pnl_bp']}) "
+            f"5:no_mismatch={mismatch_ok}"
         )
         return ok, reason
 
@@ -524,10 +552,17 @@ class Peg2BLiveTrial:
             f"2. Paper PnL diff (Live−Paper window): **{m['pnl_diff_live_minus_paper_bp']} bp**",
             f"3. Fill Rate: **{m['fill_rate']:.2%}** ({m['maker_fills']}/{m['maker_orders']})",
             f"4. Timeout Rate: **{m['timeout_rate']:.2%}** ({m['maker_timeouts']}/{m['maker_orders']})",
-            f"5. Maker Fill %: **{m['maker_fill_pct']}%**",
+            f"5. Maker Fill % / Maker Rate: **{m['maker_fill_pct']}%** / **{m.get('maker_rate')}**",
             f"6. Average Slippage: **{m['avg_slippage_bp']} bp**",
             f"7. Win Rate: **{m['win_rate']:.2%}** (n={m['trades']})",
-            f"8. EV: **{m['ev_bp']} bp** · Paper EV window **{m['paper_ev_bp_window']} bp** · Δ **{m['ev_diff_live_minus_paper_bp']}**",
+            f"8. Live EV: **{m['ev_bp']} bp** · Paper EV: **{m['paper_ev_bp_window']} bp** · ΔEV: **{m.get('delta_ev_bp', m['ev_diff_live_minus_paper_bp'])}**",
+            f"9. Capture: **{m.get('capture')}** (mean pnl/MFE)",
+            "",
+            "## Paper EV / Live EV / ΔEV",
+            "",
+            f"- Paper EV = `{m['paper_ev_bp_window']}`",
+            f"- Live EV = `{m['ev_bp']}`",
+            f"- ΔEV (Live−Paper) = `{m.get('delta_ev_bp', m['ev_diff_live_minus_paper_bp'])}`",
             "",
             "## Paper vs Live 差分分析",
             "",
@@ -539,12 +574,14 @@ class Peg2BLiveTrial:
                         "ev_bp": m["ev_bp"],
                         "fill_rate": m["fill_rate"],
                         "timeout_rate": m["timeout_rate"],
+                        "maker_rate": m.get("maker_rate"),
+                        "capture": m.get("capture"),
                         "trades": m["trades"],
                     },
                     "paper_window": m["paper_window"],
                     "diff": {
                         "pnl_bp": m["pnl_diff_live_minus_paper_bp"],
-                        "ev_bp": m["ev_diff_live_minus_paper_bp"],
+                        "delta_ev_bp": m.get("delta_ev_bp"),
                     },
                 },
                 ensure_ascii=False,
@@ -573,10 +610,16 @@ class Peg2BLiveTrial:
             json.dumps(self.timeout_attr[-30:], ensure_ascii=False, indent=2),
             "```",
             "",
+            "## Capture / Maker Rate",
+            "",
+            f"- Capture = `{m.get('capture')}`",
+            f"- Maker Rate = `{m.get('maker_rate')}` ({m.get('maker_fill_pct')}%)",
+            "",
             "## Lock",
             "",
             "- Signal/Threshold/Exit/Inventory/Sizing/Skew **FROZEN**",
             "- Forbidden lanes OBSERVE ONLY (CSR-521 / Alpha vs Adverse / PEG_v3 / TF2B_10.15 / 4AGENT)",
+            "- End = **auto FLAT · Review Only** · LIVE昇格は別審査（auto promote なし）",
             "",
         ]
         return "\n".join(lines)
@@ -756,9 +799,11 @@ class Peg2BLiveTrial:
         elif self.real and net is not None:
             expect = self.size if self.position_side == "BUY" else -self.size
             if abs(net - expect) > 1e-7 and abs(net) < 1e-8:
+                self.position_mismatch = True
                 self.request_stop("E:position_mismatch_flat_while_local_long")
                 return
             if abs(net) > self.size + 1e-7:
+                self.position_mismatch = True
                 self.request_stop("E:position_mismatch_oversize")
                 return
 
@@ -851,12 +896,15 @@ class Peg2BLiveTrial:
             self.phase_reports_done.add(6)
             live_ev = float(m["ev_bp"])
             paper_ev = float(m["paper_ev_bp_window"])
+            # Review Only — never auto-promote to standing LIVE
             promote_review = live_ev >= (paper_ev - EV_GE_EPS_BP)
             body = OUT / "LIVE_PROMOTE_REVIEW.md"
             body.write_text(
-                self._report_body(m, "PEG2-B LIVE昇格レビュー")
-                + f"\n## Verdict\n\n- promote_review_submit={promote_review}\n"
-                + f"- criterion: Live EV >= Paper EV - {EV_GE_EPS_BP}bp\n"
+                self._report_body(m, "PEG2-B LIVE Trial · Review Only（昇格は別審査）")
+                + f"\n## Verdict\n\n- review_only=True\n"
+                + f"- live_promote=False (auto forbidden)\n"
+                + f"- submit_for_separate_review={promote_review}\n"
+                + f"- criterion hint: Live EV >= Paper EV - {EV_GE_EPS_BP}bp\n"
                 + f"- live_ev={live_ev} paper_ev={paper_ev}\n",
                 encoding="utf-8",
             )
