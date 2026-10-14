@@ -149,3 +149,20 @@ Git CSR-579: antigravity `3f8224c` · gapcore `3261350`
 
 
 Git CSR-581/581b: antigravity `cf50df5` · gapcore `3a6c601`
+
+**CSR-585（2026-10-13 20:09:09 JST）:** PEG分解完了 & PEG2-B Paper昇格。AgingGuard完全排除 · Maker救出成功 · Stage 2 (72h Paper trial) 開始。TF2B_10.15はValidation崩壊（R120: -0.011, R240: -0.156）により完全クローズ。
+
+2026-10-13 | CSR-585 | PEG2-B Paper promotion 72h · TF2B_10.15 CLOSED | LOCK
+
+**CSR-586（2026-10-14 17:25:00 JST）:** 4大研究フロンティア定量調査・比較監査完了。
+1. **CSR-521 SUCCESS vs FAILURE:** @30s Would-Unwind で SUCCESS 294件 (+1,175bp, HS回避20.4%) vs FAILURE 254件 (-867bp, 利確殺し96.1%)。一律足切りは「第二のAgingGuard」と実証。Hazard Score 4〜5（HS率84.9%）の複合トリガーのみ許可。
+2. **UMM-P2 Maker NO_FILL:** 未約定タイムアウト100件中87件マッチ。Good Skip 30件 (+142bp 救済, HS回避23件) vs Bad Skip 57件 (-182bp 機会損失)。Net -39.88bp 悪化。Entry指値化では病巣治らず優先度5位へ後退。
+3. **FAKE_BREAKOUT CF Audit:** 21,100件有効エピソード検証。反実仮想全ホライズン正（1s +0.13bp, 30s +0.16bp）。Net Veto Value -3,384.38bp (FAIL)。板単体ノイズでの一律遮断禁止。
+4. **Alpha vs Adverse Integrity:** Q1 vs Q2 (r=-0.404) はメタ欠落時に事後1秒逆行幅（ae_1s）を事後代入していた重大な先回りバイアス（Lookahead Leakage）。WIRE/合議採用は完全禁止維持（Interesting ≠ Actionable）。
+5. **確定優先順位:** 1位 TF2BP Baseline（完成域・触らない） / 2位 UMM Hazard（最重要フロンティア・OBSERVE ONLY） / 3位 PEG2-B Paper（72h監視中） / 4位 Alpha vs Adverse（Actionable不可） / 5位 UMM-P2 Maker（大幅後退） / 6位 TF2B_10.15（完全終了）。
+
+2026-10-14 | CSR-586 | 4-Pillar Quantitative Audit (CSR521/UMM-P2/FakeBO/Adverse) | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · OBSERVE ONLY
+
+Git CSR-585/586: antigravity `0f02ba6`

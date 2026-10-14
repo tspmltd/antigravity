@@ -2162,3 +2162,79 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **FactorIC OOS:** spread-only IC **-0.042** / EER≈5.0 · spread×inv_age IC **+0.047** / EER≈1.13（交互作用の説明力が改善）
 - 成果: `csr583_enrich_librarian_teacher_spine_v2.py` · `part_csr583_v2.parquet` · `LIBRARIAN_TEACHER_SPINE_V2_LATEST.json`
 
+## 91. CSR-584 — TF2BP cutover 判定固定（2026-10-06）
+
+- **判定固定:** SM v1.1 PASS候補 · P0修正 PASS報告 · Alpha pin Frozen
+- **GO_FOR_CUTOVER_PLAN=YES** · **GO_FOR_CUTOVER_EXECUTION=HOLD** · **LIVE GO=NO**
+- **一次情報:** Cursor 読み取り調査。M365 再検索（TF2BP / cutover / flock / stop / LONG adopt / PID 21810）に独立裏付けなし
+- **HOLD は H1–H3 のみ:**
+  - H1 旧 runner は flock 外 → NEW 起動は `OLD process==0 AND NEW exclusive lock`
+  - H2 旧 stop 成功 ≠ venue flat。成功は `OLD process==0`。position は NEW の `BOOT→RECONCILING` が SoT
+  - H3 旧 SIGTERM の SELL submit/fill/position 変化は観測。NEW は補償 BUY しない
+- **再判定前の 4 条件:** stop 手順を process-zero 成功へ変更 · 起動前に process==0 · SIGTERM 監視手順の明文化 · NEW は flock 後 BOOT→RECONCILING のみ
+- **cutover 成功の次ゲート:** run_id → heartbeat identity → BOOT→RECONCILING → venue SoT → READY_FLAT/LONG → 異常なし → 0.001 BTC 最大 20 回 soak（LIVE 全面 GO ではない）
+- **実行なし:** systemctl / REAL / flatten / kill なし
+- **再確認固定:** 現段階では stop / start / restart / 発注を行わない。`GO_FOR_CUTOVER_EXECUTION=HOLD` を維持
+- **実行結果 2026-10-06 09:16 JST:** H1–H3 を閉じて cutover 実施。旧 21810 process zero、venue 0→0、SELL 行なし。新 PID 52191 run_id `62212720dd05` は `BOOT→RECONCILING→READY_FLAT`。Micro LIVE soak は 0.001 × 最大20回で稼働中。無制限 LIVE は NO。
+- 正本: `docs/ops/tf2bp_live_cutover_v1_1.md`
+
+## 91. CSR-584 — Teacher v3 WIRE候補安定性スキャン（2026-10-06 15:15 JST）
+
+- **方針:** モデル複雑化禁止 · `+0.047` を State×horizon×期間で潰す · WIRE=NOのまま候補のみ
+- **Gates:** n≥200 · ≥2/3日同符号 · 日内OOS half · horizonはOct5 CFで補助
+- **WIRE_CANDIDATE:** 11 cells
+- **Tier A（Oct5含む + 複数日IC+ + horizon付）:**
+  - `L2_candidate|S0_lt1|high_vol` — days 10-03/05 · Oct5 ic_x **+0.168** · horizons **45/60/90** hold_better
+  - `L2_candidate|S2_2to4|high_vol` — days 10-03/05 · 両日でspread-only超え · horizon **10**
+  - `L3_candidate|S1_1to2|high_vol` — days 10-03/05 · Oct5全horizon hold_better（ICは薄い）
+- **観察:** グローバルICは日によって消失/NaN · **high_vol × L2/L3** に局在 · trend日セルはOct5でregime欠落多く要再確認
+- **Horizon:** 日内前後半で共通STABLE_HOLD_BETTERは空 → horizonはstate条件付きでのみ使う
+- 正本: `docs/ops/teacher_v3_wire_candidate_stability_csr584.md` · `TEACHER_V3_WIRE_CANDIDATE_LATEST.json`
+
+## 92. CSR-585 — PEG分解完了 & PEG2-B Paper昇格（2026-10-13 20:09 JST）
+
+- **GLOBAL:** WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · Paper Trial (Stage 2) 72h 稼働中
+- **PEG分解総括:**
+  - `AgingGuard` は 3秒時間足切りでリバウンドを自爆殺害していたため完全排除。
+  - `Maker Entry` (Offset 0.97, 3s timeout) を単独救出し、TF2BP Baseline と結合した **PEG2-B** を作成。
+  - Paper運用（`tf2bp-peg2-paper.service`）を立ち上げ、20時間経過時点で **17戦 14勝 3敗（勝率 82.4%） / 累積 PnL +61.11 bp**（¥+80.26）。
+  - Stage 2 (72時間) はノータッチ・触らない。
+- **TF2B_10.15 完全終了:**
+  - Walk-forward Validation にて R120: -0.011, R240: -0.156 と崩壊。
+  - Discoveryで良くてもValidationで壊れる典型例として、正式に研究終了（CLOSED）。リソース投入を完全停止。
+
+## 93. CSR-586 — 4大研究フロンティア 定量調査・比較監査完了（2026-10-14 17:25 JST）
+
+- **方針:** `OBSERVE ONLY` · `WIRE=NO` · `ENFORCE=0` · **「相関を行動ルールへ変換しない」**
+- **1. CSR-521 Would-Unwind SUCCESS vs FAILURE 分解:**
+  - 直近24h（3,180トレード）の @30s シミュレーション（対象548件）:
+    - **SUCCESS群 ($\Delta > 0$): 294件 (53.6%) / $\Sigma\Delta = +1,175.6 \text{ bp}$（平均 +4.00 bp）**
+      - Hard Stop 回避 60件 (20.4%)。平均保有時間 61.4s の滞留深手を救済。
+    - **FAILURE群 ($\Delta < 0$): 254件 (46.4%) / $\Sigma\Delta = -867.3 \text{ bp}$（平均 -3.41 bp）**
+      - 96.1% が健全利確（MAKER_CLOSE 231件, TAKE_PROFIT 13件）。待てば +0.30 bp で利確できた群を時間で切って -3.11 bp の大赤字に転落。
+    - **教訓:** 一律足切りは「第二のAgingGuard」。Net +308 bp は自爆（-867 bp）との差し引き。**Hazard Score 4〜5（HS率 84.9%）の複合トリガー**のみに限定。
+- **2. UMM-P2 Maker Shadow NO_FILL 属性分解:**
+  - ARM（Maker指値）未約定タイムアウト100件中、CTRLマッチ87件を完全追跡:
+    - **Good Skip (毒性回避): 30件 (34.5%) / +142.37 bp 救済（うち Hard Stop 回避 23件 / 76.7%）**
+    - **Bad Skip (機会損失): 57件 (65.5%) / -182.25 bp 機会損失（TAKE_PROFIT 43件, MAKER_CLOSE 14件）**
+    - **差引純経済インパクト: -39.88 bp（悪化）**。見送った群の勝率は 65.5% (EV +0.46 bp)。
+    - **結論:** UMM は Maker 化で利確を逃す機会損失の方が大きく、Entry指値化では病巣は治らない。優先度5位へ後退確定。
+- **3. FAKE_BREAKOUT 反実仮想 (CF) 監査:**
+  - `micro_veto_audit.jsonl` の 21,100件 有効エピソードを検証:
+    - 反実仮想リターン: 1s (+0.13 bp), 3s (+0.14 bp), 10s (+0.16 bp), 30s (+0.16 bp) と全期間プラス順行。
+    - 30s Net Veto Value: Saved Capital (+16,543.9 bp) − Opportunity Cost (+19,928.3 bp) = **-3,384.38 bp（FAIL）**。
+    - **結論:** 見せ板ノイズ（fake_bo）単体で一律 VETO すると勝てるトレンドフォローまで殺して大損害を被る。
+- **4. Alpha vs Adverse 整合性監査 (Integrity Audit only):**
+  - Q1 (WR 71.5%, EV +0.62) vs Q2 (WR 22.4%, EV -1.62), $r = -0.404$ の構造解明:
+    - メタ欠落時（70%以上）、約定1秒後の逆行幅を参照し、`ae_1s > 0` なら `GOOD_FILL (15.0)`、`ae_1s < -1.5` なら `TOXIC_FILL (75.0)` を事後代入していた。
+    - **事後推移（Ex-post 1s）の混入による重大な先回りバイアス（Lookahead Leakage）**であり、相関は完全な同語反復。
+    - `gate_fails: ['integrity_hold_csr539']` で正しくブロックされており、**WIRE/合議採用は完全禁止維持（Interesting ≠ Actionable）**。
+- **5. 確定優先順位:**
+  - 🥇 1位: **TF2BP Baseline**（完成域・触らない）
+  - 🥈 2位: **UMM Hazard**（最重要フロンティア・OBSERVE ONLY）
+  - 🥉 3位: **PEG2-B Paper**（Stage 2 72h監視中・ノータッチ）
+  - 4位: **Alpha vs Adverse**（Actionable不可・整合性監査待ち）
+  - 5位: **UMM-P2 Maker**（大幅後退）
+  - 6位: **TF2B_10.15**（完全終了）
+- 正本: `four_pillars_investigation_report_20261014.md`
+
