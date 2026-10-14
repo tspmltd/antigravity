@@ -2291,3 +2291,12 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **次:** Phase-1 1h リセット再開 → 条件クリア後 3h → 6h
 - **正本:** `docs/ops/peg2b_live_trial_v1_directive.md` · `data/mm_research/peg2b_live_trial/investigation_intermittent_20261014.md`
 
+
+## 97. CSR-588c — Run-2 = 実質初回 LIVE（2026-10-14 21:58:42 JST）
+
+- **判断ロック:** cancel/fill レース自体は低レイテンシ運用で十分あり得る・比較的よくある部類。
+- **問題の所在:** レースそのものではなく、**レース後の例外処理が落ちたこと**（`exe_sz`/`exec_sz` NameError → orphan LONG）。
+- **戦略評価:** **無傷・保留継続**（Run-1 は TECHNICAL_ABORT / 参考値。FAILではない）。
+- **Run-2:** **実質的な初回 LIVE 試験**として Phase-1 1h をリセット開始。
+- **実装:** ADOPT typo 修正済み（`abac206`）· timeout→cancel→fill確認 · venue_net==0 · post-exit flat。
+

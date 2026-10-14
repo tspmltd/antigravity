@@ -112,3 +112,11 @@ Stop:
 ```bash
 bash scripts/stop-peg2b-live-trial.sh   # → auto FLAT
 ```
+
+### Run-2 判断（CSR-588c）
+
+- cancel/fill レースは低レイテンシで十分あり得る部類。
+- **問題はレース後の例外処理クラッシュ**（戦略ロジックではない）。
+- 戦略評価は無傷。Run-1=TECHNICAL_ABORT 参考値。
+- **Run-2 = 実質的な初回 LIVE 試験**（Phase-1 1h リセット）。
+
