@@ -309,7 +309,14 @@ class Peg2BLiveTrial:
             return None, None, str(exc)
 
     def lookup_order(self, acceptance_id: str) -> Dict[str, Any]:
-        out = {"active": False, "filled": False, "canceled": False, "rejected": False, "avg_px": None}
+        out: Dict[str, Any] = {
+            "active": False,
+            "filled": False,
+            "canceled": False,
+            "rejected": False,
+            "avg_px": None,
+            "executed_size": 0.0,
+        }
         if not self.real:
             return out
         for state, key in (
@@ -328,9 +335,22 @@ class Peg2BLiveTrial:
             except Exception as exc:
                 self.api_errors += 1
                 return {**out, "error": str(exc)}
-            if rows:
-                out[key] = True
-                if state == "COMPLETED":
+            if not rows:
+                continue
+            out[key] = True
+            row0 = rows[0] if isinstance(rows[0], dict) else {}
+            if state == "COMPLETED":
+                try:
+                    out["executed_size"] = float(row0.get("executed_size") or row0.get("size") or 0.0)
+                except Exception:
+                    out["executed_size"] = 0.0
+                try:
+                    avg = row0.get("average_price")
+                    if avg is not None and float(avg) > 0:
+                        out["avg_px"] = float(avg)
+                except Exception:
+                    pass
+                if out["avg_px"] is None:
                     try:
                         px = self.client.get_execution_price_by_acceptance_id(
                             self.product, acceptance_id, max_retries=2, retry_interval_sec=0.2
@@ -339,6 +359,22 @@ class Peg2BLiveTrial:
                     except Exception:
                         pass
         return out
+
+    def require_venue_flat(self, *, context: str) -> Tuple[bool, Optional[float], Optional[str]]:
+        """Hard gate before new LIMIT. Returns (ok, net, err)."""
+        if not self.real:
+            if self.position_side is not None:
+                return False, self.size, "local_position_open"
+            return True, 0.0, None
+        net, avg, err = self.venue_net()
+        if err is not None:
+            self.api_errors += 1
+            return False, None, err
+        if net is None:
+            return False, None, "venue_net_unknown"
+        if abs(net) >= 1e-8:
+            return False, net, f"venue_net_not_flat:{net}:avg={avg}:ctx={context}"
+        return True, 0.0, None
 
     def flatten(self, reason: str) -> Dict[str, Any]:
         detail: Dict[str, Any] = {"reason": reason, "ts": _iso(), "actions": []}
@@ -666,6 +702,26 @@ class Peg2BLiveTrial:
         }
 
     def _post_limit(self, intent: Dict[str, Any]) -> None:
+        # Hard gate: never stack entries — venue must be flat
+        if self.position_side is not None or self.pending is not None:
+            return
+        ok, net, err = self.require_venue_flat(context="pre_limit")
+        if not ok:
+            if err and ("venue_net_not_flat" in str(err) or (net is not None and abs(float(net)) >= 1e-8)):
+                self.position_mismatch = True
+                _append_audit(
+                    {
+                        "event": "BLOCK_LIMIT_NOT_FLAT",
+                        "ts": _iso(),
+                        "data": {"net": net, "err": err, "intent": intent},
+                    }
+                )
+                self.request_stop(f"E:block_limit_not_flat:{err}")
+            else:
+                self.api_errors += 1
+                print(f"[PEG2B_LIVE] skip LIMIT venue gate: {err}", flush=True)
+            return
+
         self.maker_orders += 1
         oid = None
         try:
@@ -702,7 +758,7 @@ class Peg2BLiveTrial:
             _append_audit({"event": "ORDER_ERROR", "ts": _iso(), "data": {"err": str(exc)}})
             self.request_stop(f"E:api_error:{exc}")
 
-    def _on_fill(self, px: float, intent: Dict[str, Any]) -> None:
+    def _on_fill(self, px: float, intent: Dict[str, Any], *, source: str = "FILL") -> None:
         mid = float(intent.get("mid") or px)
         # BUY: positive slippage = paid above mid (adverse)
         slip = (px - mid) / mid * 10_000.0
@@ -715,38 +771,146 @@ class Peg2BLiveTrial:
         self.trail_armed = False
         self.pending = None
         self.acceptance_id = None
+        event = "MAKER_FILLED_ADOPTED" if source.startswith("ADOPT") else "MAKER_FILLED"
         _append_audit(
             {
-                "event": "MAKER_FILLED",
+                "event": event,
                 "ts": _iso(),
-                "data": {"fill_price": px, "slippage_bp": slip, "intent": intent},
+                "data": {
+                    "fill_price": px,
+                    "slippage_bp": slip,
+                    "intent": intent,
+                    "source": source,
+                },
             }
         )
-        print(f"[PEG2B_LIVE] FILLED {self.position_side} @ {px} slip={slip:.3f}bp", flush=True)
+        print(
+            f"[PEG2B_LIVE] FILLED({source}) {self.position_side} @ {px} slip={slip:.3f}bp",
+            flush=True,
+        )
 
-    def _cancel_pending(self, reason: str, board_mid: float) -> None:
+    def _timeout_cancel_and_reconcile(self, board_mid: float) -> None:
+        """timeout → cancel → fill確認 → COMPLETEDなら ADOPT（TIMEOUTに数えない）.
+
+        Race that caused TECHNICAL_ABORT: local TIMEOUT_CANCEL while venue COMPLETED.
+        """
         intent = self.pending or {}
         oid = self.acceptance_id or intent.get("acceptance_id")
-        if oid and self.real:
+        if not oid:
+            self.pending = None
+            self.acceptance_id = None
+            return
+
+        def _try_adopt(st: Dict[str, Any], stage: str) -> bool:
+            if not st.get("filled"):
+                return False
+            px = float(st.get("avg_px") or intent.get("limit_price") or 0.0)
+            if px <= 0:
+                return False
+            # Partial beyond lot → protect
+            exe_sz = float(st.get("executed_size") or 0.0)
+            if exec_sz > self.size + 1e-8:
+                self.position_mismatch = True
+                self.request_stop(f"E:partial_oversize_on_adopt:{exec_sz}")
+                self.pending = None
+                self.acceptance_id = None
+                return True
+            self._on_fill(px, intent, source=f"ADOPT_{stage}")
+            return True
+
+        # 1) fill確認 BEFORE cancel
+        if self.real:
+            st0 = self.lookup_order(str(oid))
+            if st0.get("error"):
+                # ambiguous — do not clear pending; bump api error
+                return
+            if _try_adopt(st0, "PRE_CANCEL"):
+                return
+
+            # 2) cancel
             try:
-                self.client.cancel_child_order(self.product, oid)
+                self.client.cancel_child_order(self.product, str(oid))
+                self.maker_cancels += 1
             except Exception as exc:
                 self.api_errors += 1
                 print(f"[PEG2B_LIVE] cancel warn: {exc}", flush=True)
-        self.maker_cancels += 1
-        if reason.startswith("TIMEOUT"):
+
+            # 3) settle poll (fill may land during/after cancel)
+            adopted = False
+            final_st: Dict[str, Any] = {}
+            for i in range(6):
+                time.sleep(0.25)
+                final_st = self.lookup_order(str(oid))
+                if final_st.get("error"):
+                    continue
+                if _try_adopt(final_st, f"POST_CANCEL_{i}"):
+                    adopted = True
+                    break
+                if final_st.get("canceled") and not final_st.get("active") and not final_st.get("filled"):
+                    break
+                if not final_st.get("active") and not final_st.get("filled"):
+                    # absent / expired path
+                    break
+
+            if adopted:
+                return
+
+            # 4) venue reconcile — orphan fill without order lookup certainty
+            ok, net, err = self.require_venue_flat(context="post_timeout")
+            if err and net is None:
+                self.request_stop(f"E:venue_unknown_after_timeout:{err}")
+                self.pending = None
+                self.acceptance_id = None
+                return
+            if not ok and net is not None and abs(net) >= 1e-8:
+                # Venue long while local flat-pending → ADOPT from venue avg
+                avg = 0.0
+                _, avg2, _ = self.venue_net()
+                avg = float(avg2 or intent.get("limit_price") or 0.0)
+                if abs(net - self.size) <= 1e-7 and avg > 0:
+                    self._on_fill(avg, intent, source="ADOPT_VENUE_RECONCILE")
+                    return
+                self.position_mismatch = True
+                self.request_stop(f"E:position_mismatch_after_timeout:net={net}")
+                self.pending = None
+                self.acceptance_id = None
+                return
+
+            # true timeout / canceled
             self.maker_timeouts += 1
             attr = {
                 "ts": _iso(),
-                "reason": reason,
+                "reason": "TIMEOUT_3S",
                 "limit_price": intent.get("limit_price"),
                 "mid": board_mid,
                 "spread_bp": intent.get("spread_bp"),
                 "imbalance": intent.get("imbalance"),
                 "acceptance_id": oid,
+                "final_lookup": {
+                    k: final_st.get(k)
+                    for k in ("active", "filled", "canceled", "rejected", "avg_px", "executed_size")
+                },
             }
             self.timeout_attr.append(attr)
             _append_audit({"event": "ORDER_TIMEOUT_CANCEL", "ts": _iso(), "data": attr})
+            self.pending = None
+            self.acceptance_id = None
+            return
+
+        # dry-run path
+        self.maker_cancels += 1
+        self.maker_timeouts += 1
+        attr = {
+            "ts": _iso(),
+            "reason": "TIMEOUT_3S",
+            "limit_price": intent.get("limit_price"),
+            "mid": board_mid,
+            "spread_bp": intent.get("spread_bp"),
+            "imbalance": intent.get("imbalance"),
+            "acceptance_id": oid,
+        }
+        self.timeout_attr.append(attr)
+        _append_audit({"event": "ORDER_TIMEOUT_CANCEL", "ts": _iso(), "data": attr})
         self.pending = None
         self.acceptance_id = None
 
@@ -761,7 +925,7 @@ class Peg2BLiveTrial:
                 return
             if st.get("filled"):
                 px = float(st.get("avg_px") or intent["limit_price"])
-                self._on_fill(px, intent)
+                self._on_fill(px, intent, source="LOOKUP")
                 return
             if st.get("rejected"):
                 self.rejects += 1
@@ -770,24 +934,26 @@ class Peg2BLiveTrial:
                 self.request_stop("E:order_reject")
                 return
             if st.get("canceled") and not st.get("active"):
-                # canceled externally
+                # canceled externally — still reconcile venue in case of race
+                ok, net, err = self.require_venue_flat(context="ext_cancel")
+                if not ok and net is not None and abs(net - self.size) <= 1e-7:
+                    _, avg, _ = self.venue_net()
+                    self._on_fill(
+                        float(avg or intent["limit_price"]),
+                        intent,
+                        source="ADOPT_EXT_CANCEL_RACE",
+                    )
+                    return
                 self.pending = None
                 self.acceptance_id = None
                 return
         else:
             # dry: paper-style touch
             if best_bid >= float(intent["limit_price"]):
-                self._on_fill(float(intent["limit_price"]), intent)
+                self._on_fill(float(intent["limit_price"]), intent, source="DRY_TOUCH")
                 return
         if now >= float(intent["timeout_at"]):
-            # before cancel, re-check fill once
-            if self.real and oid:
-                st = self.lookup_order(str(oid))
-                if st.get("filled"):
-                    px = float(st.get("avg_px") or intent["limit_price"])
-                    self._on_fill(px, intent)
-                    return
-            self._cancel_pending("TIMEOUT_3S", mid)
+            self._timeout_cancel_and_reconcile(mid)
 
     def _eval_exit(self, now: float, best_bid: float, best_ask: float, mid: float) -> None:
         if not self.position_side:
@@ -851,6 +1017,22 @@ class Peg2BLiveTrial:
                 pnl_bp = (self.entry_price - exit_px) / self.entry_price * 10_000.0
             self._close_trade(exit_px, exit_reason, pnl_bp, hold)
             print(f"[PEG2B_LIVE] EXIT {exit_reason} pnl={pnl_bp:.3f}bp", flush=True)
+            # Post-exit venue reconcile — must be flat before next LIMIT
+            if self.real:
+                flat_ok = False
+                last_net: Optional[float] = None
+                for _ in range(8):
+                    time.sleep(0.25)
+                    ok, net, err = self.require_venue_flat(context="post_exit")
+                    last_net = net
+                    if ok:
+                        flat_ok = True
+                        break
+                    if err and net is None:
+                        self.api_errors += 1
+                if not flat_ok:
+                    self.position_mismatch = True
+                    self.request_stop(f"E:post_exit_not_flat:net={last_net}")
         except OrderSubmitUnknownError as exc:
             self.api_errors += 1
             self.request_stop(f"E:exit_order_unknown:{exc}")

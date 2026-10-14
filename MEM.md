@@ -2280,3 +2280,14 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **終了:** 自動 FLAT · **Review Only** · LIVE昇格は別審査
 - **正本:** `docs/ops/peg2b_live_trial_v1_directive.md` · runner `antigravity.quant_pipeline.run_peg2b_live_trial`
 
+
+## 96. CSR-588b — LIVE Trial Run-1 TECHNICAL_ABORT → race修正 → Phase-1 リセット（2026-10-14 21:16:53 JST）
+
+- **Run-1 判定:** **TECHNICAL_ABORT**（FAILではない · 戦略評価は保留）
+- **停止原因:** `position_mismatch_oversize` = TIMEOUT_CANCEL と取引所 COMPLETED のレース → ローカルズレ → 保護FLAT
+- **参考値（FORCE_FLAT込み）:** LivePnL +14.4bp · Fill 50% · Timeout 50% · WR 100% · PEG2-B優位性は否定しない
+- **内部評価メモ:** 研究 A- · 実装 C · 運用候補 A-
+- **修正（必須）:** timeout→cancel→fill確認→COMPLETED ADOPT · 新規LIMIT前 `venue_net==0` · post-exit flat reconcile
+- **次:** Phase-1 1h リセット再開 → 条件クリア後 3h → 6h
+- **正本:** `docs/ops/peg2b_live_trial_v1_directive.md` · `data/mm_research/peg2b_live_trial/investigation_intermittent_20261014.md`
+

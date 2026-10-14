@@ -1,8 +1,16 @@
 # PEG2-B LIVE Trial v1 — Paper→LIVE 乖離確認（CSR-588）
 
-**STATUS:** PHASE-1 · REAL · lot=0.001  
+**STATUS:** PHASE-1 RESET · REAL · lot=0.001  
 **目的:** Paper と LIVE の乖離確認。**利益追求ではない。** 実約定品質検証。  
 **終了:** 自動 FLAT · **Review Only** · LIVE昇格は別審査（auto promote 禁止）
+
+### Run-1（18:27–19:14）判定ロック
+
+- **分類: TECHNICAL_ABORT**（FAIL ではない）
+- 停止: `E:position_mismatch_oversize` = timeout/cancel vs COMPLETED レース → 保護停止
+- 戦略負けではない。参考値: Live PnL +14.4bp · Fill 50% · Timeout 50% · WR 100%（FORCE_FLAT込み）
+- 内部評価メモ: 研究 A- · 実装 C · 運用候補 A-（ロジックは生きている）
+- Run-2 は **race修正 + venue_net==0 ゲート後** に Phase-1 1h リセット
 
 ---
 
