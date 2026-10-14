@@ -808,7 +808,7 @@ class Peg2BLiveTrial:
             if px <= 0:
                 return False
             # Partial beyond lot → protect
-            exe_sz = float(st.get("executed_size") or 0.0)
+            exec_sz = float(st.get("executed_size") or 0.0)
             if exec_sz > self.size + 1e-8:
                 self.position_mismatch = True
                 self.request_stop(f"E:partial_oversize_on_adopt:{exec_sz}")
