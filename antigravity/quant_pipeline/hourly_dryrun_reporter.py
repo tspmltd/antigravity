@@ -8,6 +8,8 @@ Discord のメイン定期運用報告チャンネル (REPORT) および DRYRUN 
   1. UMM & TF2BP 24時間連続観察 (data/dryrun_umm_tf2bp_state.json)
   2. 承認済み12戦略 統合アリーナ (data/dryrun_approved_arena_state.json)
   3. 4AGENT 合議パイプライン (configs/agents_council_state.json)
+  4. TF2B_SFV (StateA×FBV×Sentinel) (data/dryrun_tf2b_sfv_state.json)
+  5. TF2B_DeSeva_v1 (TF2BP×SEVA) (data/dryrun_tf2b_deseva_v1_state.json)
 
 起動時に直ちに初回最新レポートを送信し、以降は毎時00分（3600秒周期）で送信を継続する。
 """
@@ -31,6 +33,10 @@ JST = timezone(timedelta(hours=9))
 UMM_TF_STATE = os.path.join(BASE_DIR, "data", "dryrun_umm_tf2bp_state.json")
 ARENA_STATE = os.path.join(BASE_DIR, "data", "dryrun_approved_arena_state.json")
 COUNCIL_STATE = os.path.join(BASE_DIR, "configs", "agents_council_state.json")
+TF2B_SFV_STATE = os.path.join(BASE_DIR, "data", "dryrun_tf2b_sfv_state.json")
+TF2B_DESEVA_STATE = os.path.join(BASE_DIR, "data", "dryrun_tf2b_deseva_v1_state.json")
+TF2B_RVL_STATE = os.path.join(BASE_DIR, "data", "dryrun_tf2b_rvl_state.json")
+SEVA_STATE = os.path.join(BASE_DIR, "data", "seva_shadow_state.json")
 ADVERSE_SUMMARY_STATE = os.path.join(BASE_DIR, "data", "adverse_excursion_summary.json")
 TOXIC_STATE = os.path.join(BASE_DIR, "data", "adverse_toxic_state.json")
 SPREAD_GATE_STATE = os.path.join(BASE_DIR, "data", "spread_gate_stats.json")
@@ -62,6 +68,8 @@ class HourlyDryRunReporter:
         umm_tf = self._load_json(UMM_TF_STATE)
         arena = self._load_json(ARENA_STATE)
         council = self._load_json(COUNCIL_STATE)
+        sfv_state = self._load_json(TF2B_SFV_STATE)
+        deseva_state = self._load_json(TF2B_DESEVA_STATE)
 
         now_jst = datetime.now(JST)
         now_str = now_jst.strftime("%Y-%m-%d %H:%M:%S JST")
@@ -114,6 +122,81 @@ class HourlyDryRunReporter:
         umm_tf_24h_bp = umm_24h_bp + tf_24h_bp
         umm_tf_1h_jpy = umm_1h_jpy + tf_1h_jpy
         umm_tf_24h_jpy = umm_24h_jpy + tf_24h_jpy
+
+        # 1b. TF2B_SFV (StateA × FBV × Sentinel) 1h & 24h
+        sfv = sfv_state.get("tf2b_sfv") or sfv_state.get("TF2B_SFV") or {}
+        sfv_ctrl = sfv_state.get("tf2b_sfv_ctrl") or sfv_state.get("TF2B_SFV_CTRL") or {}
+        sfv_1h = sfv.get("stats_1h") or {}
+        sfv_24h = sfv.get("stats_24h") or {}
+        sfv_1h_bp = float(sfv_1h.get("pnl_bp", 0.0) or 0.0)
+        sfv_24h_bp = float(sfv_24h.get("pnl_bp", sfv.get("total_pnl_bp", sfv.get("pnl_bp", 0.0))) or 0.0)
+        sfv_1h_jpy = float(sfv_1h.get("pnl_jpy", 0.0) or 0.0)
+        sfv_24h_jpy = float(sfv_24h.get("pnl_jpy", sfv.get("total_pnl", 0.0)) or 0.0)
+        sfv_1h_t = int(sfv_1h.get("total_trades", 0) or 0)
+        sfv_24h_t = int(sfv_24h.get("total_trades", sfv.get("total_trades", sfv.get("trades", 0))) or 0)
+        sfv_1h_wr = float(sfv_1h.get("win_rate_pct", 0.0) or 0.0)
+        sfv_24h_wr = float(sfv_24h.get("win_rate_pct", 0.0) or 0.0)
+        sfv_pos = str(sfv.get("position", "FLAT") or "FLAT")
+        sc_1h = (sfv_ctrl.get("stats_1h") or {})
+        sc_24h = (sfv_ctrl.get("stats_24h") or {})
+        sc_1h_bp = float(sc_1h.get("pnl_bp", 0.0) or 0.0)
+        sc_24h_bp = float(sc_24h.get("pnl_bp", 0.0) or 0.0)
+        sfv_d1 = float(sfv_state.get("delta_1h_bp", sfv_1h_bp - sc_1h_bp) or (sfv_1h_bp - sc_1h_bp))
+        sfv_d24 = float(sfv_state.get("delta_24h_bp", sfv_24h_bp - sc_24h_bp) or (sfv_24h_bp - sc_24h_bp))
+        sfv_gate = sfv_state.get("gate") or {}
+
+        # 1c. TF2B_RVL (Risk Vacuum Layer) 1h & 24h
+        rvl_state = self._load_json(TF2B_RVL_STATE)
+        rvl = rvl_state.get("TF2B_RVL") or {}
+        rvl_ctrl = rvl_state.get("TF2B_RVL_CTRL") or {}
+        rvl_1h = rvl.get("stats_1h") or {}
+        rvl_24h = rvl.get("stats_24h") or {}
+        rvl_1h_bp = float(rvl_1h.get("pnl_bp", 0.0) or 0.0)
+        rvl_24h_bp = float(rvl_24h.get("pnl_bp", rvl.get("pnl_bp", 0.0)) or 0.0)
+        rvl_1h_jpy = float(rvl_1h.get("pnl_jpy", 0.0) or 0.0)
+        rvl_24h_jpy = float(rvl_24h.get("pnl_jpy", rvl.get("pnl_jpy", 0.0)) or 0.0)
+        rvl_1h_t = int(rvl_1h.get("trades", 0) or 0)
+        rvl_24h_t = int(rvl_24h.get("trades", rvl.get("trades", 0)) or 0)
+        rvl_1h_wr = float(rvl_1h.get("win_rate", 0.0) or 0.0) * 100.0
+        rvl_24h_wr = float(rvl_24h.get("win_rate", rvl.get("win_rate", 0.0)) or 0.0) * 100.0
+        rvl_pos = str(rvl.get("position", "FLAT") or "FLAT")
+        rc_1h = (rvl_ctrl.get("stats_1h") or {})
+        rc_24h = (rvl_ctrl.get("stats_24h") or {})
+        rc_1h_bp = float(rc_1h.get("pnl_bp", 0.0) or 0.0)
+        rc_24h_bp = float(rc_24h.get("pnl_bp", 0.0) or 0.0)
+        rvl_d1 = float(rvl_state.get("delta_1h_bp", rvl_1h_bp - rc_1h_bp) or (rvl_1h_bp - rc_1h_bp))
+        rvl_d24 = float(rvl_state.get("delta_24h_bp", rvl_24h_bp - rc_24h_bp) or (rvl_24h_bp - rc_24h_bp))
+        rvl_gate = rvl_state.get("gate") or {}
+        rvl_kpi = rvl_state.get("kpi_comparison") or {}
+
+        # 1d. TF2B_DeSeva_v1 (TF2BP × SEVA filter) 1h & 24h
+        deseva = deseva_state.get("TF2B_DeSeva_v1") or deseva_state.get("tf2b_deseva_v1") or {}
+        deseva_ctrl = deseva_state.get("TF2BP_CTRL") or deseva_state.get("tf2bp_ctrl") or {}
+        ds_1h = deseva.get("stats_1h") or {}
+        ds_24h = deseva.get("stats_24h") or {}
+        ds_1h_bp = float(ds_1h.get("pnl_bp", 0.0) or 0.0)
+        ds_24h_bp = float(ds_24h.get("pnl_bp", deseva.get("pnl_bp", 0.0)) or 0.0)
+        ds_1h_jpy = float(ds_1h.get("pnl_jpy", 0.0) or 0.0)
+        ds_24h_jpy = float(ds_24h.get("pnl_jpy", deseva.get("pnl_jpy", 0.0)) or 0.0)
+        ds_1h_t = int(ds_1h.get("total_trades", 0) or 0)
+        ds_24h_t = int(ds_24h.get("total_trades", deseva.get("trades", 0)) or 0)
+        ds_1h_wr = float(ds_1h.get("win_rate_pct", 0.0) or 0.0)
+        ds_24h_wr = float(ds_24h.get("win_rate_pct", 0.0) or 0.0)
+        ds_pos = str(deseva.get("position", "FLAT") or "FLAT")
+        ds_sh = float(deseva.get("sharpe", ds_24h.get("sharpe", 0.0)) or 0.0)
+        ds_dd = float(deseva.get("max_dd_bp", ds_24h.get("max_dd_bp", 0.0)) or 0.0)
+        dc_1h = (deseva_ctrl.get("stats_1h") or {})
+        dc_24h = (deseva_ctrl.get("stats_24h") or {})
+        dc_1h_bp = float(dc_1h.get("pnl_bp", 0.0) or 0.0)
+        dc_24h_bp = float(dc_24h.get("pnl_bp", 0.0) or 0.0)
+        dc_sh = float(deseva_ctrl.get("sharpe", dc_24h.get("sharpe", 0.0)) or 0.0)
+        dc_dd = float(deseva_ctrl.get("max_dd_bp", dc_24h.get("max_dd_bp", 0.0)) or 0.0)
+        cmp_ds = deseva_state.get("compare") or {}
+        ds_d1 = float(cmp_ds.get("delta_1h_pnl_bp", ds_1h_bp - dc_1h_bp) or (ds_1h_bp - dc_1h_bp))
+        ds_d24 = float(cmp_ds.get("delta_24h_pnl_bp", ds_24h_bp - dc_24h_bp) or (ds_24h_bp - dc_24h_bp))
+        ds_d_sh = float(cmp_ds.get("delta_sharpe", ds_sh - dc_sh) or (ds_sh - dc_sh))
+        ds_d_dd = float(cmp_ds.get("delta_max_dd_bp", ds_dd - dc_dd) or (ds_dd - dc_dd))
+        ds_gate = deseva_state.get("gate") or {}
 
         # 2. 承認済み12戦略アリーナ データ (1h & 24h)
         ranking = arena.get("ranking", [])
@@ -199,11 +282,11 @@ class HourlyDryRunReporter:
         teacher_ok = bool(freshness.get("teacher_valid"))
         sig_fp = freshness.get("signature_fp", "")
 
-        # 4. 全Dry-run 合算損益 (1h & 24h)
-        total_1h_bp = umm_tf_1h_bp + arena_1h_bp
-        total_24h_bp = umm_tf_24h_bp + arena_24h_bp
-        total_1h_jpy = umm_tf_1h_jpy + arena_1h_jpy
-        total_24h_jpy = umm_tf_24h_jpy + arena_24h_jpy
+        # 4. 全Dry-run 合算損益 (1h & 24h) — SFV/DeSeva は合算に含める（モデル成績）
+        total_1h_bp = umm_tf_1h_bp + arena_1h_bp + sfv_1h_bp + ds_1h_bp
+        total_24h_bp = umm_tf_24h_bp + arena_24h_bp + sfv_24h_bp + ds_24h_bp
+        total_1h_jpy = umm_tf_1h_jpy + arena_1h_jpy + sfv_1h_jpy + ds_1h_jpy
+        total_24h_jpy = umm_tf_24h_jpy + arena_24h_jpy + sfv_24h_jpy + ds_24h_jpy
 
         color = 0x2ECC71 if total_24h_bp >= 0 else 0xE74C3C
         adv_disp = "NULL(SHADOW_OFF)" if adv_score is None else f"{adv_score:.2f}"
@@ -236,6 +319,48 @@ class HourlyDryRunReporter:
                     "inline": False,
                 },
                 {
+                    "name": "①b TF2B_SFV (StateA × FBV × Sentinel)",
+                    "value": (
+                        f"• **TF2B_SFV** `[{sfv_pos}]` · stack=`{sfv_state.get('stack', 'StateA×FBV×Sentinel')}`:\n"
+                        f"   • 1h: **`{sfv_1h_bp:+.2f} bp`** ({sfv_1h_t}戦/{sfv_1h_wr:.0f}% / ¥{sfv_1h_jpy:+,.0f}) "
+                        f"[対CTRL: **`{sfv_d1:+.2f} bp`**]\n"
+                        f"   • 24h: **`{sfv_24h_bp:+.2f} bp`** ({sfv_24h_t}戦/{sfv_24h_wr:.0f}% / ¥{sfv_24h_jpy:+,.0f}) "
+                        f"[対CTRL: **`{sfv_d24:+.2f} bp`**]\n"
+                        f"• CTRL 1h/24h: **`{sc_1h_bp:+.2f}`** / **`{sc_24h_bp:+.2f}` bp** · "
+                        f"A=`{sfv_gate.get('state_a_signals', 0)}` bypass=`{sfv_gate.get('bypass_allowed', 0)}` "
+                        f"sent_exit=`{sfv_gate.get('sentinel_exits_sfv', 0)}` · WIRE=NO"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "①c TF2B_RVL (Risk Vacuum Layer · 4-Lane ANOVA)",
+                    "value": (
+                        f"• **TF2B_RVL** `[{rvl_pos}]` · stack=`StateA × EntryVeto × SentinelExit`:\n"
+                        f"   • **24h 累積 PnL**: **`{rvl_24h_bp:+.2f} bp`** ({rvl_24h_t}戦/{rvl_24h_wr:.0f}% / ¥{rvl_24h_jpy:+,.0f}) "
+                        f"[対CTRL差分: **`{rvl_d24:+.2f} bp`**]\n"
+                        f"   • **直近 1h PnL**: **`{rvl_1h_bp:+.2f} bp`** ({rvl_1h_t}戦/{rvl_1h_wr:.0f}% / ¥{rvl_1h_jpy:+,.0f}) "
+                        f"[対CTRL差分: **`{rvl_d1:+.2f} bp`**]\n"
+                        f"• CTRL 1h/24h: **`{rc_1h_bp:+.2f}`** / **`{rc_24h_bp:+.2f}` bp** | ΔMDD: **`{rvl_kpi.get('delta_mdd_bp', 0.0):+.2f}bp`** · "
+                        f"ΔSaved: **`+{rvl_kpi.get('delta_saved_bp', 0.0):.1f}bp`** · WIRE=NO"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "①d TF2B_DeSeva_v1 (TF2BP × SEVA filter)",
+                    "value": (
+                        f"• **TF2B_DeSeva_v1** `[{ds_pos}]` · stack=`TF2BP × SEVA(entry_allowed)`:\n"
+                        f"   • 1h: **`{ds_1h_bp:+.2f} bp`** ({ds_1h_t}戦/{ds_1h_wr:.0f}% / ¥{ds_1h_jpy:+,.0f}) "
+                        f"[対CTRL: **`{ds_d1:+.2f} bp`**]\n"
+                        f"   • 24h: **`{ds_24h_bp:+.2f} bp`** ({ds_24h_t}戦/{ds_24h_wr:.0f}% / ¥{ds_24h_jpy:+,.0f}) "
+                        f"[対CTRL: **`{ds_d24:+.2f} bp`**]\n"
+                        f"• Sharpe DeSeva/CTRL=`{ds_sh:+.3f}`/`{dc_sh:+.3f}` (Δ=`{ds_d_sh:+.3f}`) · "
+                        f"MaxDD=`{ds_dd:+.2f}`/`{dc_dd:+.2f}` (Δ=`{ds_d_dd:+.2f}`) · "
+                        f"allow=`{ds_gate.get('seva_allowed', 0)}` rej=`{ds_gate.get('seva_rejected', 0)}` "
+                        f"rate=`{ds_gate.get('seva_allow_rate', 0)}` · WIRE=NO"
+                    ),
+                    "inline": False,
+                },
+                {
                     "name": f"② 承認済み12戦略 アリーナ (TOP5 / 全12戦略 総取引: {arena_total_trades}回)",
                     "value": (
                         ("\n".join(rank_lines) + "\n" if rank_lines else "(集計中)\n") +
@@ -255,6 +380,14 @@ class HourlyDryRunReporter:
 
         # 1. メイン運用報告 (REPORT) ＆ DRYRUN チャンネルへマルチキャスト送信
         success = self.notifier.post_dryrun_multicast({"embeds": [embed]})
+
+        # 1b. TF2B_DeSeva_v1 専用チャンネルへ 1h / 24h PnL
+        try:
+            if deseva_state:
+                ok_ds = self.notifier.post_tf2b_deseva_hourly_pnl(deseva_state)
+                self._log_to_file(f"DeSeva hourly PnL discord={'OK' if ok_ds else 'FAIL'}")
+        except Exception as exc:
+            self._log_to_file(f"DeSeva hourly PnL discord warn: {exc}")
 
         # 2. 試運転戦略報告 (Observation) — CSR-527: 文言は正本 peg_v3_obs_v1 に一致させる
         peg_ver = v2_1h.get("peg_version") or v2_24h.get("peg_version") or (tf_v2.get("params") or {}).get("peg_version") or "peg_v3_obs_v1"
@@ -468,6 +601,36 @@ class HourlyDryRunReporter:
                 self._log_to_file(f"librarian daily {day}: {lib_rep.get('portfolio_verdict')}")
         except Exception as e:
             self._log_to_file(f"librarian daily err: {e}")
+
+        # 11. CSR-EV002: SEVA Strategy EV Rankings
+        seva_state = self._load_json(SEVA_STATE)
+        if seva_state:
+            try:
+                latest = seva_state.get("latest_verdict") or {}
+                ranked = latest.get("ranked_strategies") or []
+                fields = []
+                for s in ranked:
+                    status_icon = "🟢" if s.get("entry_allowed") else "🔴"
+                    fields.append({
+                        "name": f"#{s.get('rank')} {s.get('strategy_name')}",
+                        "value": (
+                            f"EV: **`{s.get('ev_bp', 0.0):+.2f} bp`** | Conf: **`{s.get('confidence', 0.0)*100:.0f}%`**\n"
+                            f"Status: {status_icon} `{s.get('rejection_reason') or 'ADMISSIBLE'}`"
+                        ),
+                        "inline": True,
+                    })
+                self.notifier.send_observation_report(
+                    title="🎯 CSR-EV002: SEVA Strategy EV Rankings (Hourly)",
+                    description=(
+                        f"🕒 **確定時刻**: `{now_str}` · PID=`{seva_state.get('pid', 'RUNNING')}`\n"
+                        f"• Top Strategy: **`{latest.get('top_strategy') or 'None'}`** (Max EV: `{latest.get('max_ev_bp', 0.0):+.2f} bp`)\n"
+                        f"• Allowed Count: **`{latest.get('allowed_count', 0)}/4`**\n"
+                        f"• Uptime: `{seva_state.get('uptime_sec', 0.0)/60.0:.1f}m` | Evals: `{seva_state.get('total_evaluations', 0)}`"
+                    ),
+                    fields=fields,
+                )
+            except Exception as e:
+                self._log_to_file(f"SEVA hourly post err: {e}")
 
         log_msg = f"[{now_str}] 統合定期レポート送信: {'成功' if success else '失敗'} (1h: {total_1h_bp:+.2f}bp, 24h: {total_24h_bp:+.2f}bp)"
         print(log_msg, flush=True)

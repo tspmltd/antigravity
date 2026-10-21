@@ -88,6 +88,21 @@ class QuantDiscordNotifier:
             or os.environ.get("DISCORD_ANALYSIS_WEBHOOK_URL", "").strip()
             or os.environ.get("DISCORD_QUANTS_AGENT_WEBHOOK_URL", "").strip()
         )
+        self.head_daily_webhook_url = (
+            os.environ.get("DISCORD_HEAD_DAILY_WEBHOOK_URL", "").strip()
+            or "https://discord.com/api/webhooks/1489175750912250068/Y2pl0lEhIfMK4b5unqCkEwQ_4vQnV8b8W2g0KBmrPp7OLFgGL4spgdDbK1uJCZEBab_J"
+        )
+        self.head_weekly_webhook_url = (
+            os.environ.get("DISCORD_HEAD_WEEKLY_WEBHOOK_URL", "").strip()
+            or "https://discord.com/api/webhooks/1489171395123613787/XMWmq0DekWqM-NQrfPZyKv5PNKQn3Cp7OsqhvvJG4XzTazr5fI1Lvb1s62EpVe0zjjop"
+        )
+        self.head_improvements_webhook_url = (
+            os.environ.get("DISCORD_HEAD_IMPROVEMENTS_WEBHOOK_URL", "").strip()
+            or "https://discord.com/api/webhooks/1489174352652927036/wQUnlG0-sYdCRxdyjhNwQixRfHg3EqTZmfPtVKxPsgRG8rvp1mYymwd-ggkS3qR_eZiF"
+        )
+        self.tf2b_deseva_webhook_url = (
+            os.environ.get("DISCORD_TF2B_DESEVA_WEBHOOK_URL", "").strip()
+        )
 
         # 送信レートリミット制御用タイムスタンプ
         self._last_dryrun_sent_ts: float = 0.0
@@ -159,6 +174,18 @@ class QuantDiscordNotifier:
         """緊急アラートチャンネル (リソース逼迫・急変) へ配信"""
         url = self.alert_webhook_url or self.live_webhook_url
         return self._post(url, payload)
+
+    def post_head_daily(self, payload: Dict[str, Any]) -> bool:
+        """Head of Agent 日次サマリー (毎日18時) を指定チャンネルへ配信"""
+        return self._post(self.head_daily_webhook_url, payload)
+
+    def post_head_weekly(self, payload: Dict[str, Any]) -> bool:
+        """Head of Agent 週次サマリー (日曜18時) を指定チャンネルへ配信"""
+        return self._post(self.head_weekly_webhook_url, payload)
+
+    def post_head_improvements(self, payload: Dict[str, Any]) -> bool:
+        """Head of Agent 改善点・新シグナル反映指令チャンネルへ配信"""
+        return self._post(self.head_improvements_webhook_url, payload)
 
     def post_dryrun_multicast(self, payload: Dict[str, Any]) -> bool:
         """
@@ -1091,6 +1118,464 @@ class QuantDiscordNotifier:
         ok_m = self.post_dryrun_multicast(payload)
         return bool(ok_a or ok_m)
 
+    def post_tf2b_sfv_dryrun(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """TF2B_SFV Dry-Run: 4-lane ANOVA (L0/L1/L2/L3) · WIRE=NO."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        ctrl = report.get("TF2B_SFV_CTRL") or {}
+        l1 = report.get("TF2B_SFV_L1") or {}
+        l2 = report.get("TF2B_SFV_L2") or {}
+        sfv = report.get("TF2B_SFV") or {}
+        gate = report.get("gate") or {}
+        a2 = report.get("attribution_phase2") or {}
+        a1 = report.get("attribution_phase1") or {}
+        kind_title = {
+            "start": "🚀 【TF2B_SFV DryRun 開始】",
+            "periodic": "📡 【TF2B_SFV DryRun】",
+            "final": "🏁 【TF2B_SFV DryRun 終了】",
+        }.get(kind, "📡 【TF2B_SFV DryRun】")
+
+        def _lane(block: Dict[str, Any]) -> str:
+            return (
+                f"n=`{block.get('trades')}` WR=`{block.get('win_rate')}` "
+                f"Σ=`{block.get('pnl_bp')}`bp EV=`{block.get('ev_bp')}`bp "
+                f"pos=`{block.get('position')}`"
+            )
+
+        d_pnl = report.get("delta_pnl_bp")
+        color = 0x3498DB
+        try:
+            if isinstance(d_pnl, (int, float)) and d_pnl > 0:
+                color = 0x2ECC71
+            elif isinstance(d_pnl, (int, float)) and d_pnl < 0:
+                color = 0xE74C3C
+        except Exception:
+            pass
+
+        embed = {
+            "title": kind_title,
+            "description": (
+                f"**TF2B_SFV** 4-lane ANOVA · StateA × FBV × Sentinel\n"
+                f"L0=CTRL · L1=FBV · L2=Sentinel · L3=SFV · WIRE=NO\n"
+                f"elapsed=`{report.get('elapsed_hours')}h` · calib=`{report.get('calib_ready')}` · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "Lanes",
+                    "value": (
+                        f"• L0 CTRL: {_lane(ctrl)}\n"
+                        f"• L1 FBV:  {_lane(l1)}\n"
+                        f"• L2 SENT: {_lane(l2)}\n"
+                        f"• L3 SFV:  {_lane(sfv)}\n"
+                        f"• Δ(L3−L0)=`{d_pnl}`bp · ΔEV=`{report.get('delta_ev_bp')}`bp"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "ANOVA (Phase2)",
+                    "value": (
+                        f"• fbv=`{a2.get('fbv_bp')}`bp · sentinel=`{a2.get('sentinel_bp')}`bp\n"
+                        f"• interaction=`{a2.get('interaction_bp')}`bp · total=`{a2.get('total_bp')}`bp\n"
+                        f"• Phase1 shadow alone=`{a1.get('sentinel_alone_bp')}`bp "
+                        f"n=`{a1.get('ctrl_exits_with_shadow')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Stack Gate",
+                    "value": (
+                        f"• StateA=`{gate.get('state_a_signals')}` "
+                        f"entries L0/L1/L2/L3="
+                        f"`{gate.get('entries_ctrl')}`/`{gate.get('entries_l1')}`/"
+                        f"`{gate.get('entries_l2')}`/`{gate.get('entries_sfv')}`\n"
+                        f"• FakeBO=`{gate.get('fakebo_hits')}` veto=`{gate.get('veto_held')}` "
+                        f"bypass=`{gate.get('bypass_allowed')}`\n"
+                        f"• Sentinel exits L2/L3=`{gate.get('sentinel_exits_l2')}`/"
+                        f"`{gate.get('sentinel_exits_sfv')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": (
+                        "• Frozen thresholds · no Truth/StateA/Sentinel retune\n"
+                        "• LIVE/PAPER/FBV/10.15 shadow untouched · ENFORCE=0"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "TF2B_SFV · L0/L1/L2/L3 ANOVA · DRYRUN"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        ok_m = self.post_dryrun_multicast(payload)
+        return bool(ok_a or ok_m)
+
+    def post_tf2b_rvl_dryrun(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """TF2B_RVL Dry-Run: 4-lane ANOVA (Risk Vacuum Layer vs Baseline) · WIRE=NO."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        ctrl = report.get("TF2B_RVL_CTRL") or {}
+        l1 = report.get("TF2B_RVL_L1") or {}
+        l2 = report.get("TF2B_RVL_L2") or {}
+        rvl = report.get("TF2B_RVL") or {}
+        gate = report.get("gate") or {}
+        a2 = report.get("attribution_phase2") or {}
+        veto_stat = report.get("veto_stats") or {}
+        kpis = report.get("kpi_comparison") or {}
+
+        kind_title = {
+            "start": "🚀 【TF2B_RVL DryRun 観測開始】",
+            "periodic": "📊 【TF2B_RVL vs Baseline 1時間定期比較レポート】",
+            "final": "🏁 【TF2B_RVL DryRun 観測完了】",
+        }.get(kind, "📊 【TF2B_RVL vs Baseline 比較レポート】")
+
+        def _lane_str(b: Dict[str, Any]) -> str:
+            return (
+                f"n=`{b.get('trades', 0)}` WR=`{b.get('win_rate', 0.0):.1%}` "
+                f"Σ=`{b.get('pnl_bp', 0.0):+.2f}`bp MDD=`{b.get('mdd_bp', 0.0):.1f}`bp "
+                f"NG=`{b.get('never_green_rate', 0.0):.1%}`"
+            )
+
+        ctrl_24h = ctrl.get("stats_24h") or {}
+        rvl_24h = rvl.get("stats_24h") or {}
+        ctrl_1h = ctrl.get("stats_1h") or {}
+        rvl_1h = rvl.get("stats_1h") or {}
+        d_24h_bp = report.get("delta_24h_bp", 0.0)
+        d_1h_bp = report.get("delta_1h_bp", 0.0)
+        d_mdd = kpis.get("delta_mdd_bp", 0.0)
+        d_pnl = report.get("delta_pnl_bp", 0.0)
+        # ドローダウン改善（負の差分）またはPnLプラスならグリーン
+        color = 0x2ECC71 if (d_mdd < -10.0 or d_pnl > 0 or d_24h_bp > 0) else 0x3498DB
+
+        embed = {
+            "title": f"{kind_title} ({now_str})",
+            "description": (
+                f"**TF2B_RVL (Risk Vacuum Layer)** · 4-lane ANOVA\n"
+                f"防護方針: **勝つためではなく負けないため** (入らない・早く逃げる)\n"
+                f"経過時間: `{report.get('elapsed_hours', 0.0):.1f}`h | 総シグナル: `{gate.get('state_a_signals', 0)}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "💰 24時間 累積 PnL & 1時間 PnL (直近対比)",
+                    "value": (
+                        f"• **24時間 累積 PnL (RVL)**: **`{rvl_24h.get('pnl_bp', 0.0):+.2f} bp`** (`{rvl_24h.get('pnl_jpy', 0.0):+,.0f}円` | n={rvl_24h.get('trades', 0)})\n"
+                        f"• **24時間 累積 PnL (CTRL)**: `{ctrl_24h.get('pnl_bp', 0.0):+.2f} bp` (`{ctrl_24h.get('pnl_jpy', 0.0):+,.0f}円` | n={ctrl_24h.get('trades', 0)})\n"
+                        f"• **24h 防衛差分 (Δ24h)**: **`{d_24h_bp:+.2f} bp`**\n"
+                        f"• **直近 1時間 PnL**: RVL=`{rvl_1h.get('pnl_bp', 0.0):+.2f}bp` vs CTRL=`{ctrl_1h.get('pnl_bp', 0.0):+.2f}bp` (Δ1h: `{d_1h_bp:+.2f}bp`)\n"
+                        f"• **全期間 累積 PnL**: RVL=`{rvl.get('pnl_bp', 0.0):+.2f}bp` vs CTRL=`{ctrl.get('pnl_bp', 0.0):+.2f}bp` (Δ: `{d_pnl:+.2f}bp`)"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🏆 主要防衛KPI (RVL vs CTRL)",
+                    "value": (
+                        f"• **ΔMaxDrawdown**: `{d_mdd:+.2f} bp` (CTRL: `{ctrl.get('mdd_bp', 0.0):.1f}bp` ➔ RVL: `{rvl.get('mdd_bp', 0.0):.1f}bp`)\n"
+                        f"• **ΔSaved (防衛創出)**: `+{kpis.get('delta_saved_bp', 0.0):.2f} bp` (Sentinel早期脱出)\n"
+                        f"• **NeverGreen率**: `{rvl.get('never_green_rate', 0.0):.1%}` (CTRL: `{ctrl.get('never_green_rate', 0.0):.1%}` | Δ: `{kpis.get('delta_never_green_rate', 0.0):+.1%}`)\n"
+                        f"• **AE 1s / 3s**: `{rvl.get('ae_1s_avg', 0.0):+.2f}bp` / `{rvl.get('ae_3s_avg', 0.0):+.2f}bp`\n"
+                        f"• **Net PnL (bp)**: `{rvl.get('pnl_bp', 0.0):+.2f} bp` (CTRL: `{ctrl.get('pnl_bp', 0.0):+.2f}bp` | Δ: `{d_pnl:+.2f}bp`)"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🔬 4レーン成績対比 (ANOVA)",
+                    "value": (
+                        f"• **L0 CTRL (Baseline)**: {_lane_str(ctrl)}\n"
+                        f"• **L1 VETO (入らない)**: {_lane_str(l1)}\n"
+                        f"• **L2 SENTINEL (逃げる)**: {_lane_str(l2)}\n"
+                        f"• **L3 RVL (統合)**: {_lane_str(rvl)}"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "📐 要因分解 (Attribution)",
+                    "value": (
+                        f"• **Veto効果 (入らない)**: `{a2.get('veto_bp', 0.0):+.2f}` bp\n"
+                        f"• **Sentinel効果 (逃げる)**: `{a2.get('sentinel_bp', 0.0):+.2f}` bp\n"
+                        f"• **複合シナジー**: `{a2.get('interaction_bp', 0.0):+.2f}` bp\n"
+                        f"• **総合差分 (L3 - L0)**: `{a2.get('total_bp', 0.0):+.2f}` bp"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🛡 防御レイヤー発動内訳",
+                    "value": (
+                        f"• **Adverse Veto**: `{veto_stat.get('adverse_vetos', 0)}`回拒絶 (防衛: `+{veto_stat.get('adverse_saved_bp', 0.0):.1f}bp`)\n"
+                        f"• **Vacuum Veto**: `{veto_stat.get('vacuum_vetos', 0)}`回拒絶 (防衛: `+{veto_stat.get('vacuum_saved_bp', 0.0):.1f}bp`)\n"
+                        f"• **News Shock**: `{veto_stat.get('news_vetos', 0)}`回拒絶\n"
+                        f"• **Sentinel Exit**: L2=`{gate.get('sentinel_exits_l2', 0)}`回 / L3=`{gate.get('sentinel_exits_rvl', 0)}`回"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "TF2B_RVL · 4-lane ANOVA · Head of Agent Defense Initiative"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        ok_m = self.post_dryrun_multicast(payload)
+        return bool(ok_a or ok_m)
+
+    def post_tf2b_deseva_dryrun(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """TF2B_DeSeva_v1 Dry-Run: TF2BP × SEVA filter vs baseline (WIRE=NO)."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        ctrl = report.get("TF2BP_CTRL") or report.get("tf2bp_ctrl") or {}
+        arm = report.get("TF2B_DeSeva_v1") or report.get("tf2b_deseva_v1") or {}
+        gate = report.get("gate") or {}
+        cmp = report.get("compare") or {}
+        kind_title = {
+            "start": "🚀 【TF2B_DeSeva_v1 DryRun 開始】",
+            "periodic": "📡 【TF2B_DeSeva_v1 DryRun】",
+            "final": "🏁 【TF2B_DeSeva_v1 DryRun 終了】",
+        }.get(kind, "📡 【TF2B_DeSeva_v1 DryRun】")
+
+        def _lane(b: Dict[str, Any]) -> str:
+            return (
+                f"n=`{b.get('trades')}` WR=`{b.get('win_rate')}` "
+                f"Σ=`{b.get('pnl_bp')}`bp EV=`{b.get('ev_bp')}` "
+                f"Sharpe=`{b.get('sharpe')}` DD=`{b.get('max_dd_bp')}` "
+                f"pos=`{b.get('position')}`"
+            )
+
+        d_sh = cmp.get("delta_sharpe", report.get("delta_sharpe"))
+        color = 0x3498DB
+        try:
+            if isinstance(d_sh, (int, float)) and d_sh > 0:
+                color = 0x2ECC71
+            elif isinstance(d_sh, (int, float)) and d_sh < 0:
+                color = 0xE74C3C
+        except Exception:
+            pass
+
+        embed = {
+            "title": kind_title,
+            "description": (
+                f"**TF2B_DeSeva_v1** = TF2BP × SEVA(`entry_allowed`)\n"
+                f"Hypothesis: SEVA高評価局面のみ → **Sharpe↑ / MaxDD改善**\n"
+                f"elapsed=`{report.get('elapsed_hours')}h` · models=`{gate.get('seva_models')}` · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "CTRL vs DeSeva",
+                    "value": (
+                        f"• CTRL: {_lane(ctrl)}\n"
+                        f"• DeSeva: {_lane(arm)}\n"
+                        f"• Δpnl=`{cmp.get('delta_pnl_bp', report.get('delta_pnl_bp'))}` · "
+                        f"ΔEV=`{cmp.get('delta_ev_bp', report.get('delta_ev_bp'))}` · "
+                        f"ΔSharpe=`{d_sh}` · ΔDD=`{cmp.get('delta_max_dd_bp')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "24h proof window",
+                    "value": (
+                        f"• CTRL 24h: pnl=`{(ctrl.get('stats_24h') or {}).get('pnl_bp')}` "
+                        f"Sharpe=`{(ctrl.get('stats_24h') or {}).get('sharpe')}` "
+                        f"DD=`{(ctrl.get('stats_24h') or {}).get('max_dd_bp')}`\n"
+                        f"• DeSeva 24h: pnl=`{(arm.get('stats_24h') or {}).get('pnl_bp')}` "
+                        f"Sharpe=`{(arm.get('stats_24h') or {}).get('sharpe')}` "
+                        f"DD=`{(arm.get('stats_24h') or {}).get('max_dd_bp')}`\n"
+                        f"• pass_sharpe_24h=`{cmp.get('pass_sharpe_24h')}` · "
+                        f"pass_dd_24h=`{cmp.get('pass_dd_24h')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "SEVA Gate",
+                    "value": (
+                        f"• signals CTRL/DeSeva=`{gate.get('signals_ctrl')}`/`{gate.get('signals_deseva')}`\n"
+                        f"• allowed=`{gate.get('seva_allowed')}` rejected=`{gate.get('seva_rejected')}` "
+                        f"allow_rate=`{gate.get('seva_allow_rate')}`\n"
+                        f"• latest=`{report.get('latest_seva')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": "• WIRE=NO · TF2BP pin frozen · SEVA filter only · no LIVE/PAPER touch",
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "TF2B_DeSeva_v1 · SEVA-filtered TF2BP · DRYRUN paired"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        ok_m = self.post_dryrun_multicast(payload)
+        ok_d = self._post(self.tf2b_deseva_webhook_url, payload) if self.tf2b_deseva_webhook_url else False
+        return bool(ok_a or ok_m or ok_d)
+
+    def post_tf2b_deseva_hourly_pnl(self, report: Dict[str, Any]) -> bool:
+        """TF2B_DeSeva_v1 毎時: 1h PnL / 24h 累積 PnL（専用 webhook）。"""
+        if not report:
+            return False
+        url = self.tf2b_deseva_webhook_url
+        if not url:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        ctrl = report.get("TF2BP_CTRL") or report.get("tf2bp_ctrl") or {}
+        arm = report.get("TF2B_DeSeva_v1") or report.get("tf2b_deseva_v1") or {}
+        cmp = report.get("compare") or {}
+        gate = report.get("gate") or {}
+        c1 = ctrl.get("stats_1h") or {}
+        c24 = ctrl.get("stats_24h") or {}
+        a1 = arm.get("stats_1h") or {}
+        a24 = arm.get("stats_24h") or {}
+        d1 = float(cmp.get("delta_1h_pnl_bp", float(a1.get("pnl_bp") or 0) - float(c1.get("pnl_bp") or 0)) or 0)
+        d24 = float(
+            cmp.get("delta_24h_pnl_bp", float(a24.get("pnl_bp") or 0) - float(c24.get("pnl_bp") or 0)) or 0
+        )
+        color = 0x2ECC71 if d24 >= 0 else 0xE74C3C
+        embed = {
+            "title": "📡 【TF2B_DeSeva_v1】1h / 24h PnL 検証",
+            "description": (
+                f"**TF2BP × SEVA filter** vs CTRL · WIRE=NO\n"
+                f"elapsed=`{report.get('elapsed_hours')}h` · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "① 直近 1時間 (1h) PnL",
+                    "value": (
+                        f"• **DeSeva**: **`{float(a1.get('pnl_bp') or 0):+.2f} bp`** "
+                        f"({int(a1.get('total_trades') or 0)}戦 / "
+                        f"{float(a1.get('win_rate_pct') or 0):.0f}% / "
+                        f"¥{float(a1.get('pnl_jpy') or 0):+,.0f})\n"
+                        f"• **CTRL**: **`{float(c1.get('pnl_bp') or 0):+.2f} bp`** "
+                        f"({int(c1.get('total_trades') or 0)}戦)\n"
+                        f"• **Δ1h**: **`{d1:+.2f} bp`**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "② 過去24時間 累積 PnL",
+                    "value": (
+                        f"• **DeSeva**: **`{float(a24.get('pnl_bp') or 0):+.2f} bp`** "
+                        f"({int(a24.get('total_trades') or 0)}戦 / "
+                        f"{float(a24.get('win_rate_pct') or 0):.0f}% / "
+                        f"¥{float(a24.get('pnl_jpy') or 0):+,.0f})\n"
+                        f"• **CTRL**: **`{float(c24.get('pnl_bp') or 0):+.2f} bp`** "
+                        f"({int(c24.get('total_trades') or 0)}戦)\n"
+                        f"• **Δ24h**: **`{d24:+.2f} bp`**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "③ Sharpe / MaxDD (proof)",
+                    "value": (
+                        f"• Sharpe DeSeva/CTRL=`{arm.get('sharpe')}`/`{ctrl.get('sharpe')}` "
+                        f"(Δ=`{cmp.get('delta_sharpe')}`)\n"
+                        f"• MaxDD DeSeva/CTRL=`{arm.get('max_dd_bp')}`/`{ctrl.get('max_dd_bp')}` "
+                        f"(Δ=`{cmp.get('delta_max_dd_bp')}`)\n"
+                        f"• allow_rate=`{gate.get('seva_allow_rate')}` · "
+                        f"pass_sharpe_24h=`{cmp.get('pass_sharpe_24h')}` · "
+                        f"pass_dd_24h=`{cmp.get('pass_dd_24h')}`"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "TF2B_DeSeva_v1 · hourly 1h/24h PnL · CSR-600"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        return self._post(url, {"embeds": [embed]})
+
+    def post_tf2b_fbv_dryrun(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
+        """TF2B_FBV Dry-Run: TF2BP baseline + FakeBO Veto Bypass (WIRE=NO · paired CTRL)."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        ctrl = report.get("TF2BP_CTRL") or {}
+        fbv = report.get("TF2B_FBV") or {}
+        gate = report.get("gate") or {}
+        thr = report.get("truth_thresholds") or {}
+
+        kind_title = {
+            "start": "🚀 【TF2B_FBV DryRun 開始】",
+            "periodic": "📡 【TF2B_FBV DryRun】",
+            "final": "🏁 【TF2B_FBV DryRun 終了】",
+        }.get(kind, "📡 【TF2B_FBV DryRun】")
+
+        def _lane(block: Dict[str, Any]) -> str:
+            return (
+                f"n=`{block.get('trades')}` WR=`{block.get('win_rate')}` "
+                f"Σ=`{block.get('pnl_bp')}`bp EV=`{block.get('ev_bp')}`bp "
+                f"pos=`{block.get('position')}`"
+            )
+
+        d_pnl = report.get("delta_pnl_bp")
+        d_ev = report.get("delta_ev_bp")
+        color = 0x3498DB
+        try:
+            if isinstance(d_pnl, (int, float)) and d_pnl > 0:
+                color = 0x2ECC71
+            elif isinstance(d_pnl, (int, float)) and d_pnl < 0:
+                color = 0xE74C3C
+        except Exception:
+            pass
+
+        embed = {
+            "title": kind_title,
+            "description": (
+                f"TF2BP Baseline + **Fake Breakout Veto Bypass** (Liquidity Truth)\n"
+                f"Paired: `TF2BP_CTRL` vs `TF2B_FBV` · WIRE=NO · DRYRUN\n"
+                f"elapsed=`{report.get('elapsed_hours')}h` · src=`{report.get('market_source')}` · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "CTRL vs FBV",
+                    "value": (
+                        f"• CTRL: {_lane(ctrl)}\n"
+                        f"• FBV:  {_lane(fbv)}\n"
+                        f"• Δpnl=`{d_pnl}`bp · ΔEV=`{d_ev}`bp"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "FakeBO Gate",
+                    "value": (
+                        f"• signals=`{gate.get('signals')}` fakebo=`{gate.get('fakebo_hits')}`\n"
+                        f"• veto_held=`{gate.get('veto_held')}` bypass=`{gate.get('bypass_allowed')}`\n"
+                        f"• entries CTRL/FBV=`{gate.get('entries_ctrl')}`/`{gate.get('entries_fbv')}` "
+                        f"exits=`{gate.get('exits_ctrl')}`/`{gate.get('exits_fbv')}`"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Truth Thresholds",
+                    "value": (
+                        f"• cushion≥`{thr.get('cushion_core_min')}` · adverse≤`{thr.get('adverse_taker_max')}`\n"
+                        f"• pen≤`{thr.get('penetration_max')}` · sma30≥`{thr.get('sma30_min')}`\n"
+                        f"• FakeBO micro: cancel≥0.55 ∧ aggressiveness<0.15"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Lock",
+                    "value": (
+                        "• LIVE/PAPER/PEG2/UMM/TF2BP dryrun baseline untouched\n"
+                        "• No WIRE · No ENFORCE · Research observation only"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "TF2B_FBV · FakeBO Veto Bypass · DRYRUN paired"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        ok_a = self._post(self.analysis_webhook_url or self.quants_agent_webhook_url, payload)
+        ok_m = self.post_dryrun_multicast(payload)
+        return bool(ok_a or ok_m)
+
     def post_umm_p2_maker_shadow(self, report: Dict[str, Any], *, kind: str = "periodic") -> bool:
         """UMM-P2 Shadow: UMM Baseline vs UMM+Maker (Execution-only · WIRE=NO)."""
         if not report:
@@ -1395,3 +1880,111 @@ class QuantDiscordNotifier:
         url = self.analysis_webhook_url or self.quants_agent_webhook_url
         self._post(url, {"embeds": [embed]})
         return ok
+
+    def post_sentinel_report(self, report: Dict[str, Any]) -> bool:
+        """CSR-590 Liquidity Absorption Sentinel: Research & Lead Time Audit Report."""
+        if not report:
+            return False
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        verdict = report.get("verdict", "OBSERVE_DEPLOYED")
+        color = 0x2ECC71 if "DEPLOYED" in verdict or "PASS" in verdict else 0x3498DB
+
+        embed = {
+            "title": f"🛡️ 【Liquidity Absorption Sentinel】 {report.get('title', '検証レポート')}",
+            "description": (
+                f"**研究テーマ**: 板崩壊予兆 / 流動性吸収モデル (WIRE=NO · OBSERVE=1)\n"
+                f"**対象戦略**: PEG2-B 実稼働 (全 {report.get('total_trades', 209)} 件)\n"
+                f"**ステータス**: `{verdict}` · `{now_str}`"
+            ),
+            "color": color,
+            "fields": [
+                {
+                    "name": "🎯 6大壊滅トレード救出成果 (Disasters <= -20bp)",
+                    "value": (
+                        f"• **救出率**: `{report.get('disasters_saved', '6/6 (100%)')}`\n"
+                        f"• **総損失救出 (Saved)**: **`{report.get('total_saved_bp', '+162.3 bp')}`**\n"
+                        f"• **救出例**: #152 (`-62.7bp` $\\to$ `-10.3bp` / `+52.4bp Saved`)\n"
+                        f"• **救出例**: #134 (`-41.8bp` $\\to$ `-9.1bp` / `+32.8bp Saved` / `41s脱出`)"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🔍 False Hold (救出漏れ) 解明と対策",
+                    "value": (
+                        f"• **Trade #58 真因**: 買い板蒸発 (`0.01 BTC`) 下での微小リフィル計算トラップ\n"
+                        f"• **対策**: `Evaporated Book Bypass` (板蒸発時は Shield を強制バイパス)\n"
+                        f"• **神リバウンド (#34)**: ドローダウン中も `SMA 30s >= 0.00` & `Cushion >= 25 BTC` を維持"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "📡 リアルタイム常駐 OBSERVE 稼働状況",
+                    "value": (
+                        f"• **サービス**: `tf2bp-peg2-paper.service` (Active Running)\n"
+                        f"• **観測ログ**: `data/mm_research/sentinel_shadow_observe.jsonl`\n"
+                        f"• **共通化**: UMM / CSR-521 は完全凍結維持 (PEG2-B 単独先行)"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "CSR-590 · Liquidity Absorption Sentinel · D2 OBSERVE Sidecar"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        url = self.analysis_webhook_url or self.quants_agent_webhook_url or self.dryrun_webhook_url
+        ok = self._post(url, payload)
+        self.post_dryrun_multicast(payload)
+        return ok
+
+    def post_sentinel_trade_event(self, event_data: Dict[str, Any]) -> bool:
+        """CSR-590 Real-time Sentinel Shadow Exit Comparison Event."""
+        if not event_data:
+            return False
+        t_id = event_data.get("trade_id")
+        actual_pnl = event_data.get("actual_pnl_bp", 0.0)
+        actual_hold = event_data.get("actual_hold_sec", 0.0)
+        shadow_pnl = event_data.get("shadow_pnl_bp", actual_pnl)
+        shadow_hold = event_data.get("shadow_hold_sec", actual_hold)
+        delta_saved = event_data.get("delta_saved_bp", 0.0)
+        lead_time = event_data.get("lead_time_saved_sec", 0.0)
+        is_false = event_data.get("is_false_exit", False)
+        trig_type = event_data.get("trigger_type", "NONE")
+
+        if is_false:
+            color = 0xE74C3C  # Red (False Exit)
+            title = f"⚠️ [Sentinel Observe] Trade #{t_id} FALSE EXIT 誤認判定"
+        elif delta_saved > 0:
+            color = 0x2ECC71  # Green (Loss Saved)
+            title = f"🛡️ [Sentinel Observe] Trade #{t_id} LOSS SAVED (+{delta_saved:.1f} bp)"
+        else:
+            color = 0x95A5A6  # Gray (Neutral / No trigger)
+            title = f"ℹ️ [Sentinel Observe] Trade #{t_id} Clean Close"
+
+        embed = {
+            "title": title,
+            "description": f"Sentinel Shadow Exit vs Baseline Actual Exit (WIRE=NO)",
+            "color": color,
+            "fields": [
+                {
+                    "name": "実績 (Actual Baseline)",
+                    "value": f"• PnL: **`{actual_pnl:+.1f} bp`**\n• Hold: `{actual_hold:.0f}s`",
+                    "inline": True,
+                },
+                {
+                    "name": "Sentinel (Shadow)",
+                    "value": f"• PnL: **`{shadow_pnl:+.1f} bp`**\n• Hold: `{shadow_hold:.0f}s`",
+                    "inline": True,
+                },
+                {
+                    "name": "回避・短縮効果",
+                    "value": f"• **ΔSaved**: `{delta_saved:+.1f} bp`\n• **LeadTime**: `{lead_time:.0f}s`\n• Trigger: `{trig_type}`",
+                    "inline": True,
+                },
+            ],
+            "footer": {"text": "Liquidity Absorption Sentinel • Real-time Shadow"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"embeds": [embed]}
+        url = self.analysis_webhook_url or self.quants_agent_webhook_url or self.dryrun_webhook_url
+        return self._post(url, payload)
+

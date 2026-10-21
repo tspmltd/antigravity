@@ -7,11 +7,18 @@ Antigravity Quant Pipeline Runner
 オプションで [SyncExecutor (SafetyGate)] -> [LiveOrderExecutor] -> [Discord LIVE サーバー]
 をエンドツーエンドで駆動する統合ランナー。
 """
+import os
 import sys
 import time
 import argparse
 from datetime import datetime
 from dataclasses import asdict
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+load_dotenv(BASE_DIR / ".env")
+os.environ["ADVERSE_RESEARCH_MODE"] = "shadow_on"
 
 from .schema import OrderbookMicroSnapshot, FusionDecisionLog
 from .parquet_logger import ParquetBatchLogger

@@ -9,6 +9,7 @@ from dataclasses import asdict
 from ..event_bus import EventBus
 from ..schema import OrderbookMicroSnapshot, AgentConclusion
 from ..microstructure_hourly_store import MicrostructureHourlyStore
+from ..liquidity_vacuum_agent import LiquidityVacuumAgent
 
 
 class MicrostructureAgent:
@@ -19,6 +20,7 @@ class MicrostructureAgent:
         self.latest_conclusion: Optional[AgentConclusion] = None
         self.hourly = MicrostructureHourlyStore()
         self.latest_hourly_report: Optional[Dict[str, Any]] = None
+        self.vacuum_agent = LiquidityVacuumAgent()
         self.bus.subscribe("orderbook_micro", self.on_micro_update)
 
     def on_micro_update(self, snap: OrderbookMicroSnapshot):
@@ -103,12 +105,23 @@ class MicrostructureAgent:
             adverse_side = "sell"
             adverse_score = min(1.0, round(raw_adverse_sell, 3))
             adverse_warning = (raw_adverse_sell >= 0.65)
+        # 5. 流動性蒸発判定 (Liquidity Vacuum Detection - Priority 3)
+        vac_res = self.vacuum_agent.on_tick(snap)
+        is_vacuum = vac_res.get("is_vacuum", False)
+        vac_score = vac_res.get("vacuum_score", 0.0)
+        vac_risk = vac_res.get("risk_level", "NORMAL_DEPTH")
+        vac_side = vac_res.get("vacuum_side", "none")
+        d_micro_dev_dt = vac_res["metrics"].get("d_micro_dev_dt", 0.0)
+
         # 結論の策定 (研究表示。hard_veto は常に False — cancel_rate 誤警報で執行遮断しない)
         verdict = "NEUTRAL"
         primary_action = "hold"
         explanation = f"Imbalance: {snap.imbalance:+.2f}, MicroDev: {snap.micro_dev:+.0f}円"
 
-        if fake_breakout:
+        if is_vacuum:
+            verdict = f"VACUUM_{vac_side.upper()}" if vac_side != "none" else "VACUUM_EVAPORATION"
+            explanation += f" [流動性蒸発: {vac_risk} score={vac_score:.2f} d(mdev)/dt={d_micro_dev_dt:+.1f}]"
+        elif fake_breakout:
             verdict = "FAKE_BREAKOUT_OBSERVE"
             primary_action = "hold"
             explanation += " [観測: cancel高・taker弱]"
@@ -130,6 +143,11 @@ class MicrostructureAgent:
             "adverse_risk_side": adverse_side,
             "adverse_risk_score": adverse_score,
             "adverse_warning_flag": adverse_warning,
+            "is_vacuum": is_vacuum,
+            "vacuum_score": vac_score,
+            "vacuum_risk_level": vac_risk,
+            "vacuum_side": vac_side,
+            "micro_dev_acceleration": d_micro_dev_dt,
             "verdict": verdict,
         }
         self.latest_state = micro_state
@@ -162,6 +180,11 @@ class MicrostructureAgent:
                 "adverse_risk_side": adverse_side,
                 "adverse_risk_score": adverse_score,
                 "adverse_warning": adverse_warning,
+                "is_vacuum": is_vacuum,
+                "vacuum_score": vac_score,
+                "vacuum_risk_level": vac_risk,
+                "vacuum_side": vac_side,
+                "micro_dev_acceleration": d_micro_dev_dt,
             },
             parameters={},
             hard_veto=False,

@@ -203,3 +203,65 @@ GOV: LIVE_TRIAL=PEG2-B · Review Only · Run-1=TECHNICAL_ABORT reference
 
 Git CSR-588c: antigravity `49bd23e`
 
+**CSR-590（2026-10-15 18:45:16 JST）:** 崩壊検出器はできた。まだ番人ではない。次題=神リバウンドを殺さないこと · False Exit 説明特徴量の発見。EWSは研究スコア（運用ゲート未達）。WIRE=NO。
+
+2026-10-15 | CSR-590 | collapse detector ≠ sentinel · False Exit research | LOCK
+
+GOV: OBSERVE only · WIRE=NO · ENFORCE=0 · no PEG2/UMM auto-exit wire
+
+**CSR-591（2026-10-16 08:07:33 JST）:** TF2B_FBV DryRun 稼働。TF2BP baseline + FakeBO Veto Bypass（LiquidityTruth）。CTRL vs FBV ペア観測。Discord 900s。WIRE=NO。
+
+2026-10-16 | CSR-591 | TF2B_FBV FakeBO veto bypass dryrun | LOCK
+
+GOV: DRYRUN only · WIRE=NO · no LIVE/PAPER mutate · baseline dryrun untouched
+
+**CSR-592（2026-10-16 10:07 JST）:** FBV修繕ロック。収集n≥30 → Δ特徴量 → 分離計算。ゲート実装はn≥30まで禁止。禁止=閾値調整/bypass停止/Truth改修。次問=Alive→Decaying→Dead。
+
+2026-10-16 | CSR-592 | FBV liquidity decay collect-to-30 | LOCK
+
+GOV: no gate / no tune / no Truth rewrite until n>=30
+
+**CSR-593（2026-10-16）:** 新規モデル **TF2B_SFV** DryRun 稼働。StateA×FBV×Sentinel。CTRL vs SFV。Discord 900s。WIRE=NO。閾値凍結。
+
+2026-10-16 | CSR-593 | TF2B_SFV StateA×FBV×Sentinel dryrun | LOCK
+
+GOV: DRYRUN only · frozen thresholds · no LIVE/PAPER/FBV/10.15 mutate
+
+**CSR-600（2026-10-20 09:55 JST）:** 新規モデル **TF2B_DeSeva_v1** DryRun 稼働。TF2BP_CTRL vs SEVA(`entry_allowed`) filter。仮説=Sharpe↑/MaxDD改善。Discord 900s · hourly ①d。WIRE=NO。
+
+2026-10-20 | CSR-600 | TF2B_DeSeva_v1 TF2BP×SEVA dryrun | LOCK
+
+GOV: DRYRUN only · WIRE=NO · no LIVE/PAPER · no SEVA retune in lane · baseline pin frozen
+
+**CSR-600b（2026-10-21 09:10 JST）:** DeSeva 23.4h mid-check。CTRL n=169 / DeSeva n=32 · allow 4.9%。Sharpe fail（−0.033 vs +0.100）· MaxDD pass（−56 vs −92bp）。切ったCTRL 161本が実現 +159bp。SEVA=守り Risk として継続 · 閾値再学習禁止。WIRE=NO。
+
+2026-10-21 | CSR-600b | DeSeva mid-check Sharpe fail · DD pass · keep as risk | LOCK
+
+**CSR-601（2026-10-21 10:33 JST）:** 2bp 先回りスコアカード LOCK。一般方向（30/60s mid符号）=コイン（49%）。証明済みは TF2BP **hit2** のみ（ask高帯≈65% · 240s · −2bpより先に+2bp）。先回り上限=**2bp** · 3bp以上=未証明。M2P（|Δ|≥2bp/30s）は別問題・非正本。採点表変更禁止。WIRE=NO。
+
+2026-10-21 | CSR-601 | hit2 scorecard LOCK · dir≠mid-sign · frontier=2bp | LOCK
+
+GOV: scorecard=hit2 · no label swap · no DeSeva/LIVE wire · M2P≠canonical
+
+**CSR-602（2026-10-21 11:05 JST）:** Predictability Frontier Profiler + **TF2B_PRD** DryRun。方向=micro_dev(20–30s) / imbalance(60–300s)。K≤2.0bp MFE到達 76.8–90.5% · K=5bp≈RW。PRD=不利回避+早期精算。WIRE=NO。
+
+2026-10-21 | CSR-602 | TF2B_PRD frontier profiler dryrun · 2bp golden bound | LOCK
+
+**CSR-603（2026-10-21 16:03 JST）:** **TF2B_CAP** DryRun。TF2BP(+2bp初動) × SpreadCaptureMM(レンジ) ハイブリッド。TREND_MOMENTUM vs STABLE_RANGE。WIRE=NO。
+
+2026-10-21 | CSR-603 | TF2B_CAP TF2BP×SpreadCapture hybrid dryrun | LOCK
+
+**CSR-604（2026-10-21 17:06 JST）:** Adverse Agent `SHADOW_ON` 常時観測。5要素統合スコアを評議会接続。default=`shadow_on` · `_last_toxic_write` 修繕。WIRE=NO · ENFORCE=0。
+
+2026-10-21 | CSR-604 | Adverse SHADOW_ON council wire | LOCK
+
+**CSR-605（2026-10-21 17:35 JST）:** Liquidity Vacuum Agent。cancel_spike ∧ taker=0 ∧ refill弱 → 蒸発。d(micro_dev)/dt 監視。Microstructure 内蔵 · 評議会表示のみ。hard_veto=NO。WIRE=NO。
+
+2026-10-21 | CSR-605 | Liquidity Vacuum Agent · d(micro_dev)/dt observe | LOCK
+
+GOV: LIVE=UNTOUCHED · WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · DeSeva keep · no SEVA retune
+
+**commit 承認（2026-10-21 · ユーザー指示「Fix.me 記録して、GIT処理対応して」· CSR-600–605）:** DeSeva mid-check + hit2/2bp スコアカード + PRD/CAP DryRun + Adverse SHADOW_ON + Vacuum observe を正本化。SEVA=守り継続 · 閾値再学習なし · M2P非正本 · LIVE未触 · WIRE=NO · ENFORCE=0 · pushなし。スコープ=`FIX.me`·`MEM.md`·DeSeva/PRD/CAP runners·M2P meter·Vacuum·Adverse/Micro/pipeline wire·hourly/discord。logs/data/runtime state/無関係研究スクリプト除外。
+
+2026-10-21 | FM-CSR600-605-GIT | DeSeva+hit2+PRD+CAP+Adverse+Vacuum 正本化 · WIRE=NO | 記録
+

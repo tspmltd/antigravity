@@ -68,6 +68,7 @@ class AdverseResearchAgent:
         self.device_version = "episode_sm_v2"
         self._device_sig = None
         self._last_device_write = 0.0
+        self._last_toxic_write = 0.0
 
         # S1. Adverse Excursion 分析器の統合
         self.excursion_tracker = AdverseExcursionTracker(save_dir=save_dir)
@@ -111,10 +112,10 @@ class AdverseResearchAgent:
             "cancel_recommendation": False,
             "adverse_side": "none",
         }
-        # 研究モード: victim_anatomy = 常時スコア縮退・UMM toxic 直前特徴解剖
-        # full_legacy = 旧 episode/toxic/score 毎tick（非推奨）
-        # advance_from_umm | victim_anatomy（互換）— いずれも legacy episode/score 停止
-        self.research_mode = os.environ.get("ADVERSE_RESEARCH_MODE", "advance_from_umm")
+        # 研究モード: shadow_on = 5大要素統合スコア (AE+Toxic+Capture+Latency+Inventory) 常時観測
+        # victim_anatomy = 常時スコア縮退・UMM toxic 直前特徴解剖
+        # advance_from_umm | victim_anatomy（互換）
+        self.research_mode = os.environ.get("ADVERSE_RESEARCH_MODE", "shadow_on")
         self.board_buf = BoardFeatureBuffer(maxlen=180)
         self.anatomy = AdverseVictimAnatomy()
         self._hist_len_before_tick = 0
@@ -467,6 +468,7 @@ class AdverseResearchAgent:
             primary_action=primary_action,
             metrics={
                 "agent_rank": "RESEARCH_AGENT",
+                "is_shadow_active": (self.research_mode == "shadow_on"),
                 "avoidance_on": avoidance_on,
                 "adverse_side": adverse_side,
                 "adverse_score": total_adverse_score,
