@@ -2629,3 +2629,11 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
     - `micro_dev_acceleration`: $d(\text{micro\_dev})/dt$（円/s）
   - **ガバナンス安全防護:** `WIRE=NO` / `ENFORCE=0` / `LIVE=OFF` / `auto_apply=OFF` を絶対維持。
 
+## 114. CSR-606 — TF2BP LIVE 受入6条件 Phase 0 / Gate 0 LOCK（2026-10-21 21:10 JST）
+
+- **意味:** 10/06 事故チェーン4層を 1:1 で塞ぐ採点表。実装着手ではない。LIVE=OFF。
+- **正本:** `docs/ops/tf2bp_live_acceptance_scorecard_phase0.md`
+- **観測:** `tf2bp_live_sm_audit.jsonl` · `tf2bp_live_heartbeat.json` · soak / Watchdog ログ · `tf2bp_strategy.py` diff 空
+- **別名:** `LONG`=`READY_POSITIONED` · `ENTRY_HALT`=`BLOCKED_MARGIN`
+- **外:** Maker/PEG · 経済 PASS · DeSeva/PRD/CAP · Watchdog 自動 flatten
+

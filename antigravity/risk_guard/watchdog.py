@@ -18,6 +18,7 @@ Discord アラートチャンネルへ緊急通報を送信し、自動復旧（
    - リソース逼迫時のキャッシュ破棄・古いログ整理
 """
 
+import json
 import os
 import sys
 import time
@@ -28,7 +29,12 @@ from typing import Dict, Any, List, Optional
 
 from antigravity.risk_guard.notifier import DiscordNotifier
 from antigravity.risk_guard.system_monitor import SystemResourceMonitor
-
+from antigravity.quant_pipeline.tf2bp_live_state_machine import (
+    heartbeat_belongs_to_runner,
+    read_heartbeat,
+    watchdog_hb_implies_positioned,
+    watchdog_should_sigterm_on_hb_stall,
+)
 
 class WatchdogSentinel:
     """
@@ -211,12 +217,15 @@ class WatchdogSentinel:
                 "exclude": ["watchdog"],
                 "log_file": os.path.join(self.base_dir, "logs", "dryrun_umm_tf2bp_24h.log"),
                 "check_heartbeat": True,
+                # D3: Shared Feeder IPC. No DRYRUN Public WS. Rollback:
+                #   --market-source live_board_feed に戻し DRYRUN のみ再起動。
                 "start_cmd": [
                     self.python_bin, "-u", "-m", "antigravity.quant_pipeline.run_dryrun_umm_tf2bp_24h",
                     "--symbol", "FX_BTC_JPY",
                     "--hours", "24.0",
                     "--interval", "2.0",
-                    "--report-interval", "3600.0",
+                    "--report-interval", "900.0",
+                    "--market-source", "shared_feeder",
                 ],
                 "last_down_alert_time": 0.0,
                 "is_down": False,
@@ -251,6 +260,74 @@ class WatchdogSentinel:
                 "is_down": False,
                 "restart_attempts": 0,
             },
+            "hourly_live_prep_3strat_reporter": {
+                "name": "LIVE準備 選抜3戦略 DRYRUN 毎時レポート配信デーモン",
+                "keywords": ["hourly_live_prep_3strat_reporter"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "hourly_live_prep_3strat_reporter.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    self.python_bin, "-u", "-m", "antigravity.quant_pipeline.hourly_live_prep_3strat_reporter",
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "tf2bp_micro_live": {
+                "name": "TF2BP micro LIVE 執行エンジン (CSR-581 continuous)",
+                "keywords": ["run_micro_live_soak_csr574"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "tf2bp_micro_live.log"),
+                # Explicit heartbeat file (not trade-log mtime). Quiet markets ≠ stall.
+                "check_heartbeat": True,
+                "heartbeat_mode": "explicit_file",
+                "heartbeat_file": os.path.join(self.base_dir, "data", "tf2bp_live_heartbeat.json"),
+                # SM v1: never SIGTERM on hb stall (esp. while positioned).
+                "kill_on_heartbeat_stall": False,
+                "entry_halt_flag": os.path.join(self.base_dir, "data", "TF2BP_ENTRY_HALT.flag"),
+                # Prefer systemd unit; watchdog falls back to wrapper if unit inactive
+                "start_cmd": [
+                    "/bin/bash",
+                    os.path.join(self.base_dir, "scripts", "tf2bp-micro-live-systemd-run.sh"),
+                ],
+                "systemd_user_unit": "tf2bp-micro-live.service",
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+            "tf2bp_micro_live_monitor": {
+                "name": "TF2BP micro LIVE 監視 (-100bp/1h Discord)",
+                "keywords": ["monitor_tf2bp_micro_live"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "tf2bp_micro_live_monitor.log"),
+                "check_heartbeat": False,
+                "start_cmd": [
+                    "/bin/bash",
+                    os.path.join(self.base_dir, "scripts", "start-tf2bp-live-monitor.sh"),
+                ],
+                "systemd_user_unit": "tf2bp-micro-live-monitor.service",
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
+        }
+
+        # LIVE slim: when GO2/LIVE_SLIM is set, do NOT auto-restart heavy non-exec workloads.
+        # umm_tf2bp_24h stays supervised: the 04:00 exchange break stops it, and
+        # this node is expected to bring that dry-run back.
+        self.slim_skip_services = {
+            "approved_arena",
+            "jp_equity_paper",
+            "discovery_daemon",
+            "news_scheduler",
+            "sekai_kabuka_sentinel",
+            "edinet_sentinel",
+            "tdnet_sentinel",
+            "pts_sentinel",
+            "quant_pipeline",
+            "hourly_dryrun_reporter",
+            "fusion_engine",
+            "grid_mm_live",
         }
 
         # アラートクールダウン管理
@@ -258,6 +335,25 @@ class WatchdogSentinel:
         self.last_resource_level: str = "normal"
         self.last_heartbeat_alert_time: float = 0.0
         self.is_running: bool = False
+
+    def live_slim_mode(self) -> bool:
+        data = os.path.join(self.base_dir, "data")
+        if os.path.exists(os.path.join(data, "TF2BP_LIVE_STOP.flag")):
+            return False
+        return (
+            os.path.exists(os.path.join(data, "LIVE_SLIM.flag"))
+            or os.path.exists(os.path.join(data, "GO2_TF2BP.flag"))
+        )
+
+    def tf2bp_live_wanted(self) -> bool:
+        data = os.path.join(self.base_dir, "data")
+        if os.path.exists(os.path.join(data, "TF2BP_LIVE_STOP.flag")):
+            return False
+        if os.path.exists(os.path.join(data, "FLEET_STOPPED.flag")):
+            return False
+        return os.path.exists(os.path.join(data, "GO2_TF2BP.flag")) and os.path.exists(
+            os.path.join(data, "tf2bp-live.env")
+        )
 
     def get_service_pid(self, keywords: List[str], exclude: Optional[List[str]] = None) -> Optional[int]:
         """
@@ -331,6 +427,13 @@ class WatchdogSentinel:
             return
         self._fleet_stop_noted = False
 
+        slim = self.live_slim_mode()
+        if slim and not getattr(self, "_slim_noted", False):
+            print("[Watchdog] LIVE_SLIM/GO2_TF2BP active — news/jp/arena auto-restart disabled; UMM dry-run stays supervised", flush=True)
+            self._slim_noted = True
+        if not slim:
+            self._slim_noted = False
+
         for svc_id, svc in self.services.items():
             # 旧来の単体逆張りLIVEエンジンは廃止
             if svc_id == "grid_mm_live":
@@ -339,6 +442,15 @@ class WatchdogSentinel:
             # 意図的停止フラグがある場合は LIVE 取引の再起動をスキップ
             halt_flag = os.path.join(self.base_dir, "data", "LIVE_HALTED.flag")
             if svc_id == "quant_pipeline" and os.path.exists(halt_flag):
+                continue
+
+            # TF2BP LIVE: only supervise when operator wants it
+            if svc_id in ("tf2bp_micro_live", "tf2bp_micro_live_monitor"):
+                if not self.tf2bp_live_wanted():
+                    continue
+
+            # Slim exec node: do not resurrect research/news/dry-run co-tenants
+            if slim and svc_id in self.slim_skip_services:
                 continue
 
             pid = self.get_service_pid(svc["keywords"], exclude=svc.get("exclude"))
@@ -376,34 +488,159 @@ class WatchdogSentinel:
                         message=f"プロセスが正常に立ち上がり、稼働を開始しました。(PID: `{pid}`)",
                     )
 
-                # 2. ログ更新ハートビート（ストール・フリーズ・通信停止）判定
-                if svc.get("check_heartbeat") and os.path.exists(svc["log_file"]):
+                # 2. Liveness heartbeat
+                # TF2BP LIVE: explicit heartbeat file (never trade-log silence).
+                # Other services: legacy log mtime (unchanged).
+                if svc.get("check_heartbeat"):
                     try:
-                        mtime = os.path.getmtime(svc["log_file"])
-                        elapsed = now - mtime
-                        if elapsed >= self.heartbeat_timeout_sec:
-                            if now - self.last_heartbeat_alert_time >= 300.0:
-                                print(f"[Watchdog] 🚨 STALL DETECTED: {svc['name']} (無更新: {elapsed:.0f}秒)", flush=True)
-                                log_tail = self.read_tail_log(svc["log_file"])
-                                self.notifier.send_system_down_alert(
-                                    service_name=svc["name"],
-                                    reason=f"約定データ受信停止・ログ更新途絶を検知しました (最終受信から {elapsed:.0f} 秒経過 / 許容: {self.heartbeat_timeout_sec:.0f} 秒)",
-                                    log_snippet=log_tail,
-                                    auto_recovery_status="通信復旧およびプロセス再起動を実行中...",
-                                )
-                                self.last_heartbeat_alert_time = now
+                        if svc.get("heartbeat_mode") == "explicit_file":
+                            self._check_explicit_heartbeat(svc_id, svc, pid, now)
+                        elif os.path.exists(svc["log_file"]):
+                            mtime = os.path.getmtime(svc["log_file"])
+                            elapsed = now - mtime
+                            if elapsed >= self.heartbeat_timeout_sec:
+                                if now - self.last_heartbeat_alert_time >= 300.0:
+                                    print(f"[Watchdog] 🚨 STALL DETECTED: {svc['name']} (無更新: {elapsed:.0f}秒)", flush=True)
+                                    log_tail = self.read_tail_log(svc["log_file"])
+                                    self.notifier.send_system_down_alert(
+                                        service_name=svc["name"],
+                                        reason=f"約定データ受信停止・ログ更新途絶を検知しました (最終受信から {elapsed:.0f} 秒経過 / 許容: {self.heartbeat_timeout_sec:.0f} 秒)",
+                                        log_snippet=log_tail,
+                                        auto_recovery_status="通信復旧およびプロセス再起動を実行中...",
+                                    )
+                                    self.last_heartbeat_alert_time = now
 
-                                # プロセスを再起動して通信リセット
-                                if self.enable_auto_restart:
-                                    print(f"[Watchdog] 🔄 ハングアップ疑いのため {svc['name']} (pid={pid}) を再起動します", flush=True)
-                                    try:
-                                        os.kill(pid, signal.SIGTERM)
-                                        time.sleep(2.0)
-                                    except Exception:
-                                        pass
-                                    self.restart_service(svc_id)
+                                    # プロセスを再起動して通信リセット
+                                    if self.enable_auto_restart:
+                                        print(f"[Watchdog] 🔄 ハングアップ疑いのため {svc['name']} (pid={pid}) を再起動します", flush=True)
+                                        try:
+                                            os.kill(pid, signal.SIGTERM)
+                                            time.sleep(2.0)
+                                        except Exception:
+                                            pass
+                                        self.restart_service(svc_id)
                     except Exception as ex:
                         print(f"[Watchdog] Heartbeat check error for {svc_id}: {ex}", flush=True)
+
+    def _check_explicit_heartbeat(
+        self,
+        svc_id: str,
+        svc: Dict[str, Any],
+        pid: int,
+        now: float,
+    ) -> None:
+        """TF2BP LIVE SM v1 heartbeat: file timestamp, never trade-log silence.
+
+        On abnormal hb:
+          ENTRY BLOCK + alert + state/position inspect
+        Forbidden:
+          hb abnormal → immediate SIGTERM (especially while positioned)
+        """
+        hb_path = svc.get("heartbeat_file") or ""
+        if not hb_path or not os.path.exists(hb_path):
+            # Process up but no hb yet (boot window) — alert only after timeout from process start
+            if now - self.last_heartbeat_alert_time >= 300.0:
+                print(
+                    f"[Watchdog] ⚠️ {svc['name']}: heartbeat file missing (pid={pid}) — ENTRY BLOCK request, no SIGTERM",
+                    flush=True,
+                )
+                self._request_tf2bp_entry_halt(svc, reason="heartbeat_file_missing")
+                self.notifier.send_system_down_alert(
+                    service_name=svc["name"],
+                    reason="明示heartbeatファイル未生成。ENTRY BLOCKのみ。SIGTERMしない。",
+                    log_snippet=self.read_tail_log(svc["log_file"]),
+                    auto_recovery_status="ENTRY_HALT要求・手動確認待ち（kill禁止）",
+                )
+                self.last_heartbeat_alert_time = now
+            return
+
+        hb = read_heartbeat(hb_path) if hb_path else None
+        if hb_path and os.path.exists(hb_path) and hb is None:
+            print(f"[Watchdog] heartbeat read error/corrupt {hb_path}", flush=True)
+            if now - self.last_heartbeat_alert_time >= 300.0:
+                self._request_tf2bp_entry_halt(svc, reason="heartbeat_corrupt")
+                self.last_heartbeat_alert_time = now
+            return
+
+        # Identity: heartbeat must belong to the monitored PID (reject stale run_id/foreign writers)
+        if hb and not heartbeat_belongs_to_runner(hb, expected_pid=pid):
+            if now - self.last_heartbeat_alert_time >= 300.0:
+                print(
+                    f"[Watchdog] ⚠️ {svc['name']}: heartbeat pid mismatch "
+                    f"hb_pid={hb.get('pid')} expected={pid} run_id={hb.get('run_id')} — not treated as alive",
+                    flush=True,
+                )
+                self._request_tf2bp_entry_halt(svc, reason="heartbeat_pid_mismatch")
+                self.last_heartbeat_alert_time = now
+            return
+
+        ts = float((hb or {}).get("timestamp") or 0.0)
+        elapsed = now - ts if ts > 0 else self.heartbeat_timeout_sec + 1.0
+        if elapsed < self.heartbeat_timeout_sec:
+            return
+
+        positioned = watchdog_hb_implies_positioned(hb)
+        allow_kill = bool(svc.get("kill_on_heartbeat_stall", False)) and watchdog_should_sigterm_on_hb_stall(hb)
+        # Hard rule for TF2BP: never kill on stall
+        if svc_id == "tf2bp_micro_live":
+            allow_kill = False
+
+        if now - self.last_heartbeat_alert_time < 300.0:
+            return
+
+        state = (hb or {}).get("state")
+        print(
+            f"[Watchdog] 🚨 HEARTBEAT STALE: {svc['name']} elapsed={elapsed:.0f}s "
+            f"state={state} positioned={positioned} kill={allow_kill}",
+            flush=True,
+        )
+        self._request_tf2bp_entry_halt(
+            svc,
+            reason=f"heartbeat_stale_elapsed_{int(elapsed)}_state_{state}",
+        )
+        self.notifier.send_system_down_alert(
+            service_name=svc["name"],
+            reason=(
+                f"明示heartbeat途絶 {elapsed:.0f}s (timeout={self.heartbeat_timeout_sec:.0f}s) "
+                f"state={state} positioned={positioned}. "
+                f"ENTRY BLOCK。{'保有中のためSIGTERM禁止。' if positioned else '即SIGTERMしない。'}"
+            ),
+            log_snippet=json.dumps(hb or {}, ensure_ascii=False)[:800],
+            auto_recovery_status="ENTRY_HALT + 安全確認（自動killなし）",
+        )
+        self.last_heartbeat_alert_time = now
+
+        if allow_kill and self.enable_auto_restart and not positioned:
+            # Reserved path — disabled for tf2bp_micro_live
+            print(f"[Watchdog] 🔄 FLAT+policy kill path for {svc['name']} (pid={pid})", flush=True)
+            try:
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(2.0)
+            except Exception:
+                pass
+            self.restart_service(svc_id)
+
+    def _request_tf2bp_entry_halt(self, svc: Dict[str, Any], reason: str) -> None:
+        flag = svc.get("entry_halt_flag")
+        if not flag:
+            return
+        try:
+            os.makedirs(os.path.dirname(flag), exist_ok=True)
+            with open(flag, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "ts": time.time(),
+                        "reason": reason,
+                        "source": "watchdog",
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                f.write("\n")
+            print(f"[Watchdog] ENTRY_HALT flag written: {flag} reason={reason}", flush=True)
+        except Exception as ex:
+            print(f"[Watchdog] failed to write ENTRY_HALT flag: {ex}", flush=True)
 
     def restart_service(self, svc_id: str):
         """サービスの自動再起動を実行"""
@@ -411,7 +648,64 @@ class WatchdogSentinel:
         svc["restart_attempts"] += 1
         print(f"[Watchdog] 🚀 Restarting {svc['name']} (Attempt {svc['restart_attempts']})...", flush=True)
 
+        # TF2BP LIVE: systemd is the sole process owner — never Popen a second runner.
+        if svc_id == "tf2bp_micro_live":
+            unit = svc.get("systemd_user_unit")
+            if not unit:
+                print("[Watchdog] ❌ tf2bp_micro_live has no systemd unit; refuse Popen spawn", flush=True)
+                return
+            try:
+                env = os.environ.copy()
+                env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+                res = subprocess.run(
+                    ["systemctl", "--user", "start", unit],
+                    cwd=self.base_dir,
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if res.returncode == 0:
+                    print(f"[Watchdog] ✅ {svc['name']} systemd start ok ({unit}) — no Popen", flush=True)
+                else:
+                    print(
+                        f"[Watchdog] ❌ systemd start failed for {unit}: {res.stderr or res.stdout}; "
+                        f"NO Popen fallback (single-runner invariant)",
+                        flush=True,
+                    )
+            except Exception as ex:
+                print(
+                    f"[Watchdog] ❌ systemd restart error for {unit}: {ex}; NO Popen fallback",
+                    flush=True,
+                )
+            return
+
+        unit = svc.get("systemd_user_unit")
+        if unit:
+            try:
+                env = os.environ.copy()
+                env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+                # Do NOT reset-failed here — that defeats StartLimitBurst and caused restart storms.
+                res = subprocess.run(
+                    ["systemctl", "--user", "start", unit],
+                    cwd=self.base_dir,
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if res.returncode == 0:
+                    print(f"[Watchdog] ✅ {svc['name']} systemd start ok ({unit})", flush=True)
+                    return
+                print(
+                    f"[Watchdog] ⚠️ systemd start failed for {unit}: {res.stderr or res.stdout}; fallback Popen",
+                    flush=True,
+                )
+            except Exception as ex:
+                print(f"[Watchdog] ⚠️ systemd restart error for {unit}: {ex}; fallback Popen", flush=True)
+
         try:
+            env = os.environ.copy()
             log_f = open(svc["log_file"], "a", encoding="utf-8")
             subprocess.Popen(
                 svc["start_cmd"],
@@ -419,6 +713,7 @@ class WatchdogSentinel:
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env=env,
             )
             time.sleep(2.0)
             new_pid = self.get_service_pid(svc["keywords"], exclude=svc.get("exclude"))

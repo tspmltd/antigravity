@@ -24,6 +24,12 @@ MAX_RUNTIME_SEC="${MAX_RUNTIME_SEC:-0}"
 INTERVAL="${INTERVAL:-2.0}"
 SMOKE="${SMOKE:-0}"
 
+# H1: do not start a second soak runner. flock does not cover a pre-v1.1 process.
+if [[ -n "$(ps -eo args | awk '/antigravity\.quant_pipeline\.run_micro_live_soak_csr574/ && !/awk/ {print 1; exit}')" ]]; then
+  echo "REFUSE: soak runner already active (flock is not sufficient)" >&2
+  exit 1
+fi
+
 mkdir -p "$AG/logs" "$AG/data"
 
 if [[ ! -f "$CAPS" ]]; then

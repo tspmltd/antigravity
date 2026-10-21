@@ -267,3 +267,25 @@ GOV: LIVE=UNTOUCHED · WIRE=NO · ENFORCE=0 · AUTO_APPLY=OFF · DeSeva keep · 
 
 Git CSR-600–605: antigravity `f305fe1`
 
+**CSR-606（2026-10-21 21:10 JST）:** TF2BP LIVE 受入6条件 採点表 Phase 0 / **Gate 0 LOCK**。事故チェーン4層を1:1で塞ぐ。観測キー固定。LIVE=OFF · 実装着手ではない。Maker/経済PASS/DeSeva対象外。正本 `docs/ops/tf2bp_live_acceptance_scorecard_phase0.md`。
+
+2026-10-21 | CSR-606 | TF2BP LIVE 受入6条件 Gate 0 LOCK | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · no implement · no flatten-on-watchdog · pins frozen
+
+**CSR-606b（2026-10-21 21:11 JST）:** 確定版ロードマップ LOCK。Phase 0→4 一本道。路線 B=Maker/PEG/feeder I/O/往復0bp は Phase 4 後。429 feeder 一本化は路線 B。
+
+2026-10-21 | CSR-606b | TF2BP LIVE ロードマップ確定 LOCK · 路線B切り離し | LOCK
+
+**CSR-607（2026-10-21 21:11 JST）:** Phase 0 読み取りギャップ表。コード変更なし。①閉じている=BUYゲート/POST-once/hb非kill/ピン。②未証明=機械試験・連続429 halt・stall時 SAFE_HALT 名。③=runtime/client 迂回・旧 will retry ログ・client size 0.05。正本 `docs/ops/tf2bp_live_phase0_gap_audit.md`。
+
+2026-10-21 | CSR-607 | Phase 0 ギャップ表 · コード禁止 | 記録
+
+**CSR-608（2026-10-21 21:26 JST）:** Phase 1 外枠。連続429×5→ENTRY_HALT。-205 再送0 / 429 BUY0 / hb生存+ログ静止で SIGTERM 0 をスタブ証明。feeder/ピン/核心SM非触。WIRE=NO · LIVE未再開。
+
+2026-10-21 | CSR-608 | Phase 1 外枠 連続429 halt + Gate1 stubs | LOCK
+
+GOV: LIVE=OFF · Phase 2 未着手 · 路線B未開 · pins frozen
+
+**commit 承認（2026-10-21 · ユーザー指示「GIT対応お願い」· CSR-606–608）:** Gate 0 採点表+ギャップ表と Phase 1 外枠（連続429 halt · -205再送0スタブ · Watchdog 誤認キル0）を正本化。戦略ピン非触 · feeder非触 · LIVE未再開 · pushなし。
+
