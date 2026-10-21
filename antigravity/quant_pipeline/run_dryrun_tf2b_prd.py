@@ -208,13 +208,13 @@ class TF2BPrdDryRun:
 
         self.hist_ctrl: List[Dict[str, Any]] = []
         self.hist_prd: List[Dict[str, Any]] = []
-        self._restore_ledger()
 
         self.stats = {
             "signals_ctrl": 0,
             "signals_prd": 0,
             "prd_allowed": 0,
             "prd_rejected": 0,
+            "profit_harvests_prd": 0,
             "early_exits_prd": 0,
             "normal_exits_prd": 0,
             "entries_ctrl": 0,
@@ -222,7 +222,9 @@ class TF2BPrdDryRun:
             "exits_ctrl": 0,
             "exits_prd": 0,
         }
+        self._prd_peak_bp: float = 0.0
         self._last_prd_verdict: Optional[Dict[str, Any]] = None
+        self._restore_ledger()
 
     def stop(self, *_a) -> None:
         self.running = False
@@ -245,10 +247,36 @@ class TF2BPrdDryRun:
             if float(row.get("ts") or 0) < cutoff:
                 continue
             lane = str(row.get("lane") or "")
+            pnl_bp = float(row.get("pnl_bp") or 0.0)
+            pnl_jpy = float(row.get("pnl_jpy") or 0.0)
+            is_win = bool(row.get("is_win") or pnl_bp > 0)
             if lane == "TF2B_PRD":
                 self.hist_prd.append(row)
+                self.prd.total_trades += 1
+                if is_win:
+                    self.prd.win_trades += 1
+                self.prd.total_pnl += pnl_jpy
+                self.prd.total_pnl_bp += pnl_bp
+                self.prd.trades_history.append(row)
+                self.stats["entries_prd"] += 1
+                self.stats["exits_prd"] += 1
+                exit_side = str(row.get("exit_side") or "")
+                if exit_side == "profit_harvest":
+                    self.stats["profit_harvests_prd"] += 1
+                elif exit_side == "early_cut":
+                    self.stats["early_exits_prd"] += 1
+                else:
+                    self.stats["normal_exits_prd"] += 1
             elif lane == "TF2BP_CTRL":
                 self.hist_ctrl.append(row)
+                self.ctrl.total_trades += 1
+                if is_win:
+                    self.ctrl.win_trades += 1
+                self.ctrl.total_pnl += pnl_jpy
+                self.ctrl.total_pnl_bp += pnl_bp
+                self.ctrl.trades_history.append(row)
+                self.stats["entries_ctrl"] += 1
+                self.stats["exits_ctrl"] += 1
 
     def _extract_metrics(self, snap: Any, now: float) -> Dict[str, float]:
         best_bid = float(getattr(snap, "best_bid", 0.0) or 0.0)
@@ -263,6 +291,10 @@ class TF2BPrdDryRun:
 
         vac = self.vacuum_agent.on_tick(snap, now=now)
         vac_score = float(vac.get("vacuum_score", 0.0) or 0.0)
+        is_vac = bool(vac.get("is_vacuum", False))
+        vac_side = str(vac.get("vacuum_side", "none"))
+        d_mdev_dt = float(vac.get("metrics", {}).get("d_micro_dev_dt", 0.0))
+
         adv_dict = self.adverse_engine.calculate_adverse_score(
             ae_1s=None,
             ae_3s=None,
@@ -281,6 +313,9 @@ class TF2BPrdDryRun:
             "imbalance": round(imbalance, 4),
             "micro_dev_bp": round(micro_dev_bp, 4),
             "vacuum_score": round(vac_score, 4),
+            "is_vacuum": is_vac,
+            "vacuum_side": vac_side,
+            "d_micro_dev_dt": round(d_mdev_dt, 2),
             "adverse_score": round(adv_score, 2),
             "mid_price": mid,
         }
@@ -318,38 +353,99 @@ class TF2BPrdDryRun:
 
     def _eval_prd_position_exit_condition(
         self, side: str, entry_price: float, current_mid: float, m: Dict[str, float]
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, bool]:
         """
-        ポジション保有中の不利検知（Early Adverse Cut）:
-        ポジション維持に耐えられない板悪化・急激な逆行圧力を検知した場合に早期精算
+        ポジション保有中の動的判定（Dynamic Exit / Hold Profiler）:
+        - 買われる可能性があれば LONG 維持 (Hold Favorable)
+        - 利益が乗った段階で勢いが止まる / 売り圧力が出たら 利益確保 (Dynamic Profit Harvest)
+        - 逆行・板崩壊・予測限界突破が起きたら 早期損切り (Early Adverse Cut)
+
+        Returns:
+            (should_exit: bool, reason: str, is_profit_harvest: bool)
         """
         if entry_price <= 0 or current_mid <= 0:
-            return False, ""
+            return False, "", False
 
         unrealized_bp = (current_mid / entry_price - 1.0) * 1e4 if side == "buy" else (1.0 - current_mid / entry_price) * 1e4
+        self._prd_peak_bp = max(getattr(self, "_prd_peak_bp", 0.0), unrealized_bp)
+        peak_bp = self._prd_peak_bp
 
-        reasons = []
-        # 1. 致命的板崩壊
+        # -------------------------------------------------------------
+        # Tier 1: 致命的板崩壊・急変リスク (即時カット)
+        # -------------------------------------------------------------
         if m["spread_bp"] >= 3.0:
-            reasons.append(f"SPREAD_BLOWOUT ({m['spread_bp']:.1f}bp >= 3.0bp)")
+            return True, f"SPREAD_BLOWOUT ({m['spread_bp']:.1f}bp >= 3.0bp)", (unrealized_bp > 0)
         if m["adverse_score"] >= 50.0:
-            reasons.append(f"SEVERE_ADVERSE ({m['adverse_score']:.1f} >= 50)")
+            return True, f"SEVERE_ADVERSE ({m['adverse_score']:.1f} >= 50.0)", (unrealized_bp > 0)
+        if m.get("is_vacuum"):
+            vac_side = str(m.get("vacuum_side", "none"))
+            if (side == "buy" and vac_side in ("bid", "bilateral")) or (side == "sell" and vac_side in ("ask", "bilateral")):
+                return True, f"LIQUIDITY_VACUUM_COLLAPSE (side={vac_side} score={m.get('vacuum_score', 0):.2f})", (unrealized_bp > 0)
 
-        # 2. 逆行圧力が明白かつ含み損進行
+        # -------------------------------------------------------------
+        # Tier 2: 動的利益確保 (Profit Harvesting)
+        # 含み益が乗っている局面 (+1.5bp以上) で、買い勢いが失速または売り圧力反転
+        # -------------------------------------------------------------
+        if side == "buy" and unrealized_bp >= 1.5:
+            # 2a. +3.0bp以上到達時の頭打ち（CSR-602限界圏での利確）
+            if unrealized_bp >= 3.0:
+                if m["micro_dev_bp"] <= 0.05 or m["imbalance"] <= 0.0:
+                    return True, f"PROFIT_TARGET_PLATEAU (pnl={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f}bp)", True
+                if peak_bp - unrealized_bp >= 0.8:
+                    return True, f"PROFIT_GIVEBACK_PEAK (peak={peak_bp:+.1f}bp curr={unrealized_bp:+.1f}bp)", True
+
+            # 2b. +1.5bp〜+3.0bp圏で、買いフロー失速 & 売り圧力反転を検知
+            if m["micro_dev_bp"] < 0.0:
+                return True, f"MOMENTUM_STALL_DEV_FLIP (pnl={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f}bp < 0)", True
+            if m["imbalance"] < -0.05:
+                return True, f"SELLER_ORDER_DOMINANCE (pnl={unrealized_bp:+.1f}bp imb={m['imbalance']:+.2f} < -0.05)", True
+            if m["adverse_score"] >= 38.0:
+                return True, f"RISING_ADVERSE_IN_PROFIT (pnl={unrealized_bp:+.1f}bp adv={m['adverse_score']:.1f} >= 38)", True
+            if float(m.get("d_micro_dev_dt", 0.0)) < -15.0:
+                return True, f"SHARP_DEV_DECELERATION (pnl={unrealized_bp:+.1f}bp d_dt={m['d_micro_dev_dt']:+.1f})", True
+
+        elif side == "sell" and unrealized_bp >= 1.5:
+            if unrealized_bp >= 3.0:
+                if m["micro_dev_bp"] >= -0.05 or m["imbalance"] >= 0.0:
+                    return True, f"PROFIT_TARGET_PLATEAU (pnl={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f}bp)", True
+                if peak_bp - unrealized_bp >= 0.8:
+                    return True, f"PROFIT_GIVEBACK_PEAK (peak={peak_bp:+.1f}bp curr={unrealized_bp:+.1f}bp)", True
+            if m["micro_dev_bp"] > 0.0:
+                return True, f"MOMENTUM_STALL_DEV_FLIP (pnl={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f}bp > 0)", True
+            if m["imbalance"] > 0.05:
+                return True, f"BUYER_ORDER_DOMINANCE (pnl={unrealized_bp:+.1f}bp imb={m['imbalance']:+.2f} > 0.05)", True
+            if m["adverse_score"] >= 38.0:
+                return True, f"RISING_ADVERSE_IN_PROFIT (pnl={unrealized_bp:+.1f}bp adv={m['adverse_score']:.1f} >= 38)", True
+            if float(m.get("d_micro_dev_dt", 0.0)) > 15.0:
+                return True, f"SHARP_DEV_DECELERATION (pnl={unrealized_bp:+.1f}bp d_dt={m['d_micro_dev_dt']:+.1f})", True
+
+        # -------------------------------------------------------------
+        # Tier 3: 動的損切り (Early Adverse Cut)
+        # 逆行・板悪化・CSR-602 予測限界（2.0bp）突破時の損切り
+        # -------------------------------------------------------------
         if side == "buy":
-            if m["micro_dev_bp"] <= -0.40 and m["imbalance"] <= -0.25:
-                reasons.append(f"STRONG_OPPOSING_FLOW (mdev={m['micro_dev_bp']:+.2f} imb={m['imbalance']:+.2f})")
-            if unrealized_bp <= -1.0 and m["micro_dev_bp"] < -0.15:
-                reasons.append(f"UNFAVORABLE_DRIFT (unrealized={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f})")
+            # 3a. 明確な逆行フロー支配（含み損問わず）
+            if m["micro_dev_bp"] <= -0.30 and m["imbalance"] <= -0.15:
+                return True, f"OPPOSING_FLOW_DOMINANT (mdev={m['micro_dev_bp']:+.2f} imb={m['imbalance']:+.2f})", False
+            # 3b. 含み損進行かつ逆行
+            if unrealized_bp <= -1.0 and (m["micro_dev_bp"] < -0.10 or m["imbalance"] < -0.10):
+                return True, f"UNFAVORABLE_DRIFT (unrealized={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f})", False
+            # 3c. CSR-602 物理予測限界（2bp）違反（放置すると-40bp級の雪崩に発展）
+            if unrealized_bp <= -2.0:
+                return True, f"FRONTIER_LIMIT_BREACH (unrealized={unrealized_bp:+.1f}bp <= -2.0bp)", False
         elif side == "sell":
-            if m["micro_dev_bp"] >= 0.40 and m["imbalance"] >= 0.25:
-                reasons.append(f"STRONG_OPPOSING_FLOW (mdev={m['micro_dev_bp']:+.2f} imb={m['imbalance']:+.2f})")
-            if unrealized_bp <= -1.0 and m["micro_dev_bp"] > 0.15:
-                reasons.append(f"UNFAVORABLE_DRIFT (unrealized={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f})")
+            if m["micro_dev_bp"] >= 0.30 and m["imbalance"] >= 0.15:
+                return True, f"OPPOSING_FLOW_DOMINANT (mdev={m['micro_dev_bp']:+.2f} imb={m['imbalance']:+.2f})", False
+            if unrealized_bp <= -1.0 and (m["micro_dev_bp"] > 0.10 or m["imbalance"] > 0.10):
+                return True, f"UNFAVORABLE_DRIFT (unrealized={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f})", False
+            if unrealized_bp <= -2.0:
+                return True, f"FRONTIER_LIMIT_BREACH (unrealized={unrealized_bp:+.1f}bp <= -2.0bp)", False
 
-        if reasons:
-            return True, "; ".join(reasons)
-        return False, "HOLD_FAVORABLE"
+        # -------------------------------------------------------------
+        # Tier 4: ポジション維持 (Hold Favorable)
+        # 買い圧力が継続している限り、利益を伸ばすために維持
+        # -------------------------------------------------------------
+        return False, "HOLD_FAVORABLE", False
 
     def _apply_action(
         self,
@@ -399,6 +495,7 @@ class TF2BPrdDryRun:
             fill = float(res.get("entry_price") or snap.mid_price)
             strat.record_trade(action, fill, 0.0, mid_price=float(snap.mid_price or fill))
             if name == "TF2B_PRD":
+                self._prd_peak_bp = 0.0
                 self.stats["entries_prd"] += 1
                 _append(
                     AUDIT_PATH,
@@ -432,6 +529,8 @@ class TF2BPrdDryRun:
             pnl = float(res.get("pnl") or res.get("expected_pnl") or 0.0)
             reason = str(res.get("reason") or action)
             strat.record_trade(action, fill, pnl, mid_price=float(snap.mid_price or fill))
+            if name == "TF2B_PRD":
+                self._prd_peak_bp = 0.0
             last = strat.trades_history[-1] if strat.trades_history else {}
             row = {
                 "ts": float(last.get("ts") or now),
@@ -456,7 +555,7 @@ class TF2BPrdDryRun:
             _log(f"[{name}] NORMAL EXIT {reason} pnl={row['pnl_bp']:+.2f}bp")
 
     def _check_early_adverse_exit(self, snap: Any, now: float, metrics: Dict[str, float]) -> None:
-        """TF2B_PRD lane: check if running position should be cut early due to adverse conditions."""
+        """TF2B_PRD lane: check if running position should be cut early or harvested for profit."""
         if not self.prd.position_side:
             return
 
@@ -464,33 +563,43 @@ class TF2BPrdDryRun:
         entry = self.prd.entry_price
         mid = float(snap.mid_price or metrics["mid_price"])
 
-        should_cut, cut_reason = self._eval_prd_position_exit_condition(side, entry, mid, metrics)
-        if should_cut:
-            # Force Early Cut
+        should_exit, reason, is_harvest = self._eval_prd_position_exit_condition(side, entry, mid, metrics)
+        if should_exit:
+            # Force Dynamic Exit (Harvest or Cut)
             fill = mid
             gross_bp = (fill / entry - 1.0) * 1e4 if side == "buy" else (1.0 - fill / entry) * 1e4
             net_bp = gross_bp - float(self.prd.params.get("cost_bp", 0.0))
             pnl_jpy = self.prd._yen(net_bp)
 
             self.prd.record_trade("exit", fill, pnl_jpy, mid_price=fill)
+            self.prd.cooldown_until_ms = int(now * 1000) + 10_000
+            self._prd_peak_bp = 0.0
+
+            tag = "PRD_PROFIT_HARVEST" if is_harvest else "PRD_ADVERSE_CUT"
+            icon = "💰" if is_harvest else "⚡"
+            exit_side = "profit_harvest" if is_harvest else "early_cut"
+
             last = self.prd.trades_history[-1] if self.prd.trades_history else {}
             row = {
                 "ts": float(last.get("ts") or now),
                 "lane": "TF2B_PRD",
                 "side": last.get("side"),
-                "exit_side": "early_cut",
+                "exit_side": exit_side,
                 "fill_price": fill,
                 "pnl_bp": float(last.get("pnl_bp") or net_bp),
                 "pnl_jpy": float(last.get("pnl_jpy") or pnl_jpy),
                 "is_win": (net_bp > 0),
-                "exit_reason": f"PRD_ADVERSE_CUT ({cut_reason})",
+                "exit_reason": f"{tag} ({reason})",
             }
             _append(LEDGER_PATH, row)
             self.hist_prd.append(row)
             self.stats["exits_prd"] += 1
-            self.stats["early_exits_prd"] += 1
-            _append(AUDIT_PATH, {"event": "PRD_EARLY_CUT", "ts": _iso(), "data": row})
-            _log(f"[TF2B_PRD] ⚡ EARLY ADVERSE CUT pnl={net_bp:+.2f}bp ({cut_reason})")
+            if is_harvest:
+                self.stats["profit_harvests_prd"] = self.stats.get("profit_harvests_prd", 0) + 1
+            else:
+                self.stats["early_exits_prd"] += 1
+            _append(AUDIT_PATH, {"event": tag, "ts": _iso(), "data": row})
+            _log(f"[TF2B_PRD] {icon} {tag} pnl={net_bp:+.2f}bp ({reason})")
 
     def _tick_pair(self, snap: Any, now: float) -> None:
         metrics = self._extract_metrics(snap, now)
@@ -553,7 +662,7 @@ class TF2BPrdDryRun:
             "elapsed_hours": round((time.time() - self.t0) / 3600.0, 3),
             "market_source": self.market_source,
             "wire": "NO",
-            "stack": "TF2BP × Predictability Profiler (micro_dev + imbalance + adverse cut)",
+            "stack": "TF2BP × Predictability Profiler (Dynamic Profit Harvest + Adverse Cut + Hold)",
             "TF2BP_CTRL": c,
             "TF2B_PRD": p,
             "compare": {
@@ -567,13 +676,14 @@ class TF2BPrdDryRun:
                 "delta_24h_sharpe": round(s24_p["sharpe"] - s24_c["sharpe"], 4),
                 "delta_1h_max_dd_bp": round(s1_p["max_dd_bp"] - s1_c["max_dd_bp"], 2),
                 "delta_24h_max_dd_bp": round(s24_p["max_dd_bp"] - s24_c["max_dd_bp"], 2),
-                "hypothesis": "Predictability Profiler filters adverse entries & early cuts bad trades",
+                "hypothesis": "Predictability Profiler filters adverse entries, harvests profits & early cuts bad trades",
             },
             "gate": {
                 "signals_ctrl": self.stats["signals_ctrl"],
                 "signals_prd": self.stats["signals_prd"],
                 "prd_allowed": self.stats["prd_allowed"],
                 "prd_rejected": self.stats["prd_rejected"],
+                "profit_harvests_prd": self.stats.get("profit_harvests_prd", 0),
                 "early_exits_prd": self.stats["early_exits_prd"],
                 "normal_exits_prd": self.stats["normal_exits_prd"],
                 "entries_ctrl": self.stats["entries_ctrl"],
@@ -648,7 +758,8 @@ class TF2BPrdDryRun:
                     f"• TF2BP シグナル発生: `{gate['signals_prd']}` 件\n"
                     f"• **有利エントリー許可**: `{gate['prd_allowed']}` 件 (通過率 `{gate['prd_allow_rate']*100:.1f}%`)\n"
                     f"• **不利エントリー拒否**: `{gate['prd_rejected']}` 件 (回避)\n"
-                    f"• **不利検知早期精算 (Early Cut)**: `{gate['early_exits_prd']}` 件\n"
+                    f"• **動的利益確保 (Profit Harvest)**: `{gate.get('profit_harvests_prd', 0)}` 件\n"
+                    f"• **不利検知早期損切り (Adverse Cut)**: `{gate['early_exits_prd']}` 件\n"
                     f"• 通常エグジット: `{gate['normal_exits_prd']}` 件"
                 ),
                 "inline": True,
