@@ -43,6 +43,14 @@ from antigravity.quant_pipeline.tf2bp_live_state_machine import (  # noqa: E402
     VenueSnapshot,
     classify_order_error,
 )
+from antigravity.quant_pipeline.tf2bp_exec_lanes import (  # noqa: E402
+    PEG2B_NEEDLE,
+    assert_taker_market,
+)
+from antigravity.quant_pipeline.feeder_board_source import (  # noqa: E402
+    DEFAULT_LATEST,
+    read_feeder_board,
+)
 from antigravity.quant_pipeline.live_latency_probe import (  # noqa: E402
     LiveLatencyProbe,
     LiveSysMetricsSampler,
@@ -59,7 +67,11 @@ SM_AUDIT = AG / "data" / "mm_research" / "tf2bp_live_sm_audit.jsonl"
 RUNNER_LOCK = AG / "data" / "tf2bp_live_runner.lock"
 STOP_FLAG = AG / "data" / "TF2BP_LIVE_STOP.flag"
 ENTRY_HALT_FLAG = AG / "data" / "TF2BP_ENTRY_HALT.flag"
+RETEST_WEBHOOK = AG / "data" / "tf2bp_retest_webhook.url"
+GO2_MARK = AG / "data" / "GO2_TF2BP.flag"
 CONSECUTIVE_429_HALT = 5
+FEEDER_LATEST = DEFAULT_LATEST
+FEEDER_MAX_AGE_MS = 5000.0
 
 
 def note_consecutive_429(
@@ -102,6 +114,34 @@ def _jst() -> str:
 _RUNNER_NEEDLE = "antigravity.quant_pipeline.run_micro_live_soak_csr574"
 
 
+def _send_taker_market(client: Any, side: str, size: float) -> Any:
+    """TF2BP soak is taker-only. LIMIT is a lane violation (CSR-615)."""
+    assert_taker_market("MARKET")
+    return client.send_order("FX_BTC_JPY", side, size, "MARKET")
+
+
+def _foreign_peg2b_pids() -> List[int]:
+    me = os.getpid()
+    found: List[int] = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return found
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == me:
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        cmd = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        if PEG2B_NEEDLE in cmd and "python" in cmd:
+            found.append(pid)
+    return found
+
+
 def _foreign_runner_pids() -> List[int]:
     """Other soak-runner processes. Pre-v1.1 runners do not hold the flock."""
     me = os.getpid()
@@ -141,6 +181,41 @@ def _refuse_old_runner(pids: List[int]) -> Dict[str, Any]:
     }
 
 
+def _retest_set() -> int:
+    try:
+        for ln in GO2_MARK.read_text(encoding="utf-8").splitlines():
+            if ln.startswith("set="):
+                return max(1, int(ln.split("=", 1)[1]))
+    except Exception:
+        pass
+    return 1
+
+
+def _retest_discord(content: str) -> None:
+    """Post to operator webhook. Never logs the URL."""
+    try:
+        url = RETEST_WEBHOOK.read_text(encoding="utf-8").strip()
+    except Exception:
+        return
+    if not url.startswith("https://discord.com/api/webhooks/"):
+        return
+    body = json.dumps({"content": content[:1900]}, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "TF2BP-Retest/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            resp.read()
+    except Exception as exc:
+        print(f"[TF2BP] discord warn: {exc}", flush=True)
+
+
 def _load_caps() -> Dict[str, Any]:
     if CAPS_PATH.exists():
         return json.loads(CAPS_PATH.read_text(encoding="utf-8"))
@@ -151,6 +226,29 @@ def _append_ledger(row: Dict[str, Any]) -> None:
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     with LEDGER.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _read_feeder_board() -> Optional[Dict[str, Any]]:
+    """Primary board: shared_feeder IPC. None → REST fallback (CSR-616)."""
+    return read_feeder_board(FEEDER_LATEST, max_stale_ms=FEEDER_MAX_AGE_MS)
+
+
+def _fetch_market(
+    product: str, marks: Optional[Dict[str, Any]] = None
+) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    feeder = _read_feeder_board()
+    if feeder:
+        if marks is not None:
+            now = mono_ns()
+            marks.setdefault("t0_ns", now)
+            marks.setdefault("t1_ns", now)
+            marks["feed_source"] = "shared_feeder"
+        return feeder, {"buy": 0.0, "sell": 0.0, "newest_exec_ts": None}, "shared_feeder"
+    board = _fetch_board(product, marks=marks)
+    vols = _fetch_exec_vols(product, marks=marks)
+    if marks is not None:
+        marks["feed_source"] = "rest_fallback"
+    return board, vols, "rest_fallback"
 
 
 def _fetch_board(product: str, marks: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -349,6 +447,21 @@ def run_tf2bp(
     others = _foreign_runner_pids()
     if others:
         return _refuse_old_runner(others)
+    peg2b = _foreign_peg2b_pids()
+    if peg2b:
+        print(f"[TF2BP] REFUSE start: PEG2-B maker lane active pids={peg2b}", flush=True)
+        return {
+            "id": "TF2BP_v1",
+            "closed_trades": 0,
+            "pnl_jpy": 0.0,
+            "trades": [],
+            "real": real,
+            "stop_reason": "peg2b_lane_active",
+            "sm_state": "BOOT",
+            "run_id": None,
+            "venue_position": None,
+            "lock_acquired": False,
+        }
 
     # P0-1: exclusive lock BEFORE any strategy/orders (atomic flock, not check-then-act)
     run_id_pre = f"pre{os.getpid()}"
@@ -430,6 +543,11 @@ def run_tf2bp(
         f"sm_run_id={sm.run_id} pid={sm.pid} state={sm.state.value} lock=HELD",
         flush=True,
     )
+    if real:
+        _retest_discord(
+            f"TF2BP SET-{_retest_set()} 開始 size={size} max_trades="
+            f"{'unlimited' if trade_cap is None else trade_cap} run_id={sm.run_id}"
+        )
 
     def _request_shutdown(reason: str) -> None:
         nonlocal stop_reason, shutting_down
@@ -556,6 +674,8 @@ def _run_tf2bp_body(
             stop_reason = "daily_loss"
             break
 
+        sm.sync_external_halt_flag()
+
         # SAFE_HALT: no new ENTRY; heartbeat only; wait operator / policy
         if sm.state == LiveState.SAFE_HALT:
             sm.write_heartbeat()
@@ -575,13 +695,14 @@ def _run_tf2bp_body(
         http_429 = False
         fetch_error: Optional[str] = None
         try:
-            board = _fetch_board("FX_BTC_JPY", marks=feed_marks)
-            vols = _fetch_exec_vols("FX_BTC_JPY", marks=feed_marks)
+            board, vols, feed_source = _fetch_market("FX_BTC_JPY", marks=feed_marks)
         except Exception as exc:
             fetch_error = str(exc)
             http_429 = "429" in fetch_error
             consecutive_429, halt_429 = note_consecutive_429(
-                consecutive_429, is_429=http_429
+                consecutive_429,
+                is_429=http_429,
+                threshold=CONSECUTIVE_429_HALT,
             )
             if halt_429 and not sm.entry_halt:
                 sm.on_entry_halt(reason="consecutive_429")
@@ -751,13 +872,14 @@ def _run_tf2bp_body(
         if now - last_hb_log >= 30.0:
             print(
                 f"[TF2BP] hb mid={mid:,.0f} state={sm.state.value} "
-                f"venue={sm.venue_position} entry_halt={sm.entry_halt} action={action}",
+                f"venue={sm.venue_position} entry_halt={sm.entry_halt} action={action} "
+                f"feed={feed_source}",
                 flush=True,
             )
             last_hb_log = now
         sm.write_heartbeat()
 
-        # ENTRY_PENDING / EXIT_PENDING: recovery via lookup; never additional BUY
+        # ENTRY_PENDING / EXIT_PENDING: lookup only. Never a second same-side POST.
         if sm.state in (LiveState.ENTRY_PENDING, LiveState.EXIT_PENDING):
             if action in ("buy", "exit"):
                 lat_probe.emit_loop(run_id=sm.run_id, **pending_lat)
@@ -815,9 +937,11 @@ def _run_tf2bp_body(
                 order_ack_box.clear()
                 t7_ns = mono_ns()
                 try:
-                    order_res = client.send_order("FX_BTC_JPY", "BUY", size, "MARKET")
+                    order_res = _send_taker_market(client, "BUY", size)
                     oid = (order_res or {}).get("child_order_acceptance_id")
                     sm.last_order_id = oid
+                    if ask_sz + 1e-12 >= size:
+                        sm.mark_predicted_fill(side="BUY", source="board_mimic_ask")
                     t8_ns = order_ack_box.get("t8_ns") or mono_ns()
                     t7_ns = order_ack_box.get("t7_ns") or t7_ns
                     pending_lat["t"]["t6"] = t6_ns
@@ -896,6 +1020,11 @@ def _run_tf2bp_body(
                         f"run_id={sm.run_id}",
                         flush=True,
                     )
+                    if real:
+                        _retest_discord(
+                            f"TF2BP SET-{_retest_set()} ENTRY BUY @ {paper_entry:,.0f} "
+                            f"venue={sm.venue_position} run_id={sm.run_id}"
+                        )
 
             elif action == "exit":
                 ok, reason = sm.can_submit_exit(strategy_action="exit")
@@ -916,8 +1045,10 @@ def _run_tf2bp_body(
                 order_ack_box.clear()
                 t7_ns = mono_ns()
                 try:
-                    order_res = client.send_order("FX_BTC_JPY", "SELL", sell_sz, "MARKET")
+                    order_res = _send_taker_market(client, "SELL", sell_sz)
                     sm.last_order_id = (order_res or {}).get("child_order_acceptance_id")
+                    if bid_sz + 1e-12 >= sell_sz:
+                        sm.mark_predicted_fill(side="SELL", source="board_mimic_bid")
                     t8_ns = order_ack_box.get("t8_ns") or mono_ns()
                     t7_ns = order_ack_box.get("t7_ns") or t7_ns
                     pending_lat["t"]["t6"] = t6_ns
@@ -991,6 +1122,11 @@ def _run_tf2bp_body(
                         f"size={sell_sz} state={sm.state.value}",
                         flush=True,
                     )
+                    if real:
+                        _retest_discord(
+                            f"TF2BP SET-{_retest_set()} EXIT #{closed}/{cap_s} "
+                            f"pnl={pnl:+.1f} sum={pnl_sum:+.1f} state={sm.state.value}"
+                        )
                 else:
                     _write_pos_alert(
                         "EXIT_INCOMPLETE",
@@ -1046,6 +1182,18 @@ def _run_tf2bp_body(
         f"[TF2BP] stopped state={sm.state.value} venue={sm.venue_position} run_id={sm.run_id}",
         flush=True,
     )
+    # CSR-618: a finished REAL set must not be auto-restarted as the next 20.
+    done = stop_reason or get_stop_reason() or ""
+    if real and done in ("max_trades", "daily_loss", "runtime"):
+        try:
+            STOP_FLAG.write_text(f"set_complete {done} {_jst()}\n", encoding="utf-8")
+            print(f"[TF2BP] STOP flag pinned reason={done} (no auto SET+1)", flush=True)
+            _retest_discord(
+                f"TF2BP SET-{_retest_set()} 終了 reason={done} closed={closed} "
+                f"pnl_sum={pnl_sum:+.1f} state={sm.state.value} venue={sm.venue_position}"
+            )
+        except Exception as exc:
+            print(f"[TF2BP] STOP pin warn: {exc}", flush=True)
     return {
         "id": "TF2BP_v1",
         "closed_trades": closed,
@@ -1142,7 +1290,9 @@ def main() -> int:
         if args.size > 0.001 + 1e-12:
             print("REFUSE: size > 0.001", file=sys.stderr)
             return 2
-        # trade-count ceiling removed — continuous LIVE uses max_trades=0
+        if int(args.max_trades) < 1 or int(args.max_trades) > 20:
+            print("REFUSE: --real requires --max-trades 1..20", file=sys.stderr)
+            return 2
 
     # BitFlyerClient ORs with env; force env false for dry unless real approved
     if not real:

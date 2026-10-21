@@ -2637,3 +2637,120 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **別名:** `LONG`=`READY_POSITIONED` · `ENTRY_HALT`=`BLOCKED_MARGIN`
 - **外:** Maker/PEG · 経済 PASS · DeSeva/PRD/CAP · Watchdog 自動 flatten
 
+## 115. CSR-608 — Phase 1 外枠（2026-10-21 21:26 JST）
+
+- 連続429×5 → ENTRY_HALT。`-205` 再送0。hb生存+ログ静止で SIGTERM 0。
+- 正本: soak `note_consecutive_429` · `tests/test_tf2bp_live_state_machine.py`
+
+## 116. CSR-609 — Phase 2 核心 SM（2026-10-21 21:32 JST）
+
+- 建玉中 halt → SAFE_HALT（flatten 0）。残玉起動 LONG adopt · 強制BUY 0。二重起動 REFUSE。
+- 人手手順: `docs/ops/tf2bp_live_safe_flatten_playbook.md`
+
+## 117. CSR-610 — Phase 3 カオス / Gate 3 PASS（2026-10-21 21:36 JST）
+
+- Sandbox のみ。kill -9 後の新プロセスは venue 0.001 を adopt · BUY 0。
+- timeout UNKNOWN は再POSTしない。cancel vs COMPLETED は LONG（FLAT孤児禁止）。
+- 短ループ二重BUY 0。24h 不要。Watchdog 本番は建玉中に殺さない（変更なし）。
+- 正本: `tests/test_tf2bp_live_phase3_chaos.py` · `docs/ops/tf2bp_live_phase3_chaos.md`
+
+## 118. CSR-611 — Phase 4 執行ライフサイクル審査 / Gate 4 HOLD（2026-10-21 21:40 JST）
+
+- Review Only。コード変更なし。フラグ削除なし。LIVE 未再開。
+- 事故チェーン6条件 = PASS（Gate 1–3）。G1–G3 経済 = N/A。PnL は見ない。
+- **HOLD 理由:** 旧 `GO2_TF2BP.flag`（2026-10-05）と `data/tf2bp-live.env`（process REAL=true · CONFIRM_GO2=TF2BP）が残る。STOP 旗が最後の錠。
+- 再試験 0.001×20 は未実施。新トークン `GO2 TF2BP` なしでは開かない。
+- start.sh 既定 `MAX_TRADES=0` と systemd `1..20` が食い違う。再試験は 20 固定。
+- 正本: `docs/ops/tf2bp_live_phase4_lifecycle_review.md`
+- 路線 B は Gate 4 HOLD の間は開かない。
+
+## 119. CSR-612 — Gate 4 HOLD 閉じ / 統治 PASS（2026-10-21 21:44 JST）
+
+- 旧 GO2（10/05）を `GO2_TF2BP.flag.expired-20261005-csr581` へ退避。`GO2_TF2BP.REVOKED` 記録。
+- `tf2bp-live.env` = process `ENABLE_REAL_TRADING=false` · `CONFIRM_GO2=REVOKED`。STOP 旗は残す。`.env` 非触。
+- 新 GO2 は `status=ACTIVE` 必須。REAL `MAX_TRADES` は 1..20（paper の 0 は残す）。
+- 証明: systemd / start.sh / soak `--real` が REFUSE。unit inactive。
+- **Gate 4 PASS（統治）。再試験は明示 `GO2 TF2BP`。**
+- 正本: `docs/ops/tf2bp_live_phase4_lifecycle_review.md`
+
+## 120. CSR-613 — 路線 B Gate B0 LOCK（2026-10-21 21:46 JST）
+
+- 独立採点表。コード変更なし。PEG2-B LIVE 未再開。TF2BP ピン非触。
+- 6条件: COMPLETED ADOPT · レース後非死亡 · LIMIT は venue_net==0 · 増玉0 · TF2BP 非侵 · 0bp を合格にしない。
+- ギャップ: レース修正はコードにあるが試験なし。`GO_PEG2B_LIVE_TRIAL.flag` 旧旗残。feeder 稼働・soak は REST。
+- 正本: `docs/ops/tf2bp_route_b_scorecard.md` · `docs/ops/tf2bp_route_b_gap_audit.md`
+- **次:** B1 Sandbox レース証明。着手は GO 後。
+
+## 121. CSR-614 — 路線 B1 レース PASS（2026-10-21 21:50 JST）
+
+- Sandbox 5試験: PRE/POST cancel ADOPT · NameError 非死亡 · LIMIT は flat のみ · oversize 増玉0。
+- `_timeout_cancel_and_reconcile` は例外を stop に落とす。プロセスは殺さない。
+- 旧 `GO_PEG2B_LIVE_TRIAL.flag` 退避+REVOKED。新旗は `status=ACTIVE`。
+- TF2BP / soak / ピン非触。PEG2-B LIVE 未再開。
+- 正本: `tests/test_peg2b_route_b1_race.py` · `docs/ops/tf2bp_route_b1_race.md`
+- **次:** B2 Maker 隔離。着手は GO 後。
+
+## 122. CSR-615 — 路線 B2 Maker/Taker 隔離 PASS（2026-10-21 21:52 JST）
+
+- soak 入口/出口は `_send_taker_market`（LIMIT 拒否）。PEG2-B 入口は LIMIT のみ。
+- 同時稼働禁止。soak は peg2b runner を import しない。flatten 方針は混ぜない。
+- TF2BP ピン / 路線 A SM 非触。LIVE 未再開。0bp は見ない。
+- 正本: `tf2bp_exec_lanes.py` · `tests/test_tf2bp_route_b2_lanes.py` · `docs/ops/tf2bp_route_b2_lanes.md`
+- **次:** B3 feeder I/O 一本化。着手は GO 後。
+
+## 123. CSR-616 — 路線 B3 feeder 一次板 PASS（2026-10-21 21:55 JST）
+
+- soak `_fetch_market`: shared_feeder が一次。age>5s / stale / 欠落だけ REST。
+- REST 429 → 従来 ENTRY_HALT。feeder 成功は 429 を数えない。
+- TF2BP ピン / Maker レーン / LIVE 非触。0bp は見ない。
+- 正本: `docs/ops/tf2bp_route_b3_feeder.md` · `tests/test_tf2bp_route_b3_feeder.py`
+- **次:** B4 コスト観測。Economic PASS 禁止。
+
+## 124. CSR-617 — 路線 B4 コスト観測 / 路線 B クローズ（2026-10-21 21:57 JST）
+
+- 測るだけ。Economic_PASS=NO。round_trip_0bp=false。発注 0。
+- 観測: spread 1.45bp = taker 往復。caps 片道 0.25 は過小。PEG2-B 理論 inside 0.04 · 参考 slip −1.05。
+- 正本: `docs/ops/tf2bp_route_b4_cost.md` · `data/mm_research/tf2bp_route_b4_cost.json`
+- 路線 B（B0–B4）クローズ。TF2BP 再試験 / PEG2-B LIVE は別トークン。
+
+## 125. CSR-618 — 実弾 20×5 プロトコル（2026-10-21 22:00 JST）
+
+- 1セット=0.001×最大20。5セットで最大100。セット間は停止して採点。
+- 成功=事故チェーン0。PnL / 経済 PASS は見ない。
+- セット1=`GO2 TF2BP`。以降=`GO2 TF2BP SET-2` … `SET-5`。`GO` だけでは開かない。
+- **未起動。** 正本 `docs/ops/tf2bp_live_retest_20x5.md`
+
+## 126. CSR-619 — GO2 TF2BP 実弾 SET-1 + PASS自動継続（2026-10-21）
+
+- トークン `GO2 TF2BP` ACCEPT。サイズ 0.001 · MAX_TRADES=20 · 最大5セット。
+- セット間は soak が STOP pin。監督が事故キー採点。PASS なら次セット。FAIL で止める。
+- 約定ごと Discord（webhook は data/ のみ）。20本終了はチャット。
+- `.env` ENABLE_REAL_TRADING=false のまま。Economic_PASS=NO。PEG2-B 非起動。
+
+## 127. CSR-620 — SET-1 二重SELL → 指値カバー後停止（2026-10-21 23:32）
+
+- 5本目出口で SELL 2回。venue −0.001。`UNEXPECTED_EXPOSURE` → `SAFE_HALT`。
+- オペレータ LIMIT BUY 0.001 @ 中値。埋まり後フラット。
+- LIVE 停止。STOP pin。tf2bp-live.env REAL=false。自動継続しない。Economic_PASS=NO。
+
+## 128. CSR-621 — 出口 fill は板模倣予測（2026-10-21 23:36）
+
+- HFT: 成行は板を食う。公開板＋約定で fill を予測する。
+- 予測 fill なら local は即 flat。`get_positions` 遅れは再発注理由にしない。
+- 子注文は確認。未確定のあいだ 2本目 SELL=0。
+- LIVE は止めたまま。コード未適用。
+
+## 129. CSR-622 — 予測 fill 先行、外れは venue 確認後に1回（2026-10-21 23:38）
+
+- 板模倣で埋まったと予測できれば問題なし。`get_positions` 遅れでは再発注しない。
+- 予測が外れ、取引所建玉が残っていると確認できたときだけ、そのサイドを1本で消す。
+- 未確定・ACTIVE 子注文があるあいだは解消注文も出さない。
+- 今回の事故は「遅れ＝外れ」と早合点して2本目を出したこと。LIVE停止のまま。コード未適用。
+
+## 130. CSR-623 — 全注文に予測 fill を適用（2026-10-21 23:40）
+
+- BUY/SELL とも板模倣で予測。同一サイドの再POSTは pending 中ゼロ。
+- 建玉API遅れでは LONG に戻さない。REJECT+残玉確認のあと1本だけ解消。
+- 既知の穴: 予測LONGのまま反対売買を出すと一瞬ショートになり得る。venue 残玉で1本戻す。
+- 指値はキュー未実装なので楽観 fill しない（inflight 錠のみ）。LIVE停止。
+

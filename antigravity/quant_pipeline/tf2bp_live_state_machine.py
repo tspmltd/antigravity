@@ -230,6 +230,8 @@ class TF2BPLiveStateMachine:
         self.audit_log: List[TransitionRecord] = []
         self.max_transient_attempts = 3
         self.pending_since: Optional[float] = None
+        self.predicted_fill = False
+        self.residual_miss_confirmed = False
         self.hb_write_ok = True
         self.critical_persist_ok = True
 
@@ -476,6 +478,13 @@ class TF2BPLiveStateMachine:
                     pass
             return False, "entry_halt"
 
+        if self.last_order_id and not self.residual_miss_confirmed:
+            self._audit(
+                "ENTRY_BLOCK",
+                detail={"reason": "inflight_no_retry", "order_id": self.last_order_id},
+                strategy_signal="buy",
+            )
+            return False, "inflight_no_retry"
         if self.state != LiveState.READY_FLAT:
             self._audit(
                 "ENTRY_BLOCK",
@@ -532,6 +541,8 @@ class TF2BPLiveStateMachine:
         self.entry_allowed = False
         self.last_order_id = order_id
         self.last_order_side = "BUY"
+        self.predicted_fill = False
+        self.residual_miss_confirmed = False
         self._transition(
             "ORDER_SUBMIT",
             LiveState.ENTRY_PENDING,
@@ -561,6 +572,8 @@ class TF2BPLiveStateMachine:
             self.local_position = venue.net
             self.venue_position = venue.net
             self.entry_price = float(venue.avg_entry or self.entry_price)
+            self.last_order_id = None
+            self.predicted_fill = True
             self._transition(
                 "FILL",
                 LiveState.LONG,
@@ -635,6 +648,7 @@ class TF2BPLiveStateMachine:
                 self.venue_position = self.local_position
                 self.entry_price = float(venue.avg_entry or self.entry_price)
                 if self.state == LiveState.ENTRY_PENDING:
+                    self.last_order_id = None
                     self._transition("FILL", LiveState.LONG, {"reason": "unknown_recovery_filled"})
                 else:
                     self.begin_reconcile()
@@ -646,6 +660,8 @@ class TF2BPLiveStateMachine:
             if venue.open_order_count == 0:
                 self.local_position = 0.0
                 self.venue_position = 0.0
+                self.last_order_id = None
+                self.residual_miss_confirmed = False
                 if self.entry_halt:
                     self._transition("FILL", LiveState.ENTRY_HALT, {"reason": "exit_recovery_flat"})
                 else:
@@ -667,20 +683,41 @@ class TF2BPLiveStateMachine:
             self.apply_reconcile(venue)
             return self.state
 
-        # Case B' — EXIT residual long with no open orders → LONG
+        # Case B' — venue leftover is a miss ONLY after the child order is known rejected.
+        # Position lag + no ACTIVE (MARKET already gone) is not a miss. Do not adopt LONG.
         if (
             expected_side == "SELL"
             and venue.is_known_long()
             and venue.open_orders_known
             and venue.open_order_count == 0
+            and order_lookup.known
+            and order_lookup.rejected_or_absent
+            and not order_lookup.filled
         ):
             self.local_position = float(venue.net or 0)
             self.venue_position = self.local_position
+            self.residual_miss_confirmed = True
+            self.last_order_id = None
             if self.state == LiveState.EXIT_PENDING:
-                self._transition("RECONCILE", LiveState.LONG, {"reason": "exit_incomplete_adopt"})
+                self._transition(
+                    "RECONCILE",
+                    LiveState.LONG,
+                    {"reason": "predict_miss_venue_residual", "venue_net": venue.net},
+                )
             else:
                 self.begin_reconcile()
                 self.apply_reconcile(venue)
+            return self.state
+        if (
+            expected_side == "SELL"
+            and venue.is_known_long()
+            and self.state == LiveState.EXIT_PENDING
+        ):
+            self.venue_position = float(venue.net or 0)
+            self._audit(
+                "PREDICT_FILL_WAIT",
+                detail={"reason": "venue_lag_keep_pending", "venue_net": venue.net},
+            )
             return self.state
 
         # Case C — cannot decide uniquely
@@ -696,6 +733,8 @@ class TF2BPLiveStateMachine:
     def can_submit_exit(self, *, strategy_action: str) -> Tuple[bool, str]:
         if strategy_action != "exit":
             return False, "not_exit_signal"
+        if self.last_order_id and not self.residual_miss_confirmed:
+            return False, "inflight_no_retry"
         if self.state == LiveState.LONG:
             if self.venue_position is not None and self.venue_position <= EPS and self.local_position <= EPS:
                 return False, "not_long"
@@ -709,6 +748,8 @@ class TF2BPLiveStateMachine:
     def mark_exit_pending(self, *, order_qty: float, order_id: Optional[str] = None) -> None:
         self.last_order_id = order_id
         self.last_order_side = "SELL"
+        self.predicted_fill = False
+        self.residual_miss_confirmed = False
         # ENTRY_HALT → EXIT_PENDING not in table; go LONG first if halt+long then exit
         if self.state == LiveState.ENTRY_HALT:
             self._transition("RECONCILE", LiveState.LONG, {"reason": "halt_to_long_for_exit"})
@@ -731,6 +772,9 @@ class TF2BPLiveStateMachine:
             self.local_position = 0.0
             self.venue_position = 0.0
             self.entry_price = 0.0
+            self.last_order_id = None
+            self.predicted_fill = True
+            self.residual_miss_confirmed = False
             if self.entry_halt:
                 self.entry_allowed = False
                 self._transition("FILL", LiveState.ENTRY_HALT, {"side": "SELL", "flat": True})
@@ -739,14 +783,19 @@ class TF2BPLiveStateMachine:
                 self.reconcile_completed = True
                 self._transition("FILL", LiveState.READY_FLAT, {"side": "SELL", "flat": True})
             return self.state
-        # residual long — back to LONG (not FLAT)
-        self.local_position = venue.net
-        self._transition(
-            "RECONCILE",
-            LiveState.LONG,
-            {"reason": "exit_incomplete_residual", "venue_net": venue.net},
+        # CSR-622: residual after SELL is lag or unconfirmed miss. Stay EXIT_PENDING.
+        # Do not adopt LONG (that unlocked a second SELL tonight).
+        self.venue_position = venue.net
+        self._audit(
+            "PREDICT_FILL_WAIT",
+            detail={"reason": "exit_venue_lag_keep_pending", "venue_net": venue.net},
         )
         return self.state
+
+    def mark_predicted_fill(self, *, side: str, source: str = "board_mimic") -> None:
+        """HFT: book/tape says this MARKET should have filled. Not a retry trigger."""
+        self.predicted_fill = True
+        self._audit("PREDICT_FILL", detail={"side": side, "source": source})
 
     def pending_needs_recovery(self, *, timeout_sec: float = 15.0) -> bool:
         if self.state not in (LiveState.ENTRY_PENDING, LiveState.EXIT_PENDING):
@@ -817,26 +866,49 @@ class TF2BPLiveStateMachine:
             self._transition("STATE_FAULT", LiveState.SAFE_HALT, {"reason": reason})
         return self.state
 
-    def on_entry_halt(self, reason: str = "operator") -> LiveState:
-        """Phase 1: sticky ENTRY_HALT (e.g. consecutive_429). Does not flatten."""
+    def _apply_halt_state(self, *, reason: str, source: str) -> LiveState:
+        """Positioned → SAFE_HALT (no flatten). Flat → ENTRY_HALT."""
         self.entry_halt = True
         self.entry_allowed = False
+        positioned = self.state in (
+            LiveState.LONG,
+            LiveState.EXIT_PENDING,
+            LiveState.ENTRY_PENDING,
+        )
+        if positioned:
+            if self.state != LiveState.SAFE_HALT and self._allowed(LiveState.SAFE_HALT):
+                self._transition(
+                    "SAFE_HALT",
+                    LiveState.SAFE_HALT,
+                    {"reason": reason, "source": source, "flatten": False},
+                )
+            return self.state
+        if self.state in (LiveState.READY_FLAT, LiveState.RECONCILING) and self._allowed(
+            LiveState.ENTRY_HALT
+        ):
+            self._transition("ENTRY_HALT", LiveState.ENTRY_HALT, {"reason": reason, "source": source})
+            return self.state
+        self._audit("ENTRY_HALT", detail={"reason": reason, "source": source, "sticky": True})
+        return self.state
+
+    def sync_external_halt_flag(self) -> LiveState:
+        """Watchdog / operator flag: halt BUY; if positioned → SAFE_HALT, never flatten."""
+        if not self.entry_halt_flag_path.exists():
+            return self.state
+        return self._apply_halt_state(reason="external_halt_flag", source="flag")
+
+    def on_entry_halt(self, reason: str = "operator") -> LiveState:
+        """Sticky halt. Does not flatten. Positioned → SAFE_HALT."""
         wrote = self._write_entry_halt_flag(reason=reason)
         if not wrote:
             if self._allowed(LiveState.SAFE_HALT) and self.state != LiveState.SAFE_HALT:
                 self._transition(
                     "SAFE_HALT",
                     LiveState.SAFE_HALT,
-                    {"reason": "entry_halt_flag_write_failed", "source": reason},
+                    {"reason": "entry_halt_flag_write_failed", "source": reason, "flatten": False},
                 )
             return self.state
-        if self.state == LiveState.READY_FLAT:
-            self._transition("ENTRY_HALT", LiveState.ENTRY_HALT, {"reason": reason})
-        elif self.state == LiveState.RECONCILING:
-            self._transition("ENTRY_HALT", LiveState.ENTRY_HALT, {"reason": reason})
-        else:
-            self._audit("ENTRY_HALT", detail={"reason": reason, "sticky": True})
-        return self.state
+        return self._apply_halt_state(reason=reason, source="runner")
 
     def request_entry_block_from_watchdog(self, reason: str = "heartbeat_abnormal") -> bool:
         """Returns True only if halt flag persisted. Caller must not assume halt otherwise."""
@@ -848,15 +920,10 @@ class TF2BPLiveStateMachine:
                 self._transition(
                     "SAFE_HALT",
                     LiveState.SAFE_HALT,
-                    {"reason": "watchdog_halt_flag_write_failed", "source": "watchdog"},
+                    {"reason": "watchdog_halt_flag_write_failed", "source": "watchdog", "flatten": False},
                 )
             return False
-        self.entry_halt = True
-        self.entry_allowed = False
-        if self.state == LiveState.READY_FLAT:
-            self._transition("ENTRY_HALT", LiveState.ENTRY_HALT, {"reason": reason, "source": "watchdog"})
-        else:
-            self._audit("ENTRY_HALT", detail={"reason": reason, "source": "watchdog", "sticky": True})
+        self._apply_halt_state(reason=reason, source="watchdog")
         return True
 
     def stop(self, reason: str = "operator") -> LiveState:

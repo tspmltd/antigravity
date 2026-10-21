@@ -291,3 +291,94 @@ GOV: LIVE=OFF · Phase 2 未着手 · 路線B未開 · pins frozen
 
 Git CSR-606–608: antigravity `0bf0cf5`
 
+**CSR-609（2026-10-21 21:32 JST）:** Phase 2 核心 SM。建玉中 halt → SAFE_HALT（flattenしない）。残玉起動は LONG adopt · 強制BUY発注0。旧プロセスは REFUSE。人手 flatten 手順書 LOCK。ピン/feeder/LIVE再開なし。
+
+2026-10-21 | CSR-609 | Phase 2 SSOT · BUY drop · dual REFUSE · SAFE_FLATTEN playbook | LOCK
+
+**CSR-610（2026-10-21 21:36 JST）:** Phase 3 カオス（Paper/Sandbox のみ）。kill -9 後の新SMは venue 0.001 を LONG adopt · BUY 0。timeout UNKNOWN は再POSTしない。cancel vs COMPLETED は LONG adopt（FLAT孤児にしない）。短ループ二重BUY 0。Watchdog は建玉中に殺さない（本番変更なし）。24h不要。ピン/feeder/LIVE再開なし。正本 `tests/test_tf2bp_live_phase3_chaos.py` · `docs/ops/tf2bp_live_phase3_chaos.md`。
+
+2026-10-21 | CSR-610 | Phase 3 chaos · Gate 3 PASS · 事故チェーン再発0 | LOCK
+
+GOV: LIVE=OFF · Phase 4 未着手 · 路線B未開 · pins frozen
+
+**CSR-611（2026-10-21 21:40 JST）:** Phase 4 執行ライフサイクル審査 Review Only。コード/フラグ非触。事故チェーン6条件は PASS。G1–G3 経済は N/A。旧 `GO2_TF2BP.flag`（10/05）と `tf2bp-live.env`（process ENABLE_REAL_TRADING=true · CONFIRM_GO2=TF2BP）が残存。現錠は `TF2BP_LIVE_STOP.flag`。0.001×20 再試験は未実施。**Gate 4 HOLD**。路線 B 未開。正本 `docs/ops/tf2bp_live_phase4_lifecycle_review.md`。
+
+2026-10-21 | CSR-611 | Phase 4 Review · Gate 4 HOLD · 旧GO2失効 · LIVE未再開 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · no retest · 路線B未開 · pins frozen
+
+**CSR-612（2026-10-21 21:44 JST）:** Gate 4 HOLD 閉じ。旧 `GO2_TF2BP.flag` 退避+REVOKED。`tf2bp-live.env` を process REAL=false / CONFIRM=REVOKED。STOP 旗は残す。REAL は `status=ACTIVE` + MAX_TRADES 1..20。`.env` 非触。再試験なし。路線 B 未開。**Gate 4 PASS（統治）**。正本 `docs/ops/tf2bp_live_phase4_lifecycle_review.md`。
+
+2026-10-21 | CSR-612 | Gate 4 PASS 統治 · 旧GO2失効 · REAL 1..20 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · no retest · 路線B未開 · pins frozen
+
+**CSR-613（2026-10-21 21:46 JST）:** 路線 B 開幕。Gate B0 LOCK。採点6条件=レースADOPT / 非死亡 / venue_net==0 / 増玉0 / TF2BP非侵 / 0bpを合格にしない。コード禁止。PEG2-B 旧旗は記録のみ（消さない）。feeder は稼働・発注なし。B1 未着手。正本 `docs/ops/tf2bp_route_b_scorecard.md` · `docs/ops/tf2bp_route_b_gap_audit.md`。
+
+2026-10-21 | CSR-613 | 路線 B Gate B0 LOCK · コード禁止 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · RouteB=B0 · no PEG2B resume · pins frozen
+
+**CSR-614（2026-10-21 21:50 JST）:** 路線 B1。cancel vs COMPLETED を Sandbox で ADOPT。NameError でも runner 生存。venue_net≠0 と oversize は追加 LIMIT 0。旧 PEG2-B GO 失効。TF2BP 非触。LIVE 未再開。正本 `tests/test_peg2b_route_b1_race.py` · `docs/ops/tf2bp_route_b1_race.md`。
+
+2026-10-21 | CSR-614 | 路線 B1 レース PASS · PEG2B GO 失効 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · RouteB=B1 · no PEG2B resume · pins frozen
+
+**CSR-615（2026-10-21 21:52 JST）:** 路線 B2。TF2BP soak=MARKET のみ。PEG2-B 入口=LIMIT のみ。同時稼働 REFUSE。soak は peg2b runner を import しない。ピン/feeder/LIVE 非触。正本 `tf2bp_exec_lanes.py` · `tests/test_tf2bp_route_b2_lanes.py`。
+
+2026-10-21 | CSR-615 | 路線 B2 Maker/Taker 隔離 PASS | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · RouteB=B2 · no PEG2B resume · pins frozen
+
+**CSR-616（2026-10-21 21:55 JST）:** 路線 B3。soak 一次板は `shared_feeder` IPC。stale/欠落だけ REST。429 halt は REST 退避に残す。ピン/発注レーン/LIVE 非触。正本 `read_feeder_board` · `tests/test_tf2bp_route_b3_feeder.py`。
+
+2026-10-21 | CSR-616 | 路線 B3 feeder 一次板 PASS | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · RouteB=B3 · no PEG2B resume · pins frozen
+
+**CSR-617（2026-10-21 21:57 JST）:** 路線 B4 コスト観測。taker 往復≈1.45bp。0bp ではない。Economic_PASS=NO。発注0。ピン/LIVE非触。正本 `tf2bp_route_b4_cost_observe.py` · `docs/ops/tf2bp_route_b4_cost.md`。路線 B 一本道クローズ。
+
+2026-10-21 | CSR-617 | 路線 B4 コスト観測 · 0bpではない · Economic PASS NO | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · RouteB=CLOSED · no PEG2B resume · pins frozen
+
+**CSR-618（2026-10-21 22:00 JST）:** TF2BP 実弾再試験プロトコル LOCK。0.001 × 20本を1セット、確認して最大5セット（100本）。自動継続しない。セット1は `GO2 TF2BP`。SET-2..5 は個別トークン。PnL見ない。Economic PASS禁止。**未起動**。正本 `docs/ops/tf2bp_live_retest_20x5.md`。
+
+2026-10-21 | CSR-618 | 実弾 20×5 プロトコル LOCK · LIVE未開始 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · retest=protocol-only · pins frozen
+
+**CSR-619（2026-10-21 22:12 JST）:** `GO2 TF2BP` ACCEPT。20×5 を PASS なら自動継続。約定ごと Discord。20本終了はチャット報告。`.env` 非触。Economic_PASS=NO。PEG2-B 非起動。
+
+2026-10-21 | CSR-619 | GO2 TF2BP SET-1 REAL · auto-continue PASS only | LOCK
+
+GOV: LIVE=SET-1 · WIRE=NO · ENFORCE=0 · auto_continue=PASS_ONLY · pins frozen
+
+**CSR-620（2026-10-21 23:32 JST）:** SET-1 出口二重SELL → venue SHORT −0.001 → SAFE_HALT。オペレータ LIMIT BUY 中値でカバー後フラット。LIVE停止。STOP pin。process REAL=false。`.env` 非触。Economic_PASS=NO。自動継続しない。
+
+2026-10-21 | CSR-620 | 二重SELLショート · 指値カバー後 LIVE停止 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · STOP=pin · pins frozen
+
+**CSR-621（2026-10-21 23:36 JST）:** 出口 fill は HFT どおり板模倣で予測する。成行後の `get_positions` 遅れを未約定と見なして再SELLしない。予測 fill なら local は即 flat/pending-confirm。正本確認は子注文。LIVE停止のまま。Economic_PASS=NO。
+
+2026-10-21 | CSR-621 | 出口 fill=板模倣予測 · 再SELL禁止 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · exit_fill=board_mimic · pins frozen
+
+**CSR-622（2026-10-21 23:38 JST）:** 成行後は板模倣の予測 fill を採用。建玉API遅れは問題にしない・再発注しない。予測が外れ、あとから取引所建玉が残っていると分かったときだけ、そのサイドを1本で解消する。未確定の二重発注は禁止。LIVE停止。Economic_PASS=NO。
+
+2026-10-21 | CSR-622 | 予測fill先行 · 外れはvenue確認後に1回だけ解消 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · exit_fill=predict_then_one_reconcile · pins frozen
+
+**CSR-623（2026-10-21 23:40 JST）:** 全注文に予測 fill を徹底。同一サイド再POST禁止。建玉遅れは pending のまま。予測外れは子注文 REJECT + venue 残玉確認のあと1回だけ解消。LIVE停止。Economic_PASS=NO。
+
+2026-10-21 | CSR-623 | 全注文 予測fill · 同一サイド再発注禁止 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · all_orders=predict_fill · pins frozen
+
+**GIT（CSR-620–623）:** 対象は錠＋SM＋soak出口＋監督＋20×5プロトコル＋SM試験のみ。`data/` · `.env` · webhook は入れない。push しない。
+
+

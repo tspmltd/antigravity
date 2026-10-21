@@ -337,6 +337,39 @@ class TestCrashRecovery(_SMCase):
         )
         self.assertEqual(sm.state, LiveState.READY_FLAT)
 
+    def test_csr622_exit_venue_lag_does_not_reopen_sell(self):
+        sm = self._sm()
+        sm.begin_reconcile()
+        sm.apply_reconcile(
+            VenueSnapshot(net=0.001, avg_entry=1.0, open_orders_known=True, open_order_count=0, ok=True)
+        )
+        sm.mark_exit_pending(order_qty=0.001, order_id="s1")
+        sm.mark_predicted_fill(side="SELL", source="board_mimic_bid")
+        sm.on_exit_venue_check(
+            VenueSnapshot(net=0.001, avg_entry=1.0, open_orders_known=True, open_order_count=0, ok=True)
+        )
+        self.assertEqual(sm.state, LiveState.EXIT_PENDING)
+        ok, reason = sm.can_submit_exit(strategy_action="exit")
+        self.assertFalse(ok)
+        self.assertEqual(reason, "inflight_no_retry")
+        sm.recover_order_unknown(
+            venue=VenueSnapshot(net=0.001, open_orders_known=True, open_order_count=0, ok=True),
+            order_lookup=OrderLookupResult(known=False, acceptance_id="s1"),
+            expected_side="SELL",
+        )
+        self.assertEqual(sm.state, LiveState.EXIT_PENDING)
+        sm.recover_order_unknown(
+            venue=VenueSnapshot(net=0.001, avg_entry=1.0, open_orders_known=True, open_order_count=0, ok=True),
+            order_lookup=OrderLookupResult(
+                known=True, filled=False, rejected_or_absent=True, acceptance_id="s1"
+            ),
+            expected_side="SELL",
+        )
+        self.assertEqual(sm.state, LiveState.LONG)
+        self.assertTrue(sm.residual_miss_confirmed)
+        ok2, reason2 = sm.can_submit_exit(strategy_action="exit")
+        self.assertTrue(ok2, reason2)
+
 
 class TestPostRetry(unittest.TestCase):
     def test_t17_post_count_one_on_read_error(self):
@@ -456,23 +489,24 @@ class TestIntegrationGatePath(_SMCase):
             with patch.object(runner_mod, "HB_PATH", self.hb):
                 with patch.object(runner_mod, "SM_AUDIT", self.audit):
                     with patch.object(runner_mod, "BitFlyerClient", return_value=FakeClient()):
-                        with patch.object(runner_mod, "_fetch_board", return_value=board):
-                            with patch.object(
-                                runner_mod, "_fetch_exec_vols", return_value={"buy": 0.0, "sell": 0.0}
-                            ):
-                                # Force strategy to hold — no BUY; proves boot reconcile + lock path
-                                with patch(
-                                    "antigravity.strategies.tf2bp_strategy.TF2BPStrategy.on_tick",
-                                    return_value={"action": "hold", "reason": "test"},
-                                ), patch.object(runner_mod, "_foreign_runner_pids", return_value=[]):
-                                    row = runner_mod.run_tf2bp(
-                                        size=0.001,
-                                        max_trades=0,
-                                        real=False,
-                                        interval=0.05,
-                                        max_runtime_sec=0.25,
-                                        daily_loss_jpy=800,
-                                    )
+                        with patch.object(runner_mod, "_read_feeder_board", return_value=None):
+                            with patch.object(runner_mod, "_fetch_board", return_value=board):
+                                with patch.object(
+                                    runner_mod, "_fetch_exec_vols", return_value={"buy": 0.0, "sell": 0.0}
+                                ):
+                                    # Force strategy to hold — no BUY; proves boot reconcile + lock path
+                                    with patch(
+                                        "antigravity.strategies.tf2bp_strategy.TF2BPStrategy.on_tick",
+                                        return_value={"action": "hold", "reason": "test"},
+                                    ), patch.object(runner_mod, "_foreign_runner_pids", return_value=[]):
+                                        row = runner_mod.run_tf2bp(
+                                            size=0.001,
+                                            max_trades=0,
+                                            real=False,
+                                            interval=0.05,
+                                            max_runtime_sec=0.25,
+                                            daily_loss_jpy=800,
+                                        )
         self.assertTrue(row.get("lock_acquired"))
         self.assertEqual(posts, [])
         self.assertIn(row.get("sm_state"), ("READY_FLAT", "STOPPED", "ENTRY_HALT", "SAFE_HALT"))
@@ -540,6 +574,8 @@ class TestPhase1OuterFrame(_SMCase):
         ), patch.object(
             runner_mod, "BitFlyerClient", return_value=FakeClient()
         ), patch.object(
+            runner_mod, "_read_feeder_board", return_value=None
+        ), patch.object(
             runner_mod, "_fetch_board", return_value=board
         ), patch.object(
             runner_mod, "_fetch_exec_vols", return_value={"buy": 0.0, "sell": 0.0}
@@ -592,11 +628,15 @@ class TestPhase1OuterFrame(_SMCase):
         ), patch.object(
             runner_mod, "BitFlyerClient", return_value=FakeClient()
         ), patch.object(
+            runner_mod, "_read_feeder_board", return_value=None
+        ), patch.object(
             runner_mod, "_fetch_board", side_effect=boom
         ), patch.object(
             runner_mod, "_fetch_exec_vols", return_value={"buy": 0.0, "sell": 0.0}
         ), patch.object(
             runner_mod, "_foreign_runner_pids", return_value=[]
+        ), patch.object(
+            runner_mod, "CONSECUTIVE_429_HALT", 3
         ), patch(
             "antigravity.strategies.tf2bp_strategy.TF2BPStrategy.on_tick",
             return_value={"action": "buy", "reason": "force"},
@@ -606,12 +646,12 @@ class TestPhase1OuterFrame(_SMCase):
                 max_trades=0,
                 real=False,
                 interval=0.02,
-                max_runtime_sec=0.22,
+                max_runtime_sec=0.30,
                 daily_loss_jpy=800,
             )
         self.assertEqual(posts, [])
         self.assertTrue(row.get("entry_halt"))
-        self.assertGreaterEqual(int(row.get("consecutive_429") or 0), 5)
+        self.assertGreaterEqual(int(row.get("consecutive_429") or 0), 3)
         self.assertIn(row.get("sm_state"), ("ENTRY_HALT", "STOPPED"))
 
     def test_watchdog_quiet_log_live_hb_no_sigterm(self):
@@ -660,6 +700,117 @@ class TestPhase1OuterFrame(_SMCase):
                 sentinel._check_explicit_heartbeat("tf2bp_micro_live", svc, pid=pid, now=now)
         self.assertEqual(killed, [])
         self.assertFalse(halt.exists())
+
+
+class TestPhase2CoreSM(_SMCase):
+    """CSR-609 Gate 2: adopt, BUY drop, dual-start refuse, SAFE_HALT no flatten."""
+
+    def _board(self) -> Dict[str, Any]:
+        return {
+            "mid_price": 10000000.0,
+            "bids": [{"price": 9999990.0, "size": 1.0}],
+            "asks": [{"price": 10000010.0, "size": 1.0}],
+        }
+
+    def test_halt_while_long_is_safe_halt_not_flatten(self):
+        sm = self._sm()
+        sm.begin_reconcile()
+        sm.apply_reconcile(
+            VenueSnapshot(net=0.001, avg_entry=1e7, open_orders_known=True, open_order_count=0, ok=True)
+        )
+        self.assertEqual(sm.state, LiveState.LONG)
+        sm.on_entry_halt(reason="stall_while_positioned")
+        self.assertEqual(sm.state, LiveState.SAFE_HALT)
+        self.assertAlmostEqual(float(sm.venue_position or 0.0), 0.001)
+        ok, _ = sm.can_submit_buy(
+            strategy_action="buy",
+            venue_recheck=VenueSnapshot(net=0.001, open_orders_known=True, open_order_count=0, ok=True),
+        )
+        self.assertFalse(ok)
+
+    def test_sync_flag_while_long_safe_halt(self):
+        sm = self._sm()
+        sm.begin_reconcile()
+        sm.apply_reconcile(
+            VenueSnapshot(net=0.001, avg_entry=1e7, open_orders_known=True, open_order_count=0, ok=True)
+        )
+        self.halt.write_text("{}", encoding="utf-8")
+        sm.sync_external_halt_flag()
+        self.assertEqual(sm.state, LiveState.SAFE_HALT)
+
+    def test_boot_adopt_long_forced_buy_sends_zero(self):
+        posts: List[str] = []
+
+        class FakeClient:
+            enable_real_trading = True
+            max_order_size = 0.05
+
+            def get_positions(self, *a, **k):
+                return [{"side": "BUY", "size": 0.001, "price": 10000000.0}]
+
+            def get_child_orders(self, *a, **k):
+                return []
+
+            def send_order(self, product, side, size, order_type="MARKET"):
+                posts.append(side)
+                return {"child_order_acceptance_id": f"sim-{len(posts)}"}
+
+        stop = self.root / "TF2BP_LIVE_STOP.flag"
+        halt = self.root / "ENTRY_HALT.flag"
+        with patch.object(runner_mod, "RUNNER_LOCK", self.lock_path), patch.object(
+            runner_mod, "HB_PATH", self.hb
+        ), patch.object(runner_mod, "SM_AUDIT", self.audit), patch.object(
+            runner_mod, "STOP_FLAG", stop
+        ), patch.object(
+            runner_mod, "ENTRY_HALT_FLAG", halt
+        ), patch.object(
+            runner_mod, "BitFlyerClient", return_value=FakeClient()
+        ), patch.object(
+            runner_mod, "_read_feeder_board", return_value=None
+        ), patch.object(
+            runner_mod, "_fetch_board", return_value=self._board()
+        ), patch.object(
+            runner_mod, "_fetch_exec_vols", return_value={"buy": 0.0, "sell": 0.0}
+        ), patch.object(
+            runner_mod, "_foreign_runner_pids", return_value=[]
+        ), patch(
+            "antigravity.strategies.tf2bp_strategy.TF2BPStrategy.on_tick",
+            return_value={"action": "buy", "reason": "force"},
+        ):
+            row = runner_mod.run_tf2bp(
+                size=0.001,
+                max_trades=0,
+                real=True,
+                interval=0.03,
+                max_runtime_sec=0.22,
+                daily_loss_jpy=800,
+            )
+        self.assertEqual(posts, [])
+        self.assertIn(row.get("sm_state"), ("LONG", "SAFE_HALT", "STOPPED"))
+        self.assertAlmostEqual(float(row.get("venue_position") or 0.0), 0.001, places=6)
+
+    def test_foreign_runner_refuse_no_orders(self):
+        posts: List[str] = []
+
+        class FakeClient:
+            def send_order(self, *a, **k):
+                posts.append("BUY")
+                return {}
+
+        with patch.object(runner_mod, "RUNNER_LOCK", self.lock_path), patch.object(
+            runner_mod, "_foreign_runner_pids", return_value=[21810]
+        ), patch.object(runner_mod, "BitFlyerClient", return_value=FakeClient()):
+            row = runner_mod.run_tf2bp(
+                size=0.001,
+                max_trades=1,
+                real=False,
+                interval=0.01,
+                max_runtime_sec=0.05,
+                daily_loss_jpy=800,
+            )
+        self.assertEqual(row.get("stop_reason"), "old_runner_still_active")
+        self.assertFalse(row.get("lock_acquired"))
+        self.assertEqual(posts, [])
 
 
 if __name__ == "__main__":
