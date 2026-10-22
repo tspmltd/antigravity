@@ -217,3 +217,40 @@ func (ee *ExecutionEngine) BuildOrder(
 		TsSent:        now,
 	}
 }
+
+// BuildStructuralOrder: 板の深層構造（Level）× Zスコアに基づく構造的最適指値の構築
+func (ee *ExecutionEngine) BuildStructuralOrder(
+	symbol string,
+	bids, asks []Level,
+	zScore float64,
+	cfg StructuralPricingConfig,
+) (*Order, error) {
+	quote, err := CalculateOptimalOrderPrice(bids, asks, zScore, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	now := float64(time.Now().UnixNano()) / 1e9
+	orderId := fmt.Sprintf("str_ord_%s_%d", symbol, time.Now().UnixNano()%1000000)
+
+	ee.govMu.RLock()
+	riskMul := ee.governance.RiskMultiplier
+	ee.govMu.RUnlock()
+
+	size := quote.TargetSize
+	if riskMul < 1.0 && riskMul > 0.0 {
+		size *= riskMul
+	}
+
+	order := &Order{
+		ClientOrderId: orderId,
+		Symbol:        symbol,
+		Side:          quote.Side,
+		Type:          Limit,
+		Price:         quote.TargetPrice,
+		Size:          size,
+		TimeInForce:   "GTC", // 壁にアンカーする指値
+		TsSent:        now,
+	}
+	return order, nil
+}

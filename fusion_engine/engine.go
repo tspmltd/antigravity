@@ -14,6 +14,8 @@ type MarketSnapshot struct {
 	RecentHigh float64
 	RecentLow  float64
 	ATR        float64
+	Bids       []Level
+	Asks       []Level
 }
 
 // FusionEngine: 複数アセットを同一設計軸で統括する超低レイテンシHFT基盤
