@@ -95,6 +95,11 @@ type ExecutionEngine struct {
 	ordersSent    int64
 	ordersHalted  int64
 	ordersDropped int64
+
+	// In-Flight Guard: 二重発注の物理遮断 ＆ パブリック即時約定照合
+	flightMu          sync.Mutex
+	isInFlight        bool
+	activeFlightOrder *Order
 }
 
 func NewExecutionEngine(bufSize int) *ExecutionEngine {
@@ -225,7 +230,7 @@ func (ee *ExecutionEngine) BuildStructuralOrder(
 	zScore float64,
 	cfg StructuralPricingConfig,
 ) (*Order, error) {
-	quote, err := CalculateOptimalOrderPrice(bids, asks, zScore, cfg)
+	quote, err := CalculateOptimalOrderPriceDetailed(bids, asks, zScore, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -253,4 +258,105 @@ func (ee *ExecutionEngine) BuildStructuralOrder(
 		TsSent:        now,
 	}
 	return order, nil
+}
+
+// IsInFlight: 現在未確定のインフライト注文が存在するか判定
+func (ee *ExecutionEngine) IsInFlight() bool {
+	ee.flightMu.Lock()
+	defer ee.flightMu.Unlock()
+	return ee.isInFlight
+}
+
+// TryPlaceOrder: 最適価格が計算された時のみ発注し、インフライト・ガードで多重発注を完全ロック
+func (ee *ExecutionEngine) TryPlaceOrder(
+	symbol string,
+	bids, asks []Level,
+	zScore float64,
+) (bool, *Order, error) {
+	ee.flightMu.Lock()
+	if ee.isInFlight {
+		ee.flightMu.Unlock()
+		return false, nil, fmt.Errorf("in-flight lock active: order already outstanding")
+	}
+
+	price, size, err := CalculateOptimalOrderPrice(bids, asks, zScore)
+	if err != nil {
+		ee.flightMu.Unlock()
+		return false, nil, err
+	}
+
+	side := Buy
+	if zScore < 0 {
+		side = Sell
+	}
+
+	ee.govMu.RLock()
+	riskMul := ee.governance.RiskMultiplier
+	ee.govMu.RUnlock()
+	if riskMul < 1.0 && riskMul > 0.0 {
+		size *= riskMul
+	}
+
+	orderId := fmt.Sprintf("str_%s_%d", symbol, time.Now().UnixNano()%1000000)
+	order := &Order{
+		ClientOrderId: orderId,
+		Symbol:        symbol,
+		Side:          side,
+		Type:          Limit,
+		Price:         price,
+		Size:          size,
+		TimeInForce:   "GTC",
+		TsSent:        float64(time.Now().UnixNano()) / 1e9,
+	}
+
+	// 発注投入と同時にインフライト・ガードを起動
+	submitted := ee.Submit(*order)
+	if submitted {
+		ee.isInFlight = true
+		ee.activeFlightOrder = order
+		ee.flightMu.Unlock()
+		return true, order, nil
+	}
+
+	ee.flightMu.Unlock()
+	return false, nil, fmt.Errorf("submission rejected by governance or queue full")
+}
+
+// OnPublicTradeExecution: パブリック約定テープを受信した際に自社指値を照合し、即時約定確定・ロック解除
+func (ee *ExecutionEngine) OnPublicTradeExecution(t Trade) (bool, *FillReport) {
+	ee.flightMu.Lock()
+	defer ee.flightMu.Unlock()
+
+	if !ee.isInFlight || ee.activeFlightOrder == nil {
+		return false, nil
+	}
+
+	ord := ee.activeFlightOrder
+	isMatched := false
+	if ord.Side == Buy && t.Side == Sell && t.Price <= ord.Price {
+		isMatched = true
+	} else if ord.Side == Sell && t.Side == Buy && t.Price >= ord.Price {
+		isMatched = true
+	}
+
+	if isMatched {
+		fill := &FillReport{
+			ClientOrderId: ord.ClientOrderId,
+			Symbol:        ord.Symbol,
+			Side:          ord.Side,
+			ExpectedPrice: ord.Price,
+			ExecPrice:     t.Price,
+			ExecSize:      ord.Size,
+			Slippage:      t.Price - ord.Price,
+			LatencySec:    (float64(time.Now().UnixNano()) / 1e9) - ord.TsSent,
+			Ts:            float64(time.Now().UnixNano()) / 1e9,
+		}
+
+		// インフライト・ロックを即時解放！
+		ee.isInFlight = false
+		ee.activeFlightOrder = nil
+		return true, fill
+	}
+
+	return false, nil
 }

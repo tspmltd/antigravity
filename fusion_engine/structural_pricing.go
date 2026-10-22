@@ -47,8 +47,17 @@ type StructuralQuoteResult struct {
 	Reason       string
 }
 
-// CalculateOptimalOrderPrice 板の構造とZスコア/フロー強度から、次に指すべき「必然の価格」を算出する
-func CalculateOptimalOrderPrice(
+// CalculateOptimalOrderPrice 板の構造とZスコアから、次に指すべき「必然の価格」を算出する（標準シグネチャ）
+func CalculateOptimalOrderPrice(bids []Level, asks []Level, zScore float64) (float64, float64, error) {
+	res, err := CalculateOptimalOrderPriceDetailed(bids, asks, zScore, DefaultStructuralPricingConfig())
+	if err != nil {
+		return 0, 0, err
+	}
+	return res.TargetPrice, res.TargetSize, nil
+}
+
+// CalculateOptimalOrderPriceDetailed 板の構造とZスコア/設定値から詳細な結果を算出する
+func CalculateOptimalOrderPriceDetailed(
 	bids []Level,
 	asks []Level,
 	zScore float64,
