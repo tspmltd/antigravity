@@ -313,6 +313,56 @@ class WOBIDirectionalEngine:
         return round(wobi, 4), round(norm_disloc, 4), round(raw_score, 4), round(z_score, 3)
 
 
+def calculate_optimal_order_price(
+    bids: List[Dict[str, float]],
+    asks: List[Dict[str, float]],
+    side: str,
+    scan_depth: int = 5,
+    min_wall_vol: float = 0.05,
+    tick_size: float = 1.0,
+    fallback_price: float = 0.0,
+) -> Tuple[float, str]:
+    """板の深層構造（大口壁と真空地帯）から最適な発注価格を決定する (Wall Anchoring)
+    - 最良気配が薄く(真空)、下位に分厚い壁がある場合は毒食いを回避して壁の1tick手前に指す
+    - 壁の中に直接アンカーして約定確率を最大化
+    """
+    if side == "buy":
+        if not bids:
+            return fallback_price, "NO_BIDS"
+        scan = bids[:scan_depth]
+        max_idx = 0
+        max_vol = 0.0
+        for i, lvl in enumerate(scan):
+            v = float(lvl.get("size", 0.0) or lvl.get("volume", 0.0))
+            if v > max_vol:
+                max_vol = v
+                max_idx = i
+        top_vol = float(scan[0].get("size", 0.0) or scan[0].get("volume", 0.0))
+        wall_price = float(scan[max_idx]["price"])
+        if max_idx > 0 and top_vol < min_wall_vol:
+            opt_price = wall_price + tick_size
+            return opt_price, f"WALL_ANCHOR_L{max_idx}_AVOID_VACUUM(wall={max_vol:.3f}btc, top={top_vol:.3f}btc)"
+        return float(scan[0]["price"]), f"TOP_OF_BOOK(top={top_vol:.3f}btc)"
+    elif side == "sell":
+        if not asks:
+            return fallback_price, "NO_ASKS"
+        scan = asks[:scan_depth]
+        max_idx = 0
+        max_vol = 0.0
+        for i, lvl in enumerate(scan):
+            v = float(lvl.get("size", 0.0) or lvl.get("volume", 0.0))
+            if v > max_vol:
+                max_vol = v
+                max_idx = i
+        top_vol = float(scan[0].get("size", 0.0) or scan[0].get("volume", 0.0))
+        wall_price = float(scan[max_idx]["price"])
+        if max_idx > 0 and top_vol < min_wall_vol:
+            opt_price = wall_price - tick_size
+            return opt_price, f"WALL_ANCHOR_L{max_idx}_AVOID_VACUUM(wall={max_vol:.3f}btc, top={top_vol:.3f}btc)"
+        return float(scan[0]["price"]), f"TOP_OF_BOOK(top={top_vol:.3f}btc)"
+    return fallback_price, "UNKNOWN_SIDE"
+
+
 class TF2BWobiDryRun:
     def __init__(
         self,
@@ -487,28 +537,28 @@ class TF2BWobiDryRun:
     def _eval_wobi_entry_condition(self, side: str, m: Dict[str, Any]) -> Tuple[bool, str]:
         """WOBI & Microstructure Directional Profiler による有利判定"""
         reasons = []
-        if m["spread_bp"] > 2.5:
-            reasons.append(f"SPREAD_TOO_WIDE ({m['spread_bp']:.1f}bp > 2.5bp)")
-        if m["adverse_score"] > 40.0:
-            reasons.append(f"HIGH_ADVERSE_RISK ({m['adverse_score']:.1f} > 40)")
-        if m["vacuum_score"] > 0.40:
-            reasons.append(f"LIQUIDITY_VACUUM ({m['vacuum_score']:.2f} > 0.4)")
+        # スプレッドが広すぎる場合のみ阻止（スプレッド負け回避）
+        if m["spread_bp"] > 2.8:
+            reasons.append(f"SPREAD_TOO_WIDE ({m['spread_bp']:.1f}bp > 2.8bp)")
 
         if side == "buy":
-            # 買い方向: 売り壁が分厚い(WOBI < -0.10)またはZスコアが弱気(Z < -0.5)なら阻止
-            if m["wobi"] < -0.10:
-                reasons.append(f"WOBI_ASK_HEAVY ({m['wobi']:+.2f} < -0.10)")
+            # 買い方向:
+            # 1. 深層板の売り壁が分厚い (WOBI < -0.15)
+            if m["wobi"] < -0.15:
+                reasons.append(f"WOBI_ASK_HEAVY ({m['wobi']:+.2f} < -0.15)")
+            # 2. 複合フローZスコアが弱気・下降トレンド (Z < -0.50)
             if m["z_score"] < -0.50:
                 reasons.append(f"DIRECTIONAL_Z_BEARISH ({m['z_score']:+.2f} < -0.50)")
-            if m["micro_dev_bp"] < -0.25:
-                reasons.append(f"MICRO_DEV_REVERSE ({m['micro_dev_bp']:+.2f}bp < -0.25bp)")
+            # 3. マイクロプライスが大幅逆行 (micro_dev_bp < -0.30bp)
+            if m["micro_dev_bp"] < -0.30:
+                reasons.append(f"MICRO_DEV_REVERSE ({m['micro_dev_bp']:+.2f}bp < -0.30bp)")
         elif side == "sell":
-            if m["wobi"] > 0.10:
-                reasons.append(f"WOBI_BID_HEAVY ({m['wobi']:+.2f} > +0.10)")
+            if m["wobi"] > 0.15:
+                reasons.append(f"WOBI_BID_HEAVY ({m['wobi']:+.2f} > +0.15)")
             if m["z_score"] > 0.50:
                 reasons.append(f"DIRECTIONAL_Z_BULLISH ({m['z_score']:+.2f} > +0.50)")
-            if m["micro_dev_bp"] > 0.25:
-                reasons.append(f"MICRO_DEV_REVERSE ({m['micro_dev_bp']:+.2f}bp > +0.25bp)")
+            if m["micro_dev_bp"] > 0.30:
+                reasons.append(f"MICRO_DEV_REVERSE ({m['micro_dev_bp']:+.2f}bp > +0.30bp)")
 
         if reasons:
             return False, "; ".join(reasons)
@@ -525,19 +575,13 @@ class TF2BWobiDryRun:
         self._wobi_peak_bp = max(getattr(self, "_wobi_peak_bp", 0.0), unrealized_bp)
         peak_bp = self._wobi_peak_bp
 
-        # Tier 1: 致命的板崩壊
-        if m["spread_bp"] >= 3.0:
-            return True, f"SPREAD_BLOWOUT ({m['spread_bp']:.1f}bp >= 3.0bp)", (unrealized_bp > 0)
-        if m["adverse_score"] >= 50.0:
-            return True, f"SEVERE_ADVERSE ({m['adverse_score']:.1f} >= 50.0)", (unrealized_bp > 0)
-        if m.get("is_vacuum"):
-            vac_side = str(m.get("vacuum_side", "none"))
-            if (side == "buy" and vac_side in ("bid", "bilateral")) or (side == "sell" and vac_side in ("ask", "bilateral")):
-                return True, f"LIQUIDITY_VACUUM_COLLAPSE (side={vac_side})", (unrealized_bp > 0)
+        # Tier 1: 致命的板崩壊・スプレッド急拡大
+        if m["spread_bp"] >= 3.5:
+            return True, f"SPREAD_BLOWOUT ({m['spread_bp']:.1f}bp >= 3.5bp)", (unrealized_bp > 0)
 
         # Tier 2: 動的利益確保 (Profit Harvesting: +1.5bp以上)
         if side == "buy" and unrealized_bp >= 1.5:
-            # 2a. +3.0bp到達時の頭打ち
+            # 2a. +3.0bp到達時の頭打ち (WOBI失速またはピークから0.8bp押し戻し)
             if unrealized_bp >= 3.0:
                 if m["wobi"] <= 0.0 or m["micro_dev_bp"] <= 0.05:
                     return True, f"PROFIT_TARGET_PLATEAU (pnl={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f})", True
@@ -545,14 +589,12 @@ class TF2BWobiDryRun:
                     return True, f"PROFIT_GIVEBACK_PEAK (peak={peak_bp:+.1f}bp curr={unrealized_bp:+.1f}bp)", True
 
             # 2b. +1.5〜+3.0bp 圏でWOBI反転・売り圧力検知
-            if m["wobi"] < -0.10:
-                return True, f"WOBI_REVERSED_TO_ASK (pnl={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f} < -0.10)", True
-            if m["z_score"] < -0.80:
+            if m["wobi"] < -0.15:
+                return True, f"WOBI_REVERSED_TO_ASK (pnl={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f} < -0.15)", True
+            if m["z_score"] < -1.0:
                 return True, f"DIRECTIONAL_Z_BEARISH_FLIP (pnl={unrealized_bp:+.1f}bp z={m['z_score']:+.2f})", True
             if m["micro_dev_bp"] < 0.0:
                 return True, f"MOMENTUM_STALL_DEV_FLIP (pnl={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f}bp < 0)", True
-            if m["adverse_score"] >= 38.0:
-                return True, f"RISING_ADVERSE_IN_PROFIT (pnl={unrealized_bp:+.1f}bp adv={m['adverse_score']:.1f} >= 38)", True
 
         elif side == "sell" and unrealized_bp >= 1.5:
             if unrealized_bp >= 3.0:
@@ -560,9 +602,9 @@ class TF2BWobiDryRun:
                     return True, f"PROFIT_TARGET_PLATEAU (pnl={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f})", True
                 if peak_bp - unrealized_bp >= 0.8:
                     return True, f"PROFIT_GIVEBACK_PEAK (peak={peak_bp:+.1f}bp curr={unrealized_bp:+.1f}bp)", True
-            if m["wobi"] > 0.10:
-                return True, f"WOBI_REVERSED_TO_BID (pnl={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f} > +0.10)", True
-            if m["z_score"] > 0.80:
+            if m["wobi"] > 0.15:
+                return True, f"WOBI_REVERSED_TO_BID (pnl={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f} > +0.15)", True
+            if m["z_score"] > 1.0:
                 return True, f"DIRECTIONAL_Z_BULLISH_FLIP (pnl={unrealized_bp:+.1f}bp z={m['z_score']:+.2f})", True
             if m["micro_dev_bp"] > 0.0:
                 return True, f"MOMENTUM_STALL_DEV_FLIP (pnl={unrealized_bp:+.1f}bp mdev={m['micro_dev_bp']:+.2f}bp > 0)", True
@@ -573,7 +615,7 @@ class TF2BWobiDryRun:
             if m["wobi"] <= -0.30 and m["z_score"] <= -1.5:
                 return True, f"OPPOSING_WOBI_DOMINANT (wobi={m['wobi']:+.2f} z={m['z_score']:+.2f})", False
             # 3b. 含み損進行かつ下落フロー
-            if unrealized_bp <= -1.0 and (m["wobi"] < -0.10 or m["micro_dev_bp"] < -0.10):
+            if unrealized_bp <= -1.0 and (m["wobi"] < -0.15 or m["micro_dev_bp"] < -0.15):
                 return True, f"UNFAVORABLE_DRIFT (unrealized={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f})", False
             # 3c. CSR-602 物理予測限界（2bp）違反
             if unrealized_bp <= -2.0:
@@ -581,7 +623,7 @@ class TF2BWobiDryRun:
         elif side == "sell":
             if m["wobi"] >= 0.30 and m["z_score"] >= 1.5:
                 return True, f"OPPOSING_WOBI_DOMINANT (wobi={m['wobi']:+.2f} z={m['z_score']:+.2f})", False
-            if unrealized_bp <= -1.0 and (m["wobi"] > 0.10 or m["micro_dev_bp"] > 0.10):
+            if unrealized_bp <= -1.0 and (m["wobi"] > 0.15 or m["micro_dev_bp"] > 0.15):
                 return True, f"UNFAVORABLE_DRIFT (unrealized={unrealized_bp:+.1f}bp wobi={m['wobi']:+.2f})", False
             if unrealized_bp <= -2.0:
                 return True, f"FRONTIER_LIMIT_BREACH (unrealized={unrealized_bp:+.1f}bp <= -2.0bp)", False
@@ -604,6 +646,17 @@ class TF2BWobiDryRun:
         if action in ("buy", "sell") and not strat.position_side:
             if name == "TF2BP_CTRL":
                 self.stats["signals_ctrl"] += 1
+                fill = float(res.get("entry_price") or snap.mid_price)
+                strat.record_trade(action, fill, 0.0, mid_price=float(snap.mid_price or fill))
+                self.stats["entries_ctrl"] += 1
+                _append(
+                    AUDIT_PATH,
+                    {
+                        "event": "ENTRY",
+                        "ts": _iso(),
+                        "data": {"lane": name, "side": action, "price": fill, "reason": res.get("reason")},
+                    },
+                )
             else:
                 self.stats["signals_wobi"] += 1
                 allowed, reason = self._eval_wobi_entry_condition(action, metrics)
@@ -631,12 +684,20 @@ class TF2BWobiDryRun:
                     )
                     return
                 self.stats["wobi_allowed"] += 1
+                bids_depth, asks_depth = self._read_latest_depth()
+                opt_price, quote_desc = calculate_optimal_order_price(
+                    bids=bids_depth,
+                    asks=asks_depth,
+                    side=action,
+                    scan_depth=5,
+                    min_wall_vol=0.05,
+                    tick_size=1.0,
+                    fallback_price=float(res.get("entry_price") or snap.mid_price),
+                )
+                fill = opt_price
                 res = dict(res)
-                res["reason"] = f"{res.get('reason')} [WOBI ALLOW: {reason}]"
-
-            fill = float(res.get("entry_price") or snap.mid_price)
-            strat.record_trade(action, fill, 0.0, mid_price=float(snap.mid_price or fill))
-            if name == "TF2B_WOBI":
+                res["reason"] = f"{res.get('reason')} [WOBI ALLOW: {reason}] [{quote_desc}]"
+                strat.record_trade(action, fill, 0.0, mid_price=float(snap.mid_price or fill))
                 self._wobi_peak_bp = 0.0
                 self.stats["entries_wobi"] += 1
                 _append(
@@ -651,16 +712,6 @@ class TF2BWobiDryRun:
                             "reason": res.get("reason"),
                             "metrics": {k: v for k, v in metrics.items() if not isinstance(v, list)},
                         },
-                    },
-                )
-            else:
-                self.stats["entries_ctrl"] += 1
-                _append(
-                    AUDIT_PATH,
-                    {
-                        "event": "ENTRY",
-                        "ts": _iso(),
-                        "data": {"lane": name, "side": action, "price": fill, "reason": res.get("reason")},
                     },
                 )
             _log(f"[{name}] ENTRY {action.upper()} @ {fill:,.0f} ({res.get('reason')})")
