@@ -381,4 +381,30 @@ GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · all_orders=predict_fill · pins frozen
 
 **GIT（CSR-620–623）:** `51fe580` ローカルのみ。対象は錠＋SM＋soak出口＋監督＋20×5プロトコル＋SM試験。`data/` · `.env` · webhook は入れない。push しない。
 
+**CSR-624（2026-10-22 12:25 JST）:** ユーザー `LIVE開始` → **REFUSE**。必要トークンは `GO2 TF2BP`（不一致）。SET-1 は CSR-620 FAIL。GO2=HALT · STOP pin · process REAL=false · CONFIRM=REVOKED · unit inactive。発注なし。`.env` 非触。Economic_PASS=NO。
+
+2026-10-22 | CSR-624 | LIVE開始 REFUSE · トークン不一致 · HALT維持 | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · STOP=pin · pins frozen
+
+**CSR-625（2026-10-22 12:28 JST）:** `GO2 TF2BP` ACCEPT。CSR-620 FAIL 後の SET-1 再試験。size=0.001 · MAX_TRADES=20 · 最大5セット · PASS自動継続。venue_net=0 · ACTIVE=0。boot reconcile READY_FLAT。process REAL=true · `.env` false。Economic_PASS=NO。PEG2-B 非起動。run_id=`492a7300edfb`。
+
+2026-10-22 | CSR-625 | GO2 TF2BP SET-1 retry REAL · predict-fill | LOCK
+
+GOV: LIVE=SET-1 · WIRE=NO · ENFORCE=0 · auto_continue=PASS_ONLY · pins frozen
+
+**CSR-626（2026-10-22 14:34 JST）:** オペレータ「ポジションなければ一旦停止」。当時 LONG 0.001 → EXIT #19 待ち → フラット後 STOP。BUY #20 なし。venue_net=0。強制 flatten なし。soak/監督/monitor 停止。GO2=HALT · process REAL=false · `.env` 非触。Economic_PASS=NO。自動継続しない。
+
+2026-10-22 | CSR-626 | operator stop after EXIT19 flat | LOCK
+
+GOV: LIVE=OFF · WIRE=NO · ENFORCE=0 · STOP=pin · pins frozen
+
+**CSR-627（2026-10-25 05:09 JST）:** WOBIMM LIVE 残玉。23:18:45 `B:4_consec_losses` 停止。内部 working 空のため flatten が `cancel_all` 省略。成行 SELL 0.002（`JRF20261024-141849-018623` @ 12,570,919）後 verify net=0 · `flat_ok=true`。23:15:53 LIMIT SELL 0.001 @ 12,608,967（`JRF20261024-141553-020661`）は `BOARD_TRADE` 予測fill（23:15:58）で内部だけクローズ。実約定は 23:31:02。停止後に SHORT 0.001 残置。2026-10-25 05:08 照会: venue SELL 0.001 @ 12,608,967 · UPL≈−16.8 · ACTIVE=0 · process死。人手 flatten 未実施。コード非触。`.env` 非触。Economic_PASS=NO。自動再開しない。
+
+2026-10-25 | CSR-627 | WOBIMM leftover SHORT after false BOARD_TRADE flatten | LOCK
+
+GOV: WOBIMM=LEFTOVER_SHORT · ACTIVE=0 · LIVE process=dead · no auto-restart · pins frozen
+
+**commit 承認（2026-10-25 · ユーザー指示「FIX.meに記録、GIT対応お願い」· CSR-624–627）:** TF2BP SET-1 REFUSE/再試験/オペレータ停止と WOBIMM 残玉事故を正本化。発注なし · flatten未実施 · ランナー非改変 · `.env` 非触 · pushなし。スコープ=`FIX.me`·`MEM.md`。data/logs/runtime/無関係コード除外。
+
 

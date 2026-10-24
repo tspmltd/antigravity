@@ -2754,3 +2754,37 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 既知の穴: 予測LONGのまま反対売買を出すと一瞬ショートになり得る。venue 残玉で1本戻す。
 - 指値はキュー未実装なので楽観 fill しない（inflight 錠のみ）。LIVE停止。
 
+## 131. CSR-624 — LIVE開始 → REFUSE（2026-10-22 12:25 JST）
+
+- ユーザー: `LIVE開始` → **REFUSE**（発注なし）
+- 必要トークン: `GO2 TF2BP`（不一致）
+- SET-1 FAIL（CSR-620 二重SELL）。GO2 status=HALT · STOP pin · REAL=false · CONFIRM=REVOKED
+- soak / systemd は止まっている。shadow / paper PEG2 / dryrun UMM のみ稼働
+- FAIL 後の再開は新トークンのみ。`.env` 非触。Economic_PASS=NO。
+
+## 132. CSR-625 — GO2 TF2BP SET-1 再試験（2026-10-22 12:28）
+
+- トークン `GO2 TF2BP` ACCEPT。CSR-620 FAIL 後の再開。予測 fill（CSR-621–623）適用済み。
+- size 0.001 · MAX_TRADES=20 · 最大5セット · PASS なら自動継続。
+- 起動前: venue_net=0 · ACTIVE=0 · MemAvailable≈3.3GB · soak/PEG2-B LIVE なし。
+- boot: `READY_FLAT` venue=0 · entry_allowed=True · 照合前 BUY なし。
+- `.env` false のまま。process REAL=true · CONFIRM=TF2BP。Economic_PASS=NO。
+- run_id=`492a7300edfb` pid=4095896。PEG2-B 非起動。
+
+## 133. CSR-626 — フラット確認後 LIVE 一旦停止（2026-10-22 14:34）
+
+- 指示: ポジションなければ一旦停止。当時 LONG 0.001 @ 13,055,547。成行 flatten せず EXIT #19 を待った。
+- EXIT #19 pnl=-1.7 sum=-6.1 → venue_net=0。STOP pin。BUY #20 なし。
+- soak `leave loop reason=stop_flag` · state=STOPPED · venue=0。
+- 監督・monitor・unit 停止。process REAL=false · CONFIRM=REVOKED。`.env` false。
+- SET-1 は 19/20 でオペレータ停止。事故キーなし。自動継続しない。再開は新 `GO2 TF2BP`。
+
+## 134. CSR-627 — WOBIMM LIVE 残玉（予測fill + cancel_all省略）（2026-10-25 05:09）
+
+- 停止: 2026-10-24 23:18:45 `B:4_consec_losses`。プロセス死。自動再起動なし。
+- flatten は内部 working が空のため `cancel_all` せず。成行 SELL 0.002（`JRF20261024-141849-018623`）後 verify net=0 · `flat_ok=true`。
+- 23:15:53 LIMIT SELL @ 12,608,967（`JRF20261024-141553-020661`）を `BOARD_TRADE` で 23:15:58 に内部クローズ。取引所約定は 23:31:02。
+- 2026-10-25 05:08 照会: SHORT 0.001 @ 12,608,967 · UPL≈−16.8円 · ACTIVE=0。人手 flatten 未実施。
+- 穴: 公開板予測fillを私有約定確認なしで採用。flatten 成功判定がネット建玉のみ。残注文を見ない。
+- コード非触 · `.env` 非触 · Economic_PASS=NO。再開は新 GO。残ショートはオペレータ判断。
+
