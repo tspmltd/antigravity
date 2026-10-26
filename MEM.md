@@ -2788,3 +2788,46 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 穴: 公開板予測fillを私有約定確認なしで採用。flatten 成功判定がネット建玉のみ。残注文を見ない。
 - コード非触 · `.env` 非触 · Economic_PASS=NO。再開は新 GO。残ショートはオペレータ判断。
 
+## 135. CSR-628 — 板模倣が正本。4連敗は10分休み（2026-10-25 20:00）
+
+- 昨日 23:18 の穴: `BOARD_TRADE` / `BOOK_CROSS` で注文を捨て、`cancel_all` を省略し、`get_positions` で flatten してプロセス死。残指値が 23:31 に埋まり SHORT 放置。
+- 板模倣が OID と予測在庫を持っている。4連敗はプロセスを落とさない。既知指値を `cancel_all` して 600s 休み、公開約定の監視は続ける。
+- 予測 fill は在庫だけ更新。OID は `PUBLIC_OID` か cancel まで ghost 保持。flatten は局所在庫で MARKET。建玉 GET はしない。
+- 起動時 GET はプロセス死の残骸用だけ。`.env` 非触。LIVE 非起動。Economic_PASS=NO。
+
+## 136. CSR-629 — WOBIMM LIVE 再開（2026-10-25 20:27）
+
+- オペレータ: 手動フラット確認後 `LIVE稼働`。起動前 GET: venue_net=0 · ACTIVE=0 · collateral=6327。
+- pid=795768 · `--real --confirm-go WOBIMM` · process REAL=true · CONFIRM=WOBIMM_LIVE。`.env` は false のまま。
+- preflight PASS flat。CSR-628 適用済み（4連敗は 600s rest、予測fillで OID を捨てない）。
+- 20:27:51 LIMIT BUY 0.001 @ 12,595,033 `JRF20261025-112751-017179`。Economic_PASS=NO。
+
+## 137. CSR-630 — 注文ライフサイクル同期（2026-10-25 22:22）
+
+- 穴: 予測fillでスロット解放、居座りで板を見ない、同サイド多重。795768 は known=7 / working=0 まで積み上がった。
+- 予測fillは即 cancel。未cancel OID がある側は新規禁止。板離れ（スプレッド×2）・壁消失は即引き。30s ごとに ACTIVE 突合して余剰は purge。
+- 795768 を SIGTERM。flatten CANCEL_ALL n=4 · venue_net=0 · ACTIVE=0。
+- 再起動 pid=815001 · preflight PASS · `.env` false。tests 37 通過。Economic_PASS=NO。
+
+## 138. CSR-631 — unwind は取引所建玉が正本（2026-10-26 12:42）
+
+- 12:25: ローカル LONG +0.004（予測BUY）対 取引所 SHORT 0.003。DYNAMIC UNWIND が MARKET SELL 0.004 を連打し -205。
+- 12:28 SIGTERM flatten: GET residual -0.003 → MARKET BUY 0.003 `JRF20261026-032834-017229` · venue=0 · ACTIVE=0。
+- unwind は成行前に GET。符号不一致は MARKET せず ADOPT + SAFE_REST。-205 は SAFE_REST して同サイド再送しない。成功後も GET で在庫確定。tick で periodic GET。
+- `.env` 非触。tests 50 通過。collateral=6128。LIVE 再起動。Economic_PASS=NO。
+
+## 139. CSR-632 — 成行廃止。減玉は指値だけ（2026-10-26 12:51）
+
+- 板模倣なら unwind / flatten の MARKET は不要。増玉側を止め、減玉側の LIMIT だけ出す。
+- flatten は cancel + GET 採用。残玉は leftover として起動時 ADOPT → 指値で戻す。成行スイープ削除。
+- 符号不一致は従来どおり ADOPT + SAFE_REST。`.env` 非触。Economic_PASS=NO。
+
+## 140. CSR-633 — LIVE台帳 CF → WOBIMM2 DRYRUN（COVER_WAIT）（2026-10-26 21:08）
+
+- 台帳: LIVE 164 決済 · COVER_SHORT 74 件 **−87.3 bp**（EV −1.18）· CLOSE_LONG +27.7 bp。
+- CF（公開last）: カバー遅延 5s **+55.1 bp**（58.1%）· 10s +14.5 · 15s +13.2 · 30s −0.5 · 60s +29.9。買い圧力減衰（60s内の最初のSELL）+24.6 bp · 中央待機 5.6s。30s窓minは上限 +135.6 bp（実装不可）。
+- Offset +1/5/10tick は fill維持仮定でも +0.13/+0.65/+1.3 bp。WOBIMM2 の変数にしない。
+- WOBIMM2 = frozen WOBIMM + COVER_WAIT のみ。short≥1lot かつ (wobi>+0.15 or ofi>+0.02) の間カバーBidを引く。timeout **10s**（CFの5s最良、30sはゼロ）。
+- 現行 WOBIMM DRYRUN は CTRL として存続。Discord 同一チャネル · 毎時 :08 · 1h + 24h 累積。WIRE=NO · LIVE非触 · Economic_PASS=NO。
+- 正本: `cf_wobimm_cover_delay.py` · `data/mm_research/wobimm_cf_cover_delay.json` · `run_dryrun_wobimm2.py`。
+
