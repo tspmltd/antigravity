@@ -317,7 +317,7 @@ class WOBIMM2DryRun:
         ctrl = self._lane_stats(self.ctrl)
         comment = (
             f"直近1h: WOBIMM2 は {w2['stats_1h']['pnl_bp']:+.2f} bp（勝率 {w2['stats_1h']['win_rate_pct']:.1f}%、"
-            f"{w2['stats_1h']['total_trades']}件）。CTRL WOBIMM は {ctrl['stats_1h']['pnl_bp']:+.2f} bp。"
+            f"{w2['stats_1h']['total_trades']}件）。BENCHMARK WOBIMM は {ctrl['stats_1h']['pnl_bp']:+.2f} bp。"
             f"COVER_WAIT 発動 {self.cover_waits} 回（timeout {COVER_WAIT_TIMEOUT_SEC:.0f}s）。"
         )
         return {
@@ -326,7 +326,7 @@ class WOBIMM2DryRun:
             "elapsed_hours": round((time.time() - self.t0) / 3600.0, 3),
             "market_source": self.market_source,
             "wire": "NO",
-            "stack": "WOBIMM + COVER_WAIT_BUY_PRESSURE (CSR-633 · 1-variable)",
+            "stack": "WOBIMM2 vs FROZEN WOBIMM BENCHMARK (CSR-633/634 · COVER_WAIT only)",
             "WOBIMM2": w2,
             "WOBIMM": ctrl,
             "cover_waits": self.cover_waits,
@@ -363,8 +363,8 @@ class WOBIMM2DryRun:
         ctrl = m["WOBIMM"]
         cmp = m["compare"]
         title_map = {
-            "start": "[START] WOBIMM2 DryRun (COVER_WAIT vs WOBIMM CTRL)",
-            "hourly": f"[HOURLY #{int(m['elapsed_hours'])}] WOBIMM2 定期進捗 (1h+24h · CTRL対比)",
+            "start": "[START] WOBIMM2 DryRun (COVER_WAIT vs WOBIMM BENCHMARK)",
+            "hourly": f"[HOURLY #{int(m['elapsed_hours'])}] WOBIMM2 定期進捗 (1h+24h · BENCHMARK対比)",
             "final": "[FINAL] WOBIMM2 DryRun 停止",
         }
         color = 0x3498DB if cmp["delta_1h_pnl_bp"] >= 0 else 0xE67E22
@@ -386,7 +386,7 @@ class WOBIMM2DryRun:
                                 f"({w2['stats_1h']['pnl_jpy']:+.1f}円) | 勝率 `{w2['stats_1h']['win_rate_pct']:.1f}%` "
                                 f"({w2['stats_1h']['win_trades']}/{w2['stats_1h']['total_trades']}) | "
                                 f"EV `{w2['stats_1h']['ev_bp']:+.2f}bp`\n"
-                                f"• **WOBIMM CTRL**: `{ctrl['stats_1h']['pnl_bp']:+.2f} bp` "
+                                f"• **WOBIMM BENCHMARK**: `{ctrl['stats_1h']['pnl_bp']:+.2f} bp` "
                                 f"({ctrl['stats_1h']['pnl_jpy']:+.1f}円) | 勝率 `{ctrl['stats_1h']['win_rate_pct']:.1f}%` "
                                 f"({ctrl['stats_1h']['win_trades']}/{ctrl['stats_1h']['total_trades']})\n"
                                 f"• **1h Δ**: **`{cmp['delta_1h_pnl_bp']:+.2f} bp`**"
@@ -400,7 +400,7 @@ class WOBIMM2DryRun:
                                 f"({w2['stats_24h']['pnl_jpy']:+.1f}円) | 勝率 `{w2['stats_24h']['win_rate_pct']:.1f}%` "
                                 f"({w2['stats_24h']['win_trades']}/{w2['stats_24h']['total_trades']}) | "
                                 f"MaxDD `{w2['stats_24h']['max_dd_bp']:.1f}bp`\n"
-                                f"• **WOBIMM CTRL**: `{ctrl['stats_24h']['pnl_bp']:+.2f} bp` "
+                                f"• **WOBIMM BENCHMARK**: `{ctrl['stats_24h']['pnl_bp']:+.2f} bp` "
                                 f"({ctrl['stats_24h']['pnl_jpy']:+.1f}円) | 勝率 `{ctrl['stats_24h']['win_rate_pct']:.1f}%` "
                                 f"({ctrl['stats_24h']['win_trades']}/{ctrl['stats_24h']['total_trades']}) | "
                                 f"MaxDD `{ctrl['stats_24h']['max_dd_bp']:.1f}bp`\n"
@@ -412,7 +412,7 @@ class WOBIMM2DryRun:
                             "name": "COVER_WAIT",
                             "value": (
                                 f"• 発動: `{self.cover_waits}` 回 · timeout `{COVER_WAIT_TIMEOUT_SEC:.0f}s`\n"
-                                f"• 在庫 W2 `{w2['inventory_btc']:+.4f}` / CTRL `{ctrl['inventory_btc']:+.4f}` BTC\n"
+                                f"• 在庫 W2 `{w2['inventory_btc']:+.4f}` / BENCHMARK `{ctrl['inventory_btc']:+.4f}` BTC\n"
                                 f"• WIRE=NO · LIVE非触 · Offset凍結"
                             ),
                             "inline": True,

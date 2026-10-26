@@ -1,0 +1,28 @@
+{
+  "csr": "CSR-634",
+  "role": "BENCHMARK",
+  "status": "FROZEN",
+  "lane": "WOBIMM",
+  "mode": "DRYRUN",
+  "wire": "NO",
+  "set_jst": "2026-10-26 21:13:00 JST",
+  "params": {
+    "gamma": 0.5,
+    "kappa": 0.8,
+    "base_spread_bp": 1.6,
+    "lot_size": 0.001,
+    "max_inv_btc": 0.004,
+    "toxic_wobi_threshold": 0.4,
+    "toxic_ofi_threshold": 0.06,
+    "wall_min_size": 0.08,
+    "adverse_hold_lots": 2
+  },
+  "forbidden": [
+    "param change",
+    "offset change",
+    "COVER_WAIT on this lane",
+    "replace with WOBIMM2",
+    "LIVE apply from this pin"
+  ],
+  "compare_target_for": ["WOBIMM2"]
+}

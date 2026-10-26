@@ -2831,3 +2831,11 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 現行 WOBIMM DRYRUN は CTRL として存続。Discord 同一チャネル · 毎時 :08 · 1h + 24h 累積。WIRE=NO · LIVE非触 · Economic_PASS=NO。
 - 正本: `cf_wobimm_cover_delay.py` · `data/mm_research/wobimm_cf_cover_delay.json` · `run_dryrun_wobimm2.py`。
 
+## 141. CSR-634 — WOBIMM DRYRUN を FROZEN BENCHMARK 化（2026-10-26 21:13）
+
+- オペレータ: WOBIMM は凍結してベンチマーク化。
+- ピン: gamma=0.5 · kappa=0.8 · base_spread_bp=1.6 · lot=0.001 · max_inv=0.004 · toxic_wobi=0.40 · toxic_ofi=0.06。起動時 drift は REFUSE。
+- 役割: WOBIMM2（COVER_WAIT）の唯一の紙対照。WOBIMM 側に COVER_WAIT を入れない。パラメータ変更禁止。
+- LIVE 非適用。WIRE=NO。Economic_PASS=NO。Discord 表示は BENCHMARK FROZEN。
+- 正本: `configs/wobimm_benchmark_frozen.json` · `data/WOBIMM_BENCHMARK_FROZEN.flag`。
+

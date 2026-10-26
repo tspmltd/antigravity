@@ -415,4 +415,10 @@ GOV: WOBIMM=LEFTOVER_SHORT · ACTIVE=0 · LIVE process=dead · no auto-restart �
 
 GOV: WOBIMM2=DRYRUN · WIRE=NO · LIVE=untouched · WOBIMM CTRL=keep · pins frozen
 
+**CSR-634（2026-10-26 21:13 JST）:** WOBIMM DRYRUN を **FROZEN BENCHMARK** 化。param CHANGE=NO（gamma 0.5 · kappa 0.8 · spread 1.6bp · lot 0.001 · max_inv 0.004 · toxic 0.40/0.06）。WOBIMM2 の唯一の対照。COVER_WAIT を WOBIMM に戻さない。LIVE非適用 · WIRE=NO · Economic_PASS=NO。正本 `configs/wobimm_benchmark_frozen.json`。
+
+2026-10-26 | CSR-634 | WOBIMM FROZEN BENCHMARK | LOCK
+
+GOV: WOBIMM=BENCHMARK_FROZEN · WOBIMM2=DRYRUN · WIRE=NO · LIVE=untouched · CHANGE=NO
+
 
