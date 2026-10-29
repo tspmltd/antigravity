@@ -1,0 +1,37 @@
+{
+  "train_rows": 63437,
+  "test_rows": 15860,
+  "target_rate_test": 0.06134930643127364,
+  "roc_auc": 0.47146606525582824,
+  "pr_auc": 0.06968984860588565,
+  "top_10pct_gate": {
+    "threshold": 0.6581819753128738,
+    "precision": 0.08060453400503778,
+    "recall": 0.131551901336074,
+    "true_positives": 128,
+    "false_positives": 1460,
+    "toxic_strikes_prevented_pct": 13.1551901336074
+  },
+  "top_5_features": [
+    {
+      "feature": "wobi_l1",
+      "importance_gain": 329
+    },
+    {
+      "feature": "spread_bp",
+      "importance_gain": 186
+    },
+    {
+      "feature": "cushion_ask_vol",
+      "importance_gain": 174
+    },
+    {
+      "feature": "cushion_bid_vol",
+      "importance_gain": 142
+    },
+    {
+      "feature": "spread_tension",
+      "importance_gain": 139
+    }
+  ]
+}

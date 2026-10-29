@@ -1,0 +1,30 @@
+[
+  {
+    "loss_cause":"ADVERSE_TOXIC_STRIKE",
+    "loss_trades":34257,
+    "total_loss_bp":-94905.03,
+    "avg_loss_bp":-2.77,
+    "avg_ae_1s":-3.01
+  },
+  {
+    "loss_cause":"UNCLASSIFIED_LOSS",
+    "loss_trades":25075,
+    "total_loss_bp":-47096.99,
+    "avg_loss_bp":-1.88,
+    "avg_ae_1s":-0.48
+  },
+  {
+    "loss_cause":"HOLD_LADDER_BLEED",
+    "loss_trades":123,
+    "total_loss_bp":-348.82,
+    "avg_loss_bp":-2.84,
+    "avg_ae_1s":-0.31
+  },
+  {
+    "loss_cause":"EXIT_FRICTION_CHOP",
+    "loss_trades":304,
+    "total_loss_bp":-151.22,
+    "avg_loss_bp":-0.5,
+    "avg_ae_1s":-0.46
+  }
+]

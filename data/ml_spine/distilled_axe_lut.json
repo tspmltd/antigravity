@@ -1,0 +1,573 @@
+{
+  "metadata": {
+    "generator": "build_distilled_axe_lut.py",
+    "version": "v1.0_csr649",
+    "total_cells": 60,
+    "lookup_complexity": "O(1)",
+    "average_lookup_ns": "< 20ns"
+  },
+  "dimensions": {
+    "wobi_bins": [
+      "STRONG_BID",
+      "WEAK_BID",
+      "NEUTRAL",
+      "WEAK_ASK",
+      "STRONG_ASK"
+    ],
+    "tension_bins": [
+      "TENSION_LOW",
+      "TENSION_MID",
+      "TENSION_HIGH"
+    ],
+    "cancel_bins": [
+      "NORMAL",
+      "SPOOF_RISK_HIGH"
+    ],
+    "micro_bins": [
+      "MICRO_FAVORABLE",
+      "MICRO_ADVERSE"
+    ]
+  },
+  "matrix": {
+    "STRONG_BID_TENSION_LOW_NORMAL_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 31.51,
+      "expected_drift_1s": 446.6,
+      "observed_ticks": 157
+    },
+    "STRONG_BID_TENSION_LOW_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 41.3,
+      "expected_drift_1s": -219.8,
+      "observed_ticks": 211
+    },
+    "STRONG_BID_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 31.93,
+      "expected_drift_1s": 277.0,
+      "observed_ticks": 199
+    },
+    "STRONG_BID_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 36.87,
+      "expected_drift_1s": -403.2,
+      "observed_ticks": 195
+    },
+    "STRONG_BID_TENSION_MID_NORMAL_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 37.16,
+      "expected_drift_1s": 66.0,
+      "observed_ticks": 1398
+    },
+    "STRONG_BID_TENSION_MID_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 37.68,
+      "expected_drift_1s": -109.8,
+      "observed_ticks": 1427
+    },
+    "STRONG_BID_TENSION_MID_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 34.16,
+      "expected_drift_1s": 27.4,
+      "observed_ticks": 2125
+    },
+    "STRONG_BID_TENSION_MID_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 34.21,
+      "expected_drift_1s": -36.3,
+      "observed_ticks": 2214
+    },
+    "STRONG_BID_TENSION_HIGH_NORMAL_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 34.47,
+      "expected_drift_1s": 82.1,
+      "observed_ticks": 992
+    },
+    "STRONG_BID_TENSION_HIGH_NORMAL_MICRO_ADVERSE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 33.35,
+      "expected_drift_1s": 76.2,
+      "observed_ticks": 950
+    },
+    "STRONG_BID_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 27.03,
+      "expected_drift_1s": 143.6,
+      "observed_ticks": 1554
+    },
+    "STRONG_BID_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 27.22,
+      "expected_drift_1s": 87.2,
+      "observed_ticks": 1675
+    },
+    "WEAK_BID_TENSION_LOW_NORMAL_MICRO_FAVORABLE": {
+      "action": "POST_FRONTIER_INSIDE",
+      "reason": "AGGRESSIVE_ALPHA_DRIFT",
+      "offset_jpy": 1.0,
+      "grade": "ALPHA_PRIME",
+      "toxic_prob_pct": 40.14,
+      "expected_drift_1s": 57.0,
+      "observed_ticks": 1811
+    },
+    "WEAK_BID_TENSION_LOW_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 41.37,
+      "expected_drift_1s": -272.9,
+      "observed_ticks": 1769
+    },
+    "WEAK_BID_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 39.77,
+      "expected_drift_1s": 130.4,
+      "observed_ticks": 3366
+    },
+    "WEAK_BID_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 40.02,
+      "expected_drift_1s": -122.1,
+      "observed_ticks": 3241
+    },
+    "WEAK_BID_TENSION_MID_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 47.63,
+      "expected_drift_1s": -39.8,
+      "observed_ticks": 1472
+    },
+    "WEAK_BID_TENSION_MID_NORMAL_MICRO_ADVERSE": {
+      "action": "POST_BEST_BID",
+      "reason": "STABLE_BID_QUEUE",
+      "offset_jpy": 0.0,
+      "grade": "SAFE_QUEUE",
+      "toxic_prob_pct": 46.38,
+      "expected_drift_1s": 17.5,
+      "observed_ticks": 1601
+    },
+    "WEAK_BID_TENSION_MID_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 43.66,
+      "expected_drift_1s": -126.5,
+      "observed_ticks": 2562
+    },
+    "WEAK_BID_TENSION_MID_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 42.52,
+      "expected_drift_1s": 16.6,
+      "observed_ticks": 2662
+    },
+    "WEAK_BID_TENSION_HIGH_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 53.2,
+      "expected_drift_1s": -663.4,
+      "observed_ticks": 56
+    },
+    "WEAK_BID_TENSION_HIGH_NORMAL_MICRO_ADVERSE": {
+      "action": "POST_BEST_BID",
+      "reason": "STABLE_BID_QUEUE",
+      "offset_jpy": 0.0,
+      "grade": "SAFE_QUEUE",
+      "toxic_prob_pct": 52.25,
+      "expected_drift_1s": 1046.1,
+      "observed_ticks": 30
+    },
+    "WEAK_BID_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 39.35,
+      "expected_drift_1s": 612.8,
+      "observed_ticks": 140
+    },
+    "WEAK_BID_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 46.35,
+      "expected_drift_1s": 338.1,
+      "observed_ticks": 50
+    },
+    "NEUTRAL_TENSION_LOW_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 40.68,
+      "expected_drift_1s": -115.3,
+      "observed_ticks": 2641
+    },
+    "NEUTRAL_TENSION_LOW_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 40.77,
+      "expected_drift_1s": -87.7,
+      "observed_ticks": 2283
+    },
+    "NEUTRAL_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 37.51,
+      "expected_drift_1s": -12.5,
+      "observed_ticks": 6401
+    },
+    "NEUTRAL_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 38.39,
+      "expected_drift_1s": -55.9,
+      "observed_ticks": 5843
+    },
+    "NEUTRAL_TENSION_MID_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 42.15,
+      "expected_drift_1s": -831.4,
+      "observed_ticks": 34
+    },
+    "NEUTRAL_TENSION_MID_NORMAL_MICRO_ADVERSE": {
+      "action": "PASS_WAIT",
+      "reason": "EDGE_INSUFFICIENT",
+      "offset_jpy": 0.0,
+      "grade": "NEUTRAL",
+      "toxic_prob_pct": 37.98,
+      "expected_drift_1s": 14.3,
+      "observed_ticks": 47
+    },
+    "NEUTRAL_TENSION_MID_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 37.81,
+      "expected_drift_1s": 359.5,
+      "observed_ticks": 90
+    },
+    "NEUTRAL_TENSION_MID_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 39.23,
+      "expected_drift_1s": 313.0,
+      "observed_ticks": 86
+    },
+    "NEUTRAL_TENSION_HIGH_NORMAL_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "EDGE_INSUFFICIENT",
+      "offset_jpy": 0.0,
+      "grade": "NEUTRAL",
+      "toxic_prob_pct": 67.39,
+      "expected_drift_1s": 3.5,
+      "observed_ticks": 0
+    },
+    "NEUTRAL_TENSION_HIGH_NORMAL_MICRO_ADVERSE": {
+      "action": "PASS_WAIT",
+      "reason": "EDGE_INSUFFICIENT",
+      "offset_jpy": 0.0,
+      "grade": "NEUTRAL",
+      "toxic_prob_pct": 67.39,
+      "expected_drift_1s": -5.5,
+      "observed_ticks": 0
+    },
+    "NEUTRAL_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 60.09,
+      "expected_drift_1s": 3.5,
+      "observed_ticks": 0
+    },
+    "NEUTRAL_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 60.09,
+      "expected_drift_1s": -5.5,
+      "observed_ticks": 0
+    },
+    "WEAK_ASK_TENSION_LOW_NORMAL_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "EDGE_INSUFFICIENT",
+      "offset_jpy": 0.0,
+      "grade": "NEUTRAL",
+      "toxic_prob_pct": 20.77,
+      "expected_drift_1s": 81.7,
+      "observed_ticks": 1101
+    },
+    "WEAK_ASK_TENSION_LOW_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 21.92,
+      "expected_drift_1s": 215.4,
+      "observed_ticks": 917
+    },
+    "WEAK_ASK_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 24.88,
+      "expected_drift_1s": 23.4,
+      "observed_ticks": 1913
+    },
+    "WEAK_ASK_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 25.56,
+      "expected_drift_1s": 56.4,
+      "observed_ticks": 1704
+    },
+    "WEAK_ASK_TENSION_MID_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 24.71,
+      "expected_drift_1s": -29.6,
+      "observed_ticks": 3935
+    },
+    "WEAK_ASK_TENSION_MID_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 24.86,
+      "expected_drift_1s": -65.3,
+      "observed_ticks": 3910
+    },
+    "WEAK_ASK_TENSION_MID_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 25.91,
+      "expected_drift_1s": -4.4,
+      "observed_ticks": 7785
+    },
+    "WEAK_ASK_TENSION_MID_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 26.27,
+      "expected_drift_1s": -83.0,
+      "observed_ticks": 7642
+    },
+    "WEAK_ASK_TENSION_HIGH_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 36.37,
+      "expected_drift_1s": -830.0,
+      "observed_ticks": 24
+    },
+    "WEAK_ASK_TENSION_HIGH_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 38.16,
+      "expected_drift_1s": -2563.7,
+      "observed_ticks": 14
+    },
+    "WEAK_ASK_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PASS_WAIT",
+      "reason": "SPOOF_CANCEL_SPIKE",
+      "offset_jpy": 0.0,
+      "grade": "CAUTION",
+      "toxic_prob_pct": 29.07,
+      "expected_drift_1s": -15.1,
+      "observed_ticks": 43
+    },
+    "WEAK_ASK_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 34.86,
+      "expected_drift_1s": -380.0,
+      "observed_ticks": 56
+    },
+    "STRONG_ASK_TENSION_LOW_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 33.79,
+      "expected_drift_1s": -728.4,
+      "observed_ticks": 16
+    },
+    "STRONG_ASK_TENSION_LOW_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 42.57,
+      "expected_drift_1s": -14.5,
+      "observed_ticks": 0
+    },
+    "STRONG_ASK_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 33.99,
+      "expected_drift_1s": -603.9,
+      "observed_ticks": 14
+    },
+    "STRONG_ASK_TENSION_LOW_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 48.28,
+      "expected_drift_1s": 5706.8,
+      "observed_ticks": 6
+    },
+    "STRONG_ASK_TENSION_MID_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 28.66,
+      "expected_drift_1s": -382.6,
+      "observed_ticks": 183
+    },
+    "STRONG_ASK_TENSION_MID_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 25.49,
+      "expected_drift_1s": -53.2,
+      "observed_ticks": 214
+    },
+    "STRONG_ASK_TENSION_MID_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 26.99,
+      "expected_drift_1s": -219.0,
+      "observed_ticks": 210
+    },
+    "STRONG_ASK_TENSION_MID_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 29.23,
+      "expected_drift_1s": -123.6,
+      "observed_ticks": 266
+    },
+    "STRONG_ASK_TENSION_HIGH_NORMAL_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 51.75,
+      "expected_drift_1s": -2027.1,
+      "observed_ticks": 8
+    },
+    "STRONG_ASK_TENSION_HIGH_NORMAL_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 49.66,
+      "expected_drift_1s": -1381.6,
+      "observed_ticks": 6
+    },
+    "STRONG_ASK_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_FAVORABLE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 46.7,
+      "expected_drift_1s": 2298.1,
+      "observed_ticks": 30
+    },
+    "STRONG_ASK_TENSION_HIGH_SPOOF_RISK_HIGH_MICRO_ADVERSE": {
+      "action": "PULL_IMMEDIATE",
+      "reason": "TOXIC_STRIKE_HAZARD",
+      "offset_jpy": 0.0,
+      "grade": "DANGER",
+      "toxic_prob_pct": 53.92,
+      "expected_drift_1s": 769.9,
+      "observed_ticks": 18
+    }
+  }
+}

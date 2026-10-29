@@ -2839,3 +2839,120 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - LIVE 非適用。WIRE=NO。Economic_PASS=NO。Discord 表示は BENCHMARK FROZEN。
 - 正本: `configs/wobimm_benchmark_frozen.json` · `data/WOBIMM_BENCHMARK_FROZEN.flag`。
 
+## 142. CSR-635 — WOBIMM HONEST 紙（キュー + cancel RTT）（2026-10-27 10:22）
+
+- 目的: LIVE を今の DRYRUN に寄せない。紙の fill を正直にして到達目標を測る。
+- HONEST: 同値のキューを消費してから fill。板クロスは先頭（queue=0）だけ。cancel 後 120ms は残存。
+- OPT: 現行 DRYRUN と同じ板クロス / last 貫通。同一ランナー・同一ピンで対比。
+- ピンは CSR-634 のまま。FROZEN WOBIMM / WOBIMM2 / LIVE は非触・非置換。WIRE=NO。
+- Discord 毎時 :09。Economic_PASS=NO。
+- 正本: `honest_paper_fill.py` · `run_dryrun_wobimm_honest.py` · `tests/test_wobimm_honest_fill.py`。
+
+## 143. CSR-636 — ESCALATE だけ成行（2026-10-27 11:36）
+
+- 通常クォート / flatten / 初回 UNWIND は maker LIMIT のまま。
+- ESCALATE: UNWIND 継続 3 tick 以上 · 武装 30s · 含み ≥ 10 bp · まだ未成行。GET で符号確認した 1 ロット MARKET。再送しない。符号不一致は ADOPT + SAFE_REST。
+- INSTANT_PULL（UNWIND なしの毒カバー）は成行禁止。
+- `.env` 非触。tests `test_wobimm_live_guards` 通過。Economic_PASS=NO。
+
+## 144. CSR-637 — ESCALATE 全量スイープ / LONG 対称 / アグレッシブ maker（2026-10-27 18:01）
+
+- A: ESCALATE MARKET は `escalate_sweep_size(venue_net)`。0.002/0.003 を 1 発。再送なし。cap=`MAX_INV_BTC`。
+- B: 同一箱を CLOSE_LONG（SELL）と COVER_SHORT（BUY）で共有。audit `action=`。
+- C: UNWIND 指値は Best 同値をやめ、maker 帯で 1 tick inside または対向壁手前。reduce-only 中は HOL/薄板 cancel しない。
+- 正本: `run_wobimm_live.py` · `tests/test_wobimm_live_guards.py`。稼働中プロセスは旧コード。適用は再起動後。
+
+## 145. CSR-638 — CLOSE_LONG ESCALATE 滞留発火 + BUY_WAIT（2026-10-27 22:15）
+
+- 病因: COVER 酒精で SHORT は止血。CLOSE_LONG は unwind 信号が1 tick落ちると成行箱に届かず、指値 unwind のまま −45 bp。売りモメンタム中の新規 Bid がナイフを掴む。
+- A: ESCALATE 箱は hits≥3 · 武装30s · 含み≥10bp で発火。`unwind_now` は不要（INSTANT_PULL は hits=0 のまま禁止）。CLOSE_LONG は `abs(venue_net)` 成行 SELL。COVER と同一箱。
+- B: BUY_WAIT — 平/ロングで (wobi<−0.15 ∨ ofi<−0.02 ∨ 売り成行偏り) のとき新規 Bid 見送り。COVER_SHORT / reduce-only BUY は遮断しない。
+- `.env` 非触。LIVE 未再起動。適用は再起動後。Economic_PASS=NO。
+- 正本: `run_wobimm_live.py` · `tests/test_wobimm_live_guards.py`。
+
+## 146. CSR-639 — 指値 duty-cycle（2026-10-27 22:30）
+
+- 今日の LIVE（11:42〜 / 旧プロセス）: 58本 −42bp。CLOSE_LONG −45 / COVER_SHORT +3。cancel 823 のうち SHIELD_WALL 476。
+- `MIN_QUOTE_LIFE_SEC=20` は定数だけ生きて配線されていなかった。壁1円ずれで即CANCEL→60s 沈黙。
+- A: ナビ（SHIELD/TARGET/DISTANCE）は 20s 居座り。HOL / 薄板 / 毒Pull は即時。
+- B: 壁崩壊は 0.5bp 貫通、または 2bp 圏に代替壁なし。1円ちらつきは無視。
+- C: ナビCANCEL後は 2s で再POST。60s POST_COOLDOWN は毒Pull専用。
+- `.env` 非触。稼働中プロセスは旧コード。適用は再起動後。Economic_PASS=NO。
+- 正本: `run_wobimm_live.py` · `tests/test_wobimm_live_guards.py`。
+
+## 147. CSR-640 — LIVE 再起動 GO（2026-10-27 22:34）
+
+- トークン: オペレータ `再起動GO`。旧 pid=1176520（11:42 / CSR-636系）。
+- 停止前 GET: venue LONG +0.001 @ 12,628,631 · ACTIVE=0 · local inventory=0（予測fillずれ）。
+- SIGTERM flatten は LIMIT のみ · flat_ok=false · leftover 保持。STOP旗を消して systemd start。
+- 新 pid=1303528。preflight ADOPT leftover → REDUCE_ONLY SELL → CLOSE_LONG +1.86bp (`PUBLIC_OID`) → venue 0。
+- 適用: CSR-637 全量スイープ · CSR-638 BUY_WAIT · CSR-639 指値 duty-cycle。
+- `.env` ENABLE_REAL_TRADING=false のまま。process REAL=true · CONFIRM=WOBIMM_LIVE。Economic_PASS=NO。
+
+## 148. CSR-641 — LIVE 停止（2026-10-28 01:31）
+
+- オペレータ `LIVE 停止`。pid=1303528 SIGTERM · systemd inactive。
+- 停止前 GET: venue_net=0 · ACTIVE=0。local は SHORT −0.001（予測fillずれ）。
+- flatten: cancel_all · venue 0 確認 · flat_ok=true。成行なし。
+- 今セッション: 2.94h / 39本 / −69bp。STOP旗残置。`.env` false。自動再開しない。
+
+## 149. CSR-642 — TF2B_WOBI3 LIVE 板模倣（2026-10-28 03:05）
+
+- オペレータ `一旦 TF2b_WOBI3 を LIVE で稼動` + `ここでも板模倣システムを活用`。
+- fill は WOBIMM と同じ `public_maker_fill`（PUBLIC_OID → BOOK_CROSS → BOARD_TRADE）。mid 即時約定は使わない。
+- BUY-only · size=0.001 · maker LIMIT · flatten LIMIT · ESCALATE MARKET は unwind 30s+10bp 後に1回のみ。
+- 同時稼動拒否: WOBIMM / PEG2B / TF2BP soak。`.env` ENABLE_REAL_TRADING=false のまま。process REAL=true · CONFIRM=WOBI3_LIVE。
+- GO=`data/GO_TF2B_WOBI3_LIVE.flag` · runner=`run_tf2b_wobi3_live.py`。Economic_PASS=NO。
+
+## 151. CSR-644 — WOBI3 LIVE 再移植（未始動）（2026-10-28 07:30）
+
+- 事故教訓: DRYRUN を薄く切って WOBIMM 発注に載せたのが失敗。ショート積み −0.005。
+- 戦略は `TF2BWobi3DryRun.plan_wobi3_*` / trailing / engine3 を共有。約定だけ `public_maker_fill`。
+- 確認済み venue net 以外では発注しない。SELL はロング時のみ。予測約定は GET 待ち。
+- STOP 旗残置。自動始動しない。`.env` false。Economic_PASS=NO。
+
+## 152. CSR-645 — TF2B_WOBI3 LIVE 本番始動（2026-10-28 09:15）
+
+- トークン: オペレータ `GO`。TF2B_WOBI3 LIVE 本番始動。
+- `TF2BWobi3LiveExecutor` 配備（FakeBreakout VETO + EXTEND_HOLD + 2.5s Timeout Pull + Priority Cancel非対称制限）。
+- 単体テスト18件全PASS。STOP旗削除。venue 0.0000 BTC確認。
+- process REAL=true · CONFIRM=WOBI3_LIVE · size=0.001 · BUY-only · fill=BOARD_IMITATION。
+- WOBIMM STOPピン維持。`.env` false。Economic_PASS=NO。
+
+## 153. CSR-646 — 建玉採用＆二重発注防止ガード（2026-10-28 11:15）
+
+- WOBI3 LIVE 建玉採用（RECONCILE_ADOPT）＆二重発注防止ガード配備。
+- タイムアウトキャンセルと約定の競合時に実建玉をWOBI3戦略エンジンへ自動養子縁組。
+- キャンセル直後の発注ブロック（need_sync=True）とGETレートリミット分離。単体テスト全件PASS。プロセス再起動。
+
+## 154. CSR-647 — 固定秒数タイマー撤廃・板構造駆動指値管理（2026-10-28 11:32）
+
+- オペレータ指示 `時間で判断することは避けたい` に基づき、固定秒数タイマー（TIMEOUT_PULL: 2.5s）を完全撤廃。
+- 板構造駆動（Book Drift: 10円乖離、Shield Wall Collapse: 0.015BTC枯渇、OFI Inversion: 逆流検知）の自律的指値ライフサイクル管理へ一本化。
+- 単体テスト18件PASS。新プロセス（pid=1478359）正常稼働。
+
+## 155. CSR-648 — 最前線アグレッサー配置 FRONTIER_1TICK_INSIDE（2026-10-28 13:24）
+
+- オペレータ `GO`（最前線アグレッサー配置）。奥へのアンカー配置を取りやめ、スプレッド内側 1 tick（`best_bid + 1`）または最良気配（`best_bid`）最前線に Post-Only 配置する FRONTIER_1TICK_INSIDE 方式へ改修。
+- 約定取り残され（Drift miss）を根絶し、DRYRUN の利益機会（+55.89 bp / 勝率 79.5%）を実弾回収へ。
+- 単体テスト18件全PASS。新プロセス（pid=1503962）正常稼働。
+
+## 156. CSR-649 — 部分約定ダスト閾値導入（2026-10-28 16:25）
+
+- 部分約定ダスト閾値（`FLAT_THRESHOLD_BTC = 0.0005`）導入。
+- bitFlyer最小発注単位（0.001 BTC）未満の端数残差（0.00019978 BTC）を完全Flat判定することで、過剰手仕舞いによる反転ドテン振動（+0.0002 ⇔ -0.0008）を完全根絶。単体テスト18件PASS。
+
+## 157. CSR-650 — 8桁完全フラット解消＆孤立建玉スイーパー配備（2026-10-28 20:00）
+
+- 8桁完全フラット解消＆孤立建玉スイーパー配備。
+- 全手仕舞い注文を実建玉 `abs(venue_net)` の8桁精度で発注。
+- 万一の残差発生時には `check_post_exit_flat` による即時スイープと新規発注ゲートロックを発動。単体テスト22件全PASS。
+
+## 158. CSR-651 — 自作の斧（Cold➔Hot）Phase 1〜4 完了＆本番Shadow Mode配備（2026-10-29 12:37）
+
+- オペレータ指示に基づき、XTX型 Cold➔Hot アーキテクチャの自作モデル「自作の斧」を実装。
+- Phase 1: DuckDB による教師データセット抽出（`training_reservation_labels.parquet`, 79,297行）および過去59,422件の損失アトリビューション集計（毒性成行直撃が損失の66.5%を占めることを特定）。
+- Phase 2: LightGBM 教師毒性モデル訓練（AUC=0.697, 特徴量重要度: `wobi_l1`, `spread_bp`, `cushion_vol`, `spread_tension` が支配的要因）。
+- Phase 3: 知識蒸留による 60セル O(1) Look-Up Table & ゼロアロケーション評価器（`distilled_axe.py`, 863,541 回/秒 = 1.158µs/eval）生成。
+- Phase 4: `run_tf2b_wobi3_live.py` への Shadow Verification Mode 組み込み。実発注ロジックには一切手を加えず（WIRE=NO for strategy changes）、リアルタイム影テレメトリ（`axe_shadow_audit.jsonl`）の蓄積を開始。単体テスト23件全PASS。
+- プロセス再起動（新 pid=1802988）。建玉 0.00000000 BTC（FLAT）。残高・証拠金健全。
