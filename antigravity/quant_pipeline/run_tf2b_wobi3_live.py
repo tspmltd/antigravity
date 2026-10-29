@@ -88,6 +88,7 @@ UNWIND_MAX_ORDER_BTC = 0.002  # 1ロット + 約定ダスト（例: 0.00119978�
 MAX_INV_BTC = 0.001
 logger = logging.getLogger("tf2b_wobi3_live")
 MIN_QUOTE_LIFE_SEC = 20.0
+DRIFT_PULL_BP = 0.5  # left-behind vs best bid; 10 JPY was 0.008 bp and fired every tick
 MIN_API_INTERVAL_SEC = 2.0
 POS_POLL_SEC = 15.0
 STOP_PNL_JPY = -300.0
@@ -317,34 +318,31 @@ class TF2BWobi3LiveExecutor:
         recent_ofi: float = 0.0,
         depth_vol: float = 0.0,
     ) -> bool:
-        """板構造・マイクロストラクチャー駆動の指値寿命管理（固定時間タイマー全廃）
-        時間経過（秒数）ではなく、板の構造変化・気配乖離・需給反転を検知して撤退。
-        """
+        """Entry quote stay. Navigation pulls wait MIN_QUOTE_LIFE. No wall-thickness yank."""
         if not self.active_order_id:
             return False
-
-        # 1. 気配値の乖離（Book Drift: 指値が Best Bid から 10 円以上取り残された場合）
+        age = now - float(self.order_placed_ts or 0.0)
+        if age < MIN_QUOTE_LIFE_SEC:
+            return False
         if self.entry_px > 0 and best_bid > 0:
-            if (best_bid - self.entry_px) > 10.0:
-                _log(f"[STRUCTURAL_PULL] Book drifted away (bid={best_bid:,.0f} > order={self.entry_px:,.0f}). Pulling order.")
-                self._cancel_active_order(emergency=False)
+            drift_bp = ((best_bid - self.entry_px) / self.entry_px) * 1e4
+            if drift_bp > DRIFT_PULL_BP:
+                _log(
+                    f"[STRUCTURAL_PULL] left behind {drift_bp:.2f}bp "
+                    f"(bid={best_bid:,.0f} order={self.entry_px:,.0f} age={age:.1f}s)"
+                )
+                self._cancel_active_order(emergency=False, where="structural_drift")
                 return True
-
-        # 2. 需給反転（OFI / WOBI Inversion: 逆方向成行アグレッサー急増）
         if recent_ofi < -0.15 or wobi < -0.25:
-            _log(f"[STRUCTURAL_PULL] Microstructure inverted (ofi={recent_ofi:+.2f}, wobi={wobi:+.2f}). Pulling order.")
-            self._cancel_active_order(emergency=False)
+            _log(
+                f"[STRUCTURAL_PULL] invert after min life "
+                f"(ofi={recent_ofi:+.2f} wobi={wobi:+.2f} age={age:.1f}s)"
+            )
+            self._cancel_active_order(emergency=False, where="structural_invert")
             return True
-
-        # 3. サポート壁の崩壊（Wall Collapse: 指値背後の厚みが 0.015 BTC 未満に枯渇）
-        if depth_vol > 0 and depth_vol < 0.015:
-            _log(f"[STRUCTURAL_PULL] Shield wall collapsed (vol={depth_vol:.3f} < 0.015). Pulling order.")
-            self._cancel_active_order(emergency=False)
-            return True
-
         return False
 
-    def _cancel_active_order(self, emergency: bool = False) -> bool:
+    def _cancel_active_order(self, emergency: bool = False, where: str = "structural_pull") -> bool:
         if not self.active_order_id:
             return False
         now = time.time()
@@ -495,7 +493,10 @@ class TF2BWobi3Live(TF2BWobi3LiveExecutor):
         self.last_snap = None
         self.last_metrics: Dict[str, Any] = {}
         self.last_axe_shadow_ts = 0.0
-        self.last_axe_action = ""
+        self.axe_seq = 0
+        self.axe_pending: List[Dict[str, Any]] = []
+        self.axe_fill_pending: List[Dict[str, Any]] = []
+        self.last_axe_predict_id: Optional[str] = None
         self.axe: Optional[DistilledAxe] = None
         if AXE_LUT_PATH.exists() and DistilledAxe is not None:
             try:
@@ -503,6 +504,100 @@ class TF2BWobi3Live(TF2BWobi3LiveExecutor):
                 _log(f"[AXE] DistilledAxe LUT loaded ({len(self.axe.matrix)} cells) from {AXE_LUT_PATH}")
             except Exception as exc:
                 _log(f"[AXE] Failed to load DistilledAxe: {exc}")
+
+    def _axe_mid(self, m: Optional[Dict[str, Any]], snap: Optional[Any], details: Optional[Dict[str, Any]]) -> float:
+        for src in (
+            (details or {}).get("mid"),
+            (m or {}).get("mid"),
+            getattr(snap, "mid_price", None) if snap is not None else None,
+        ):
+            try:
+                v = float(src or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return v
+        return 0.0
+
+    def _flush_axe_realizations(self, now: float, mid: float) -> None:
+        if mid <= 0:
+            return
+        keep: List[Dict[str, Any]] = []
+        for rec in self.axe_pending:
+            age = now - float(rec["ts"])
+            mid_t = float(rec["mid_t"])
+            if rec.get("need_1s") and age >= 1.0:
+                delta_bp = ((mid - mid_t) / mid_t) * 10000.0 if mid_t > 0 else None
+                _append(AXE_SHADOW_LOG, {
+                    "kind": "realized",
+                    "id": rec["id"],
+                    "horizon_s": 1,
+                    "ts": round(now, 3),
+                    "iso": _iso(),
+                    "mid_t": mid_t,
+                    "mid": mid,
+                    "delta_mid_bp": None if delta_bp is None else round(delta_bp, 4),
+                    "mu_1s_bp": rec.get("mu_1s_bp"),
+                })
+                rec["need_1s"] = False
+            if rec.get("need_5s") and age >= 5.0:
+                delta_bp = ((mid - mid_t) / mid_t) * 10000.0 if mid_t > 0 else None
+                _append(AXE_SHADOW_LOG, {
+                    "kind": "realized",
+                    "id": rec["id"],
+                    "horizon_s": 5,
+                    "ts": round(now, 3),
+                    "iso": _iso(),
+                    "mid_t": mid_t,
+                    "mid": mid,
+                    "delta_mid_bp": None if delta_bp is None else round(delta_bp, 4),
+                    "mu_1s_bp": rec.get("mu_1s_bp"),
+                })
+                rec["need_5s"] = False
+            if rec.get("need_1s") or rec.get("need_5s"):
+                keep.append(rec)
+        self.axe_pending = keep
+
+        fill_keep: List[Dict[str, Any]] = []
+        for rec in self.axe_fill_pending:
+            age = now - float(rec["fill_ts"])
+            fill_px = float(rec["fill_px"])
+            side = str(rec.get("side") or "BUY")
+            if fill_px <= 0:
+                continue
+            if side == "SELL":
+                markout = ((fill_px - mid) / fill_px) * 10000.0
+            else:
+                markout = ((mid - fill_px) / fill_px) * 10000.0
+            if rec.get("need_1s") and age >= 1.0:
+                _append(AXE_SHADOW_LOG, {
+                    "kind": "markout",
+                    "id": rec["id"],
+                    "horizon_s": 1,
+                    "ts": round(now, 3),
+                    "iso": _iso(),
+                    "fill_px": fill_px,
+                    "mid": mid,
+                    "markout_bp": round(markout, 4),
+                    "side": side,
+                })
+                rec["need_1s"] = False
+            if rec.get("need_5s") and age >= 5.0:
+                _append(AXE_SHADOW_LOG, {
+                    "kind": "markout",
+                    "id": rec["id"],
+                    "horizon_s": 5,
+                    "ts": round(now, 3),
+                    "iso": _iso(),
+                    "fill_px": fill_px,
+                    "mid": mid,
+                    "markout_bp": round(markout, 4),
+                    "side": side,
+                })
+                rec["need_5s"] = False
+            if rec.get("need_1s") or rec.get("need_5s"):
+                fill_keep.append(rec)
+        self.axe_fill_pending = fill_keep
 
     def evaluate_shadow_axe(
         self,
@@ -517,44 +612,92 @@ class TF2BWobi3Live(TF2BWobi3LiveExecutor):
         try:
             m = m or getattr(self, "last_metrics", {}) or {}
             snap = snap or getattr(self, "last_snap", None)
+            details = details or {}
             wobi = float(m.get("wobi", getattr(snap, "imbalance", 0.0) if snap else 0.0) or 0.0)
             spread_bp = float(m.get("spread_bp", 0.0) or 0.0)
             cancel_rate = float(getattr(snap, "cancel_rate", m.get("cancel_ask", 0.0)) if snap else 0.0)
             micro_dev = float(getattr(snap, "micro_dev", m.get("norm_disloc", 0.0)) if snap else 0.0)
+            mid = self._axe_mid(m, snap, details)
+            capture_bp = None
+            quote_px = details.get("px") or details.get("entry_px")
+            try:
+                qpx = float(quote_px or 0.0)
+            except (TypeError, ValueError):
+                qpx = 0.0
+            if mid > 0 and qpx > 0:
+                capture_bp = ((mid - qpx) / mid) * 10000.0
+                if "SELL" in str(live_decision or details.get("side") or ""):
+                    capture_bp = -capture_bp
 
-            axe_res = self.axe.evaluate(wobi=wobi, spread_bp=spread_bp, cancel_rate=cancel_rate, micro_dev=micro_dev)
-            axe_action = str(axe_res.get("action") or "PASS_WAIT")
-            self.last_axe_action = axe_action
-
-            agreement: Optional[bool] = None
-            if "POST_BUY" in live_decision or "ENTER" in live_decision:
-                agreement = (axe_action in {"POST_FRONTIER_INSIDE", "POST_BEST_BID"})
-            elif "PULL" in live_decision or "CANCEL" in live_decision:
-                agreement = (axe_action == "PULL_IMMEDIATE")
-            elif live_decision in {"WAIT", "PASS"}:
-                agreement = (axe_action == "PASS_WAIT")
-
+            axe_res = self.axe.evaluate(
+                wobi=wobi,
+                spread_bp=spread_bp,
+                cancel_rate=cancel_rate,
+                micro_dev=micro_dev,
+                mid=mid,
+                capture_bp=capture_bp,
+                venue_net=float(self.confirmed_net or 0.0),
+            )
+            now = time.time()
+            self.axe_seq += 1
+            rec_id = f"{now:.3f}:{event}:{self.axe_seq}"
+            micro_dev_bp = ((micro_dev / mid) * 10000.0) if mid > 0 else None
             rec = {
-                "ts": round(time.time(), 3),
+                "kind": "predict",
+                "id": rec_id,
+                "ts": round(now, 3),
                 "iso": _iso(),
                 "event": event,
-                "live_decision": live_decision,
-                "axe_action": axe_action,
-                "axe_reason": axe_res.get("reason"),
-                "axe_grade": axe_res.get("grade"),
-                "axe_expected_drift_1s": axe_res.get("expected_drift_1s"),
-                "axe_toxic_prob_pct": axe_res.get("toxic_prob_pct"),
-                "agreement": agreement,
-                "features": {
-                    "wobi": round(wobi, 4),
-                    "spread_bp": round(spread_bp, 2),
-                    "cancel_rate": round(cancel_rate, 4),
-                    "micro_dev": round(micro_dev, 4),
-                },
+                "live_context": live_decision,
+                "mid_t": mid if mid > 0 else None,
+                "spread_bp": round(spread_bp, 4),
+                "wobi": round(wobi, 4),
+                "cancel_rate": round(cancel_rate, 4),
+                "micro_dev_bp": None if micro_dev_bp is None else round(micro_dev_bp, 4),
                 "venue_net": round(self.confirmed_net, 8),
-                "details": details or {},
+                "mu_1s_bp": axe_res.get("mu_1s_bp"),
+                "p_fill": axe_res.get("p_fill"),
+                "m_adv_1s_bp": axe_res.get("m_adv_1s_bp"),
+                "inv_penalty_bp": axe_res.get("inv_penalty_bp"),
+                "capture_bp": axe_res.get("capture_bp"),
+                "ev_quote_bp": axe_res.get("ev_quote_bp"),
+                "lut_key": axe_res.get("lut_key"),
+                "lut_drift_yen": axe_res.get("lut_drift_yen"),
             }
             _append(AXE_SHADOW_LOG, rec)
+            prev_predict = self.last_axe_predict_id
+            self.last_axe_predict_id = rec_id
+            if mid > 0:
+                self.axe_pending.append({
+                    "id": rec_id,
+                    "ts": now,
+                    "mid_t": mid,
+                    "mu_1s_bp": rec["mu_1s_bp"],
+                    "need_1s": True,
+                    "need_5s": True,
+                })
+            if event == "ORDER_FILL":
+                fill_px = qpx
+                if fill_px > 0:
+                    fill_id = rec_id
+                    _append(AXE_SHADOW_LOG, {
+                        "kind": "fill",
+                        "id": fill_id,
+                        "predict_id": prev_predict,
+                        "ts": round(now, 3),
+                        "iso": _iso(),
+                        "fill_px": fill_px,
+                        "side": details.get("side"),
+                        "source": details.get("source"),
+                    })
+                    self.axe_fill_pending.append({
+                        "id": fill_id,
+                        "fill_ts": now,
+                        "fill_px": fill_px,
+                        "side": details.get("side") or "BUY",
+                        "need_1s": True,
+                        "need_5s": True,
+                    })
             return rec
         except Exception as exc:
             _log(f"[AXE_SHADOW] eval error: {exc}")
@@ -1026,6 +1169,8 @@ class TF2BWobi3Live(TF2BWobi3LiveExecutor):
         best_bid = float(getattr(snap, "best_bid", 0.0) or 0.0)
         best_ask = float(getattr(snap, "best_ask", 0.0) or 0.0)
         mid = float(getattr(snap, "mid_price", 0.0) or 0.0)
+        if mid > 0:
+            self._flush_axe_realizations(now, mid)
         execs = self._poll_executions()
         self._scan_board_imitation(execs, best_bid, best_ask)
         if self.need_sync or (now - self.last_pos_poll) >= POS_POLL_SEC:

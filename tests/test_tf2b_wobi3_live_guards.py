@@ -370,27 +370,72 @@ class TestWobi3LiveGuards(unittest.TestCase):
 
     def test_axe_shadow_evaluation(self):
         runner = self._paper_live()
-        if runner.axe is not None:
-            self.assertGreater(len(runner.axe.matrix), 0)
-            res = runner.evaluate_shadow_axe(
-                event="TEST_EVAL",
-                m={"wobi": 0.40, "spread_bp": 1.2, "cancel_ask": 0.05, "norm_disloc": 1.0},
-                snap=None,
-                live_decision="POST_BUY",
-                details={"unit_test": True},
-            )
-            self.assertIsNotNone(res)
-            self.assertIn("axe_action", res)
-            self.assertIn("agreement", res)
-            self.assertTrue(res["agreement"])
+        if runner.axe is None:
+            self.skipTest("DistilledAxe not loaded")
+        self.assertGreater(len(runner.axe.matrix), 0)
+        mid = 12_580_000.0
+        res = runner.evaluate_shadow_axe(
+            event="TEST_EVAL",
+            m={"wobi": 0.40, "spread_bp": 1.2, "cancel_ask": 0.05, "norm_disloc": 1.0},
+            snap=None,
+            live_decision="POST_BUY",
+            details={"unit_test": True, "mid": mid},
+        )
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "predict")
+        self.assertNotIn("axe_action", res)
+        self.assertNotIn("agreement", res)
+        self.assertIsNone(res["p_fill"])
+        self.assertIsNone(res["m_adv_1s_bp"])
+        self.assertIsNone(res["ev_quote_bp"])
+        self.assertEqual(res["mid_t"], mid)
+        if res["lut_drift_yen"] is not None:
+            self.assertAlmostEqual(res["mu_1s_bp"], res["lut_drift_yen"] / mid * 10000.0, places=4)
 
-            shadow_file = self.tmppath / "axe_shadow_audit.jsonl"
-            self.assertTrue(shadow_file.exists())
-            import json
-            lines = shadow_file.read_text(encoding="utf-8").strip().split("\n")
-            last_record = json.loads(lines[-1])
-            self.assertEqual(last_record["event"], "TEST_EVAL")
-            self.assertEqual(last_record["live_decision"], "POST_BUY")
+        shadow_file = self.tmppath / "axe_shadow_audit.jsonl"
+        self.assertTrue(shadow_file.exists())
+        import json
+        lines = shadow_file.read_text(encoding="utf-8").strip().split("\n")
+        last_record = json.loads(lines[-1])
+        self.assertEqual(last_record["event"], "TEST_EVAL")
+        self.assertEqual(last_record["live_context"], "POST_BUY")
+        self.assertEqual(last_record["kind"], "predict")
+
+    def test_axe_realization_backfill(self):
+        runner = self._paper_live()
+        if runner.axe is None:
+            self.skipTest("DistilledAxe not loaded")
+        mid_t = 12_580_000.0
+        predict = runner.evaluate_shadow_axe(
+            event="TEST_EVAL",
+            m={"wobi": 0.10, "spread_bp": 1.5},
+            live_decision="WAIT",
+            details={"mid": mid_t},
+        )
+        self.assertIsNotNone(predict)
+        later_mid = mid_t * (1.0 - 2.0 / 10000.0)
+        runner._flush_axe_realizations(time.time() + 1.1, later_mid)
+        import json
+        rows = [
+            json.loads(line)
+            for line in (self.tmppath / "axe_shadow_audit.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        realized = [r for r in rows if r.get("kind") == "realized" and r.get("horizon_s") == 1]
+        self.assertTrue(realized)
+        self.assertAlmostEqual(realized[-1]["delta_mid_bp"], -2.0, places=2)
+        self.assertEqual(realized[-1]["id"], predict["id"])
+
+    def test_distilled_axe_returns_numbers_not_verbs(self):
+        runner = self._paper_live()
+        if runner.axe is None:
+            self.skipTest("DistilledAxe not loaded")
+        out = runner.axe.evaluate(0.40, 1.2, 0.05, 1.0, mid=12_580_000.0)
+        self.assertNotIn("action", out)
+        self.assertNotIn("grade", out)
+        self.assertIsNone(out["p_fill"])
+        self.assertIsNone(out["ev_quote_bp"])
+        self.assertIn("mu_1s_bp", out)
 
 
 if __name__ == "__main__":
