@@ -3041,3 +3041,12 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
   - 平常時スプレッド（1.5bp）に対して `ADVERSE_CUT_BP = 1.8bp` が極小すぎ、約定直後に即死する構造的欠陥および利確（TP）欠落・逆選択を特定。
 - 紙のみ。LIVE非触。WIRE=NO。
 
+## 171. CSR-664 — HONEST MM 交差 ENTER 拒否と即刈り（2026-11-02 12:44）
+
+- 662 以降の ENTER CONFIRM は交差 58 / プリント 1。交差時点で bid-offer は無い。
+- `ev_hold` が反対指値を PULL し、1–3bp を刈れない。
+- WOBIMM4_HONEST 紙だけ: ENTER の `BOOK_CROSS` は CONFIRM せず引く。EXIT のクロスは通す。
+- `instant_harvest`: 載ったら即 EXIT（ask−1 / bid+1）。非 HONEST WOBIMM4 は `ev_hold` のまま。
+- CLOSE に `entry_src` / `hold_s`。新しい bp / 秒ゲートは足さない。
+- 紙のみ。LIVE / FROZEN / CSR-635 / ピン非触。WIRE=NO。Economic_PASS=NO。
+

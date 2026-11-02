@@ -599,6 +599,12 @@ GOV: SPREAD_MAX=OFF · WIRE=NO · LIVE=untouched · pins frozen
 
 GOV: HONEST_FLEET=MM+MS1+TF1A · WIRE=NO · LIVE=untouched · pins frozen
 
+**CSR-664（2026-11-02 12:44 JST）:** HONEST MM を bid-offer 即刈りへ。662 以降 ENTER CONFIRM 58/59 が BOOK_CROSS。交差 fill は幅が無い。`ev_hold` は反対指値を引く。HONEST 紙だけ ENTER の BOOK_CROSS を CONFIRM せず、載ったら ask−1/bid+1 を即出す（`instant_harvest`）。EXIT クロスは通す。NO_EDGE 全部スキップは戻さない。非 HONEST WOBIMM4 は ev_hold のまま。台帳に `entry_src` / `hold_s`。bp/秒は足さない。CSR-635 / 幅 / 0.5bp / LIVE / FROZEN 非触。紙のみ · WIRE=NO · Economic_PASS=NO。
+
+2026-11-02 | CSR-664 | HONEST no CROSS ENTER · instant harvest ask-1 | LOCK
+
+GOV: WOBIMM4_HONEST=HARVEST · CROSS_ENTER=OFF · WIRE=NO · LIVE=untouched · WOBIMM4=keep · pins frozen
+
 
 
 
