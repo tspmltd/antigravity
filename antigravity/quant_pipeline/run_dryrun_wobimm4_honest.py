@@ -3,7 +3,8 @@
 """WOBIMM4_HONEST — UKI one-sided + board-imitation fills (WIRE=NO).
 
 Two-sided. Same public_maker_fill as LIVE (PUBLIC_OID → BOOK_CROSS → BOARD_TRADE).
-PREDICT_MISS pulls the stale ENTER so the next tick can sit current maker.
+BOARD_TRADE books on the print tick (the print is consumed; next snap is MISS).
+ENTER BOOK_CROSS is still refused. PREDICT_MISS pulls a stale CROSS wait.
 Not LIVE.
 """
 from __future__ import annotations
@@ -50,6 +51,43 @@ class WOBIMM4HonestDryRun(WOBIMM4DryRun):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._last_hb = 0.0
+
+    def _maybe_fill(self, execs, bid: float, ask: float) -> None:
+        """BOARD_TRADE is the print in hand. Waiting a snap deletes it.
+
+        2.9h after CSR-664: PREDICT BOARD_TRADE 51/51 MISS, CROSS skipped,
+        closes 0. Book the uncrossed print now. CROSS ENTER still waits
+        then confirm_book_cross. EXIT CROSS still confirms.
+        """
+        if self._confirm_predicted_fill(execs, bid, ask):
+            return
+        if not self.working_side or self._pending_fill:
+            return
+        src = board_predicts_fill(self.working_side, self.working_px, bid, ask, execs)
+        if not src:
+            return
+        if src == "BOARD_TRADE":
+            if self.net == 0:
+                tape = getattr(self, "_tape", None) or {}
+                live, live_why = signed_signal(
+                    float(tape.get("wobi") or 0.0),
+                    float(tape.get("recent_ofi") or 0.0),
+                )
+                want = BUY if str(self.working_side).upper() == "BUY" else SELL
+                if live != 0 and live != want:
+                    _log(
+                        f"[{self.lane_name}] CONFIRM_SKIP {self.working_side} @ "
+                        f"{self.working_px:,.0f} ev_gone {live_why}"
+                    )
+                    self._pull("confirm_ev_gone")
+                    return
+            _log(
+                f"[{self.lane_name}] CONFIRM {self.working_side} @ "
+                f"{self.working_px:,.0f} src=BOARD_TRADE same-tick"
+            )
+            self._apply_fill(self.working_side, self.working_px, src)
+            return
+        self._predict_fill(src)
 
     def _confirm_predicted_fill(self, execs, bid: float, ask: float) -> bool:
         """Venue miss → drop stale px. ENTER confirm needs live EV.
@@ -122,7 +160,7 @@ class WOBIMM4HonestDryRun(WOBIMM4DryRun):
                 "WOBIMM4", "WOBIMM4_HONEST"
             )
             payload["embeds"][0]["description"] = (
-                "MM HONEST · board-imitation · no CROSS ENTER · harvest ask-1 · "
+                "MM HONEST · same-tick BOARD_TRADE · no CROSS ENTER · harvest ask-1 · "
                 "WIRE=NO. Not LIVE. Not CSR-635."
             )
             payload["embeds"][0]["footer"] = {

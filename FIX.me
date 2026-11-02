@@ -605,6 +605,12 @@ GOV: HONEST_FLEET=MM+MS1+TF1A · WIRE=NO · LIVE=untouched · pins frozen
 
 GOV: WOBIMM4_HONEST=HARVEST · CROSS_ENTER=OFF · WIRE=NO · LIVE=untouched · WOBIMM4=keep · pins frozen
 
+**CSR-665（2026-11-02 16:10 JST）:** HONEST MM 取引ゼロ。CSR-664 後 2.9h で BOARD_TRADE PREDICT 51/51 が次スナップ MISS。プリントは poll 消費。交差 ENTER は拒否のまま。HONEST 紙だけ未交差 BOARD_TRADE を同ティック CONFIRM。CSR-627 の確認なし内部クローズではない（公開 print がこのティックにある）。bp/秒は足さない。紙のみ · LIVE / FROZEN / CSR-635 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-02 | CSR-665 | HONEST same-tick BOARD_TRADE confirm | LOCK
+
+GOV: WOBIMM4_HONEST=HARVEST · BOARD_TRADE=SAME_TICK · CROSS_ENTER=OFF · WIRE=NO · LIVE=untouched · pins frozen
+
 
 
 

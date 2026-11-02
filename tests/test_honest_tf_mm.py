@@ -280,6 +280,31 @@ class TestHonestLanes(unittest.TestCase):
         self.assertEqual(m["fill"], "BOARD_IMITATION")
         self.assertFalse(m["buy_only"])
 
+    def test_mm_honest_books_board_trade_same_tick(self):
+        dry = WOBIMM4HonestDryRun(market_source="shared_feeder")
+        dry.working_side = "BUY"
+        dry.working_px = 103.0
+        dry.working_id = "SIM-BUY-ST"
+        dry.net = 0
+        dry._tape = {"wobi": 0.40, "recent_ofi": 0.08}
+        execs = [{"side": "SELL", "price": 103.0, "size": 0.01}]
+        dry._maybe_fill(execs, bid=103.0, ask=105.0)
+        self.assertEqual(dry.net, 1)
+        self.assertEqual(dry.entry_src, "BOARD_TRADE")
+        self.assertIsNone(dry._pending_fill)
+
+    def test_mm_honest_cross_enter_predicts_not_books(self):
+        dry = WOBIMM4HonestDryRun(market_source="shared_feeder")
+        dry.working_side = "BUY"
+        dry.working_px = 103.0
+        dry.working_id = "SIM-BUY-XC2"
+        dry.net = 0
+        dry._tape = {"wobi": 0.40, "recent_ofi": 0.08}
+        dry._maybe_fill([], bid=100.0, ask=103.0)
+        self.assertEqual(dry.net, 0)
+        self.assertIsNotNone(dry._pending_fill)
+        self.assertEqual(dry._pending_fill["src"], "BOOK_CROSS")
+
     def test_mm_honest_confirm_skips_book_cross_enter(self):
         dry = WOBIMM4HonestDryRun(market_source="shared_feeder")
         dry.working_side = "BUY"

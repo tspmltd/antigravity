@@ -3050,3 +3050,10 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - CLOSE に `entry_src` / `hold_s`。新しい bp / 秒ゲートは足さない。
 - 紙のみ。LIVE / FROZEN / CSR-635 / ピン非触。WIRE=NO。Economic_PASS=NO。
 
+## 172. CSR-665 — HONEST MM は BOARD_TRADE を同ティックで載せる（2026-11-02 16:10）
+
+- CSR-664 後 2.9h: ENTER 137、BOARD_TRADE PREDICT 51 は全部 MISS、CROSS は拒否、往復 0。
+- プリントは poll で消費される。次スナップ待ちは確認不能。交差だけが残る。
+- HONEST 紙だけ: 板が交差していない `BOARD_TRADE` は同ティックで載せる。ENTER の CROSS は拒否のまま。
+- 紙のみ。LIVE / FROZEN / CSR-635 / ピン非触。WIRE=NO。Economic_PASS=NO。
+

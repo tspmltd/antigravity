@@ -650,8 +650,8 @@ class WOBIMM4DryRun:
             "stats_1h": s1,
             "stats_24h": s24,
             "note": (
-                "UKI one-sided · harvest ask-1 · no CROSS ENTER · "
-                "ADVERSE_CUT −1.8bp · WIRE=NO"
+                "UKI one-sided · harvest ask-1 · same-tick BOARD_TRADE · "
+                "no CROSS ENTER · ADVERSE_CUT −1.8bp · WIRE=NO"
                 if getattr(self, "INSTANT_HARVEST", False)
                 else
                 "UKI one-sided · live EV hold · ev_gone flatten · "
