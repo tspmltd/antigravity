@@ -527,6 +527,79 @@ GOV: WOBI3_LIVE=ON · EXACT_FLAT=ACTIVE · WIRE=YES · size=0.001 · .env false 
 
 GOV: WOBI3_LIVE=ON · AXE_SHADOW=ACTIVE · WIRE=YES · size=0.001 · .env false · WOBIMM STOP pin
 
+**CSR-652（2026-10-31 14:45 JST）:** DRYRUN 決済に板模倣予測と取引所確認を入れる。0.5bp drift 再掲示は不採用・削除。EXIT は ask−1 / bid+1（確認が返るあいだに print が通る価格）。模倣ヒットは PREDICT、次スナップでまだ通るなら CONFIRM、通らなければ MISS して埋まる価格へ差し替え。ENTER は maker のまま。紙のみ · LIVE非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-10-31 | CSR-652 | DRYRUN predict then venue confirm · no 0.5bp | LOCK
+
+GOV: WOBIMM4=PREDICT_THEN_CONFIRM · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-653（2026-10-31 19:56 JST）:** WOBIMM4 取引数不足。`ride_signal` の暗転在庫をやめ、COVER_WAIT 以外は決済側を出す（recycle）。COVER_WAIT は WOBI∩OFI（OR をやめる）。ofi ノイズだけで 8h カバー不能になっていた。閾値の数値は変えない。紙のみ · LIVE非触 · FROZEN WOBIMM 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-10-31 | CSR-653 | WOBIMM4 recycle flatten · no dark inventory | LOCK
+
+GOV: WOBIMM4=RECYCLE · WIRE=NO · LIVE=untouched · FROZEN=keep · pins frozen
+
+**CSR-654（2026-10-31 20:01 JST）:** 期待値があるあいだだけポジション維持。期待値は live の WOBI∩OFI が建玉と同方向であること。ラッチ・NO_EDGE・逆方向は即 flatten（ev_gone）。COVER_WAIT / ride_signal / recycle 常時決済は使わない。bp/時間は足さない。紙のみ · LIVE非触 · FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-10-31 | CSR-654 | hold only while live EV · else flatten | LOCK
+
+GOV: WOBIMM4=EV_HOLD · WIRE=NO · LIVE=untouched · FROZEN=keep · pins frozen
+
+**CSR-655（2026-10-31 20:06 JST）:** TF2B_WOBI5_HONEST は件数が少ないので、live の買いエッジ（wobi≥0.20 かつ ofi≥0）があるあいだ FAST_HARVEST / FRONTIER で切らない。エッジ消失で即 flatten。ofi=0 は沈黙であり逆行ではない。紙のみ · LIVE非触 · WOBI5 本体非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-10-31 | CSR-655 | TF HONEST hold while live EV | LOCK
+
+GOV: TF_HONEST=EV_HOLD · WIRE=NO · LIVE=untouched · WOBI5=keep · pins frozen
+
+**CSR-656（2026-11-01 06:10 JST）:** WOBIMM4_HONEST 取引数不足。ENTER の 0.5bp `edge_drift` が指値を埋まる前に引く（POST 611 / FILL 232 / CANCEL 373）。drift 引きを削除。逆行とシグナル反転のみ PULL。bp 閾値は足さない。紙のみ · LIVE非触 · FROZEN / CSR-635 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-01 | CSR-656 | HONEST MM drop ENTER drift pull | LOCK
+
+GOV: WOBIMM4=NO_DRIFT_PULL · WIRE=NO · LIVE=untouched · FROZEN=keep · pins frozen
+
+**CSR-657（2026-11-01 06:14 JST）:** TF2B_WOBI5_HONEST 取引数不足。ENTER が毎ティック壁アンカー再掲示＋0.5bp `edge_drift` で座らない（POST 3736 / FILL 126 / CANCEL 1043）。BUY は据え置き。drift 引きを無視。逆行だけ PULL。EXIT は埋められる価格へ動かす。bp 閾値は足さない。紙のみ · LIVE非触 · WOBI / WOBI2 / WOBI5 本体非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-01 | CSR-657 | TF HONEST sit ENTER · no drift pull | LOCK
+
+GOV: TF_HONEST=SIT_ENTER · WIRE=NO · LIVE=untouched · WOBI5=keep · pins frozen
+
+**CSR-658（2026-11-01 20:52 JST）:** WOBIMM4_HONEST 取引数不足。CSR-656 後は指値は座るが PREDICT_MISS 177 / CONFIRM 182 のあと古い ENTER が残る。long_tight BUY も件数を削る。MISS したらその指値を引く（0.5bpではない。次ティックで今の maker）。long_tight を外す。紙のみ · LIVE非触 · WOBIMM4 / FROZEN / CSR-635 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-01 | CSR-658 | HONEST MM predict_miss replace · drop long_tight | LOCK
+
+GOV: WOBIMM4_HONEST=MISS_REPLACE · WIRE=NO · LIVE=untouched · WOBIMM4=keep · pins frozen
+
+**CSR-659（2026-11-01 21:30 JST）:** HONEST MM 運用が件数追い。BOOK_CROSS で貫かれた ENTER を載せて即 ev_gone、1件 −2.5〜−3bp（24h 167件 勝率 1.2%）。確認スナップで live EV が無い ENTER は載せず `confirm_ev_gone`。EXIT は埋める。bp は足さない。CSR-635 紙は止めて HONEST 呼称を WOBIMM4_HONEST に一本化。ピン非改変。紙のみ · LIVE非触 · WOBIMM4 / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-01 | CSR-659 | HONEST confirm skip dead ENTER · one HONEST name | LOCK
+
+GOV: WOBIMM4_HONEST=CONFIRM_EV · CSR635=stopped · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-660（2026-11-02 07:14 JST）:** HONEST MM 取引数不足。CSR-659 が NO_EDGE も ENTER 拒否（skip 74 中 68 が NO_EDGE、confirm 6、close 3 / 9.7h）。ofi=0 は沈黙。逆行だけ CONFIRM_SKIP。bp は足さない。紙のみ · LIVE非触 · WOBIMM4 / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-02 | CSR-660 | HONEST confirm skip invert only | LOCK
+
+GOV: WOBIMM4_HONEST=SKIP_INVERT · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-661（2026-11-02 07:44 JST）:** SPREAD_MAX 2.8 に採用理由が無かった（TF2B_WOBI のコピー）。検証して記録。tracker n=300 p99=2.90・>2.8 は 1.67%。180s p90=2.78 p95=2.87。HONEST の wide cancel は 2.8–7.6bp。2.8 はショック上側約1–2% の切り捨てとして採用。EV バケットは台帳に spread が無く未検証。数値は変えない。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-02 | CSR-661 | verify record SPREAD_MAX 2.8 ≈ p99 | LOCK
+
+GOV: SPREAD_MAX=VERIFIED_P99 · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-662（2026-11-02 08:17 JST）:** WOBIMM4 の spread 制限を撤廃。`SPREAD_MAX_BP` / `SPREAD_TOO_WIDE` を削除。メーカー板模倣（ENTER=touch · EXIT=ask−1/bid+1）に広い板を止めるゲートは無い。CSR-661 は分布のみで EV ではない。代替ゲートは足さない。紙のみ · LIVE / FROZEN / TF / WOBIMM3 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-02 | CSR-662 | drop WOBIMM4 SPREAD_MAX | LOCK
+
+GOV: SPREAD_MAX=OFF · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-663（2026-11-02 11:15 JST）:** 3戦略DRYRUN並走体制の構築。高回転マイクロスキャル（旧TF2B_WOBI5_HONEST）はロジック無修正のまま `MS1_WOBI_HONEST` にリネーム。本来のトレンドフォロー（期待値トレンド獲得・保有時間伸長・1回+5.0bp以上目標・動的トレイリング）を `TF1A_WOBI_HONEST` として完全新設。`honest_discord.py` を3戦略（WOBIMM4 / MS1 / TF1A）集約レポーターに改修し並走稼働。WOBIMM4_HONEST の構造分析（勝率1.1%、スプレッド1.5bp vs ADVERSE_CUT 1.8bp の即死構造）を完了・記録。紙のみ · LIVE非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-02 | CSR-663 | 3-strategy HONEST fleet (MM / MS1 / TF1A) & WOBIMM4 audit | LOCK
+
+GOV: HONEST_FLEET=MM+MS1+TF1A · WIRE=NO · LIVE=untouched · pins frozen
+
+
 
 
 

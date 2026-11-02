@@ -2956,3 +2956,88 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - Phase 3: 知識蒸留による 60セル O(1) Look-Up Table & ゼロアロケーション評価器（`distilled_axe.py`, 863,541 回/秒 = 1.158µs/eval）生成。
 - Phase 4: `run_tf2b_wobi3_live.py` への Shadow Verification Mode 組み込み。実発注ロジックには一切手を加えず（WIRE=NO for strategy changes）、リアルタイム影テレメトリ（`axe_shadow_audit.jsonl`）の蓄積を開始。単体テスト23件全PASS。
 - プロセス再起動（新 pid=1802988）。建玉 0.00000000 BTC（FLAT）。残高・証拠金健全。
+
+## 159. CSR-652 — DRYRUN 板模倣予測 → 取引所確認（2026-10-31 14:45）
+
+- 0.5bp 超えで再掲示する仕組みは入れない（削除）。
+- 決済価格は板模倣で埋まる位置（cover BUY=ask−1）。確認が返るまでの print を見込む。
+- 模倣ヒットは PREDICT。次の板でまだ通るなら CONFIRM。通らなければ MISS して差し替え。
+- 紙のみ。LIVE非触。
+
+## 160. CSR-653 — WOBIMM4 決済側を出して回転（2026-10-31 19:55）
+
+- `ride_signal` の KEEP・指値なしをやめる。COVER_WAIT 以外は flatten を出す。
+- COVER_WAIT は WOBI∩OFI。ofi ノイズだけでカバー不能にしない。数値は据え置き。
+- 紙のみ。LIVE非触。FROZEN WOBIMM 非触。
+
+## 161. CSR-654 — 期待値があるあいだだけ持つ（2026-10-31 20:01）
+
+- 建玉と同方向の live WOBI∩OFI があるときだけ ev_hold。
+- ラッチや NO_EDGE や逆方向は ev_gone で即決済。8h 暗転の再発を止める。
+- 紙のみ。LIVE非触。
+
+## 162. CSR-655 — TF HONEST は期待値があるあいだ持つ（2026-10-31 20:06）
+
+- 件数が少ないので FAST_HARVEST / −1.8 で刈ると集積しない。
+- live wobi≥0.20 かつ ofi≥0 のあいだ ev_hold。消えたら ev_gone。
+- 紙のみ。WOBI5 本体と LIVE は非触。
+
+## 163. CSR-656 — HONEST MM の ENTER drift 引きを削除（2026-11-01 06:10）
+
+- 0.5bp edge_drift が指値を埋まる前にキャンセルしていた。
+- 逆行とシグナル反転のときだけ PULL。紙のみ。LIVE / FROZEN 非触。
+
+## 164. CSR-657 — TF HONEST の ENTER を据え置く（2026-11-01 06:14）
+
+- 毎ティックの壁アンカー再掲示と 0.5bp edge_drift で BUY が座らなかった。
+- BUY は据え置き。逆行だけ引く。EXIT は埋められる価格へ動かす。
+- 紙のみ。WOBI / WOBI2 / WOBI5 本体と LIVE は非触。
+
+## 165. CSR-658 — HONEST MM は MISS したら差し直す（2026-11-01 20:52）
+
+- 据え置きのあと PREDICT_MISS で古い ENTER が座ったまま埋まりにくい。
+- MISS はその指値を引く。次ティックで今の maker。0.5bp は使わない。
+- long_tight BUY を外す。紙のみ。WOBIMM4 / FROZEN / CSR-635 / LIVE 非触。
+
+## 166. CSR-659 — 死んだ ENTER を載せない（2026-11-01 21:30）
+
+- 件数を追って BOOK_CROSS を載せて即 flatten。往復 −3bp。
+- 確認時に live EV が無い ENTER は載せず引く。EXIT は通す。
+- CSR-635 紙を止めて HONEST は WOBIMM4_HONEST だけ。ピンは変えない。
+
+## 167. CSR-660 — 確認スキップは逆行だけ（2026-11-02 07:14）
+
+- NO_EDGE 拒否が 68/74。一晩 3 往復。ofi=0 は沈黙。
+- 逆方向の live だけ ENTER を載せず。紙のみ。LIVE / FROZEN / WOBIMM4 非触。
+
+## 168. CSR-661 — SPREAD_MAX 2.8 を測ってから採用（2026-11-02 07:44）
+
+- 元は TF2B_WOBI のコピーで理由なし。採用しない、が先。
+- tracker n=300: p50=1.66 p95=2.49 p99=2.90。>2.8 は 1.67%。
+- 180s 板: p90=2.78 p95=2.87 p99=3.24。HONEST wide cancel 2.8–7.6。
+- 2.8 はショック上側約1–2%。台帳に spread が無いので EV 最適ではない。
+- 記録: `data/mm_research/wobimm4_spread_gate_verify.json`。数値は据え置き。LIVE / FROZEN 非触。
+
+## 169. CSR-662 — spread 制限撤廃（2026-11-02 08:17）
+
+- メーカー板模倣で広い板を止めていた。TF テイカーのコピー。
+- `SPREAD_MAX_BP` / `SPREAD_TOO_WIDE` を削除。代替ゲートなし。
+- CSR-661 の分布記録は残す。EV 証明には使わない。紙のみ。LIVE / FROZEN 非触。
+
+## 170. CSR-663 — 3戦略DRYRUN並走体制と純TF新設 & WOBIMM4分析（2026-11-02 11:15）
+
+- **TF2B_WOBI5_HONEST を MS1_WOBI_HONEST にリネーム**:
+  - ロジックは無修正のまま維持。実態が高回転マイクロスキャルピングであるため `MS1` (Micro Scalping 1) へ呼称・レーン名を統一。
+  - スクリプト: `antigravity/quant_pipeline/run_dryrun_ms1_wobi_honest.py`
+  - 台帳: `data/mm_research/ms1_wobi_honest_dryrun/`
+- **純粋トレンドフォロー TF1A_WOBI_HONEST を新設・配備**:
+  - 本来のTF定義（期待値のある持続トレンドの獲得、保有時間を伸ばし収益最大化、1回収益目標 +5.0bp 以上）に準拠して新規設計。
+  - スクリプト: `antigravity/quant_pipeline/run_dryrun_tf1a_wobi_honest.py`
+  - 特徴: 1秒単位の板一時ブレ（EV_GONE）でのチキン利食いを排除。+5bp突破で建値ロック（+0.5bp）、+8bp突破でピーク-2.5bp動的トレイリングストップ。ハードストップ -4.0bp。
+- **HONEST 3戦略並走レポーター**:
+  - `honest_discord.py` を改修し、①WOBIMM4_HONEST (MM) / ②MS1_WOBI_HONEST (Micro Scalp) / ③TF1A_WOBI_HONEST (Pure TF) の3戦略を毎時集約送信。
+- **WOBIMM4_HONEST 成績分析・課題特定**:
+  - 通算 273件中 3勝 270敗（勝率 1.1%）、累積 -1,494.28 bp。
+  - 平常時スプレッド（1.5bp）に対して `ADVERSE_CUT_BP = 1.8bp` が極小すぎ、約定直後に即死する構造的欠陥および利確（TP）欠落・逆選択を特定。
+- 紙のみ。LIVE非触。WIRE=NO。
+
