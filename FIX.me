@@ -641,6 +641,12 @@ GOV: TF1A_ENTER=V3 · SPREAD_GATE=OFF · FRESH5_GATE=OFF · LEDGER=ENTRY_SPREAD 
 
 GOV: TF1A_V3=VERIFIED_SP92_GT2_N39 · FLEET=STABLE · WIRE=NO · LIVE=untouched · pins frozen
 
+**CSR-671（2026-11-05 10:20 JST）:** CSR-666〜670 コード/台帳/プロセス突合監査 & FIX訂正の git 定着。666/668 PASS、667 PARTIAL（Noop残置・stall閾値180–900s・council stallはDiscordのみ）、669 の「agent -0.41防御」削除、670 の entry_spread n=424誤記・+12.41の>2帰属・「破滅スリップなし」を実測（sp92 / gt2 n=39 / -21.35）で訂正。`FIX.me` CORRECTED stamp 反映。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-05 | CSR-671 | Audit-correct CSR-667/669/670 claims vs code/ledger | LOCK
+
+GOV: CSR666-670=AUDIT_CORRECTED · WIRE=NO · LIVE=untouched · pins frozen
+
 
 
 

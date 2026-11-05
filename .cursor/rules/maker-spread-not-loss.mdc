@@ -1,0 +1,13 @@
+---
+description: Maker HONEST — spread widening is not a loss gate (CSR-662)
+alwaysApply: true
+---
+
+# Maker spread ≠ loss
+
+- **Do not** treat `spread_bp` expansion as a reason to block maker ENTER (HONEST MM / MS1 / TF1A board-imitation).
+- **FIX.me CSR-661:** SPREAD_MAX was an unvalidated TF copy; measured distribution only — **not EV**.
+- **FIX.me CSR-662:** WOBIMM4 dropped `SPREAD_MAX` / `SPREAD_TOO_WIDE`. Wide books are often **trend opportunity**, not toxicity.
+- Crude bucket EV that looks worse at 2–3bp is usually **confound** (chop / weak ret60 / higher MAE fill-slip), not proof that spread causes loss. **≥3bp often has the best MFE/EV.**
+- If a band looks bad, investigate regime/flow/exit slip — **do not re-impose SPREAD≤2 as KEEP** without causal evidence.
+- LIVE `wobimm3_policy.entry_gate` may still list spread historically; paper HONEST makers should observe-only or skip that leg unless a new EV study overturns CSR-662.
