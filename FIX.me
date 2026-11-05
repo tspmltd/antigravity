@@ -647,6 +647,23 @@ GOV: TF1A_V3=VERIFIED_SP92_GT2_N39 · FLEET=STABLE · WIRE=NO · LIVE=untouched 
 
 GOV: CSR666-670=AUDIT_CORRECTED · WIRE=NO · LIVE=untouched · pins frozen
 
+**CSR-672（2026-11-05 11:56 JST）:** MM5 を Position-EV 設計へ抜本修正。`instant_harvest`（無条件即flatten）は期待値放棄であり MM/TF の本質差（波のスケールのみ）に反する。WOBIMM5: `INSTANT_HARVEST=False` · `REST_EXIT_ON_EV_HOLD=True`（EV>0は対向指値を残して握る）· EV消失/`adverse_cut` のみ HIT_TOUCH。MM4 harvest は A/B baseline として存続。TF2A は HS force 並走継続。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-05 | CSR-672 | MM5 Position-EV (drop instant_harvest; rest opposite while EV) | LOCK
+
+GOV: MM5=POSITION_EV · MM4=HARVEST_BASELINE · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-673（2026-11-05 18:10 JST）:** ADVERSE 未観測を是正。MS1/旧MM5は AdverseExcursion を台帳に出しておらず毒性 fill が測れなかった。`honest_adverse_kit.py` 共有化。**MS2_WOBI_HONEST** 新設（MS1 A/B）: AE path observe（mae/mfe/ae_*/hit_order）· entry `adverse_score≥55` veto · early toxic（MAE≤−1.5 / ae_1s≤−1.0）→ ADVERSE_FAST HIT_BID_FORCE。**MM5** に同 kit 配線: path observe + adverse_fast HIT_TOUCH（Position-EV 維持）。Discord 8戦略 · MS1→MS2 / MM4→MM5 Δ。紙のみ · LIVE/FROZEN非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-05 | CSR-673 | MS2 Adverse path+veto+fast-cut · MM5 AE observe/cut | LOCK
+
+GOV: MS2=ADVERSE_KIT · MM5=POS_EV+AE · DISCORD=8LANE · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-674（2026-11-05 19:25 JST）:** ニュース配信 X (旧Twitter) 投稿を完全中止・緊急停止。オペレータ指示に基づき、外部SNS（X）への自動ニュース配信を即時遮断。`XNotifier` に多重キルスイッチを実装（ファイルフラグ `data/X_POST_DISABLED.flag` および環境変数 `X_DISABLE_POST=true`）。`is_x_post_disabled()` により `is_configured()` / `post_tweet()` / `upload_media()` で即時遮断。全ニュースセンチネル（`edinet_sentinel`, `tdnet_sentinel`, `pts_sentinel`, `sekai_kabuka_realtime_sentinel`, `scheduler`）を再起動し、ログ上で `• X投稿連携: 無効`、`X投稿スキップ (未設定または無効)` を実測確認。なお、Discord 社内速報通知はそのまま継続。`risk_guard/notifier.py` の `import time` 欠落バグも修正。紙/ニュースのみ · LIVE/FROZEN非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-05 | CSR-674 | X post disabled kill switch · news sentinels restarted | LOCK
+
+GOV: X_POST=DISABLED · KILL_SWITCH=ON · DISCORD_NEWS=LIVE · WIRE=NO · LIVE=untouched · pins frozen
 
 
 
