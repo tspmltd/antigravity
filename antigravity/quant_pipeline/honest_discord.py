@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""HONEST paper hourly Discord — 3戦略並走 (MM / MS1 / TF1A).
+"""HONEST paper hourly Discord — 5戦略並走.
 
 1. WOBIMM4_HONEST (Honest MM)
-2. MS1_WOBI_HONEST (Micro Scalping)
-3. TF1A_WOBI_HONEST (Pure Trend Following · Target >= 5bp)
+2. WOBIMM4X2_HONEST (MM scale-in while signal)
+3. MS1_WOBI_HONEST (Micro Scalping)
+4. MS1X2_WOBI_HONEST (MS1 scale-in while signal)
+5. TF1A_WOBI_HONEST (Pure Trend Following · Target >= 5bp)
 
 WIRE=NO. 専用Webhookへの毎時自動通知。
 """
@@ -27,11 +29,15 @@ DEFAULT_HONEST_DISCORD_WEBHOOK_URL = (
 )
 
 MM_LEDGER = AG / "data" / "mm_research" / "wobimm4_honest_dryrun" / "paired_ledger.jsonl"
+MMX2_LEDGER = AG / "data" / "mm_research" / "wobimm4x2_honest_dryrun" / "paired_ledger.jsonl"
 MS1_LEDGER = AG / "data" / "mm_research" / "ms1_wobi_honest_dryrun" / "paired_ledger.jsonl"
+MS1X2_LEDGER = AG / "data" / "mm_research" / "ms1x2_wobi_honest_dryrun" / "paired_ledger.jsonl"
 TF1A_LEDGER = AG / "data" / "mm_research" / "tf1a_wobi_honest_dryrun" / "paired_ledger.jsonl"
 
 MM_STATE = AG / "data" / "dryrun_wobimm4_honest_state.json"
+MMX2_STATE = AG / "data" / "dryrun_wobimm4x2_honest_state.json"
 MS1_STATE = AG / "data" / "dryrun_ms1_wobi_honest_state.json"
+MS1X2_STATE = AG / "data" / "dryrun_ms1x2_wobi_honest_state.json"
 TF1A_STATE = AG / "data" / "dryrun_tf1a_wobi_honest_state.json"
 
 # フォールバック
@@ -54,6 +60,25 @@ def jst_midnight_ts(now: Optional[float] = None) -> float:
     return datetime(dt.year, dt.month, dt.day, tzinfo=JST).timestamp()
 
 
+def jst_one_hour_window(now: Optional[float] = None) -> tuple[float, float, str]:
+    """1h = one JST clock hour, not a rolling 3600s.
+
+    Hourly send is at HH:00:xx, so that post covers [HH-1:00, HH:00).
+    Mid-hour (startup) covers the in-progress clock hour [HH:00, now).
+    """
+    dt = datetime.fromtimestamp(now if now is not None else time.time(), JST)
+    floor = dt.replace(minute=0, second=0, microsecond=0)
+    elapsed = (dt - floor).total_seconds()
+    if elapsed < 120.0:
+        end = floor
+        start = floor - timedelta(hours=1)
+    else:
+        start = floor
+        end = dt
+    label = f"{start.strftime('%H:%M')}–{end.strftime('%H:%M')} JST"
+    return start.timestamp(), end.timestamp(), label
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -61,6 +86,17 @@ def _load_json(path: Path) -> Dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def is_ledger_junk(row: Dict[str, Any]) -> bool:
+    """Unit tests wrote CLOSE at price==103 into the live HONEST ledger."""
+    if "price" not in row:
+        return False
+    try:
+        px = float(row.get("price"))
+    except (TypeError, ValueError):
+        return False
+    return px == 103.0 or (px > 0.0 and px < 1000.0)
 
 
 def load_pnl_rows(path: Path) -> List[Dict[str, Any]]:
@@ -83,28 +119,47 @@ def load_pnl_rows(path: Path) -> List[Dict[str, Any]]:
             continue
         if not isinstance(row, dict) or "pnl_bp" not in row:
             continue
+        if is_ledger_junk(row):
+            continue
         rows.append(row)
     return rows
 
 
-def window_stats(rows: List[Dict[str, Any]], since_ts: float) -> Dict[str, Any]:
-    sub = [r for r in rows if float(r.get("ts") or 0.0) >= since_ts]
+def window_stats(
+    rows: List[Dict[str, Any]],
+    since_ts: float,
+    until_ts: Optional[float] = None,
+) -> Dict[str, Any]:
+    sub = []
+    for r in rows:
+        if is_ledger_junk(r):
+            continue
+        ts = float(r.get("ts") or 0.0)
+        if ts < since_ts:
+            continue
+        if until_ts is not None and ts >= until_ts:
+            continue
+        sub.append(r)
     n = len(sub)
     if not n:
         return {
             "total_trades": 0,
             "win_trades": 0,
+            "scratch_trades": 0,
             "win_rate_pct": 0.0,
             "pnl_bp": 0.0,
             "pnl_jpy": 0.0,
             "ev_bp": 0.0,
         }
-    wins = sum(1 for r in sub if bool(r.get("is_win")) or float(r.get("pnl_bp") or 0.0) > 0)
-    pnl_bp = round(sum(float(r.get("pnl_bp") or 0.0) for r in sub), 2)
+    pnls = [float(r.get("pnl_bp") or 0.0) for r in sub]
+    wins = sum(1 for x in pnls if x > 0.0)
+    scratches = sum(1 for x in pnls if x == 0.0)
+    pnl_bp = round(sum(pnls), 2)
     pnl_jpy = round(sum(float(r.get("pnl_jpy") or 0.0) for r in sub), 1)
     return {
         "total_trades": n,
         "win_trades": wins,
+        "scratch_trades": scratches,
         "win_rate_pct": round(100.0 * wins / n, 1),
         "pnl_bp": pnl_bp,
         "pnl_jpy": pnl_jpy,
@@ -123,39 +178,74 @@ def _fmt_block(name: str, s: Dict[str, Any]) -> str:
 def collect_honest_hourly(now: Optional[float] = None) -> Dict[str, Any]:
     ts = now if now is not None else time.time()
     midnight = jst_midnight_ts(ts)
-    hour_ago = ts - 3600.0
+    h0, h1, hour_label = jst_one_hour_window(ts)
 
     mm_rows = load_pnl_rows(MM_LEDGER)
+    mmx2_rows = load_pnl_rows(MMX2_LEDGER)
     ms1_rows = load_pnl_rows(MS1_LEDGER)
+    ms1x2_rows = load_pnl_rows(MS1X2_LEDGER)
     tf1a_rows = load_pnl_rows(TF1A_LEDGER)
 
     mm_state = _load_json(MM_STATE)
+    mmx2_state = _load_json(MMX2_STATE)
     ms1_state = _load_json(MS1_STATE) or _load_json(LEGACY_TF_STATE)
+    ms1x2_state = _load_json(MS1X2_STATE)
     tf1a_state = _load_json(TF1A_STATE)
 
     mm_net = mm_state.get("net_lots")
     mm_pos = f"net={mm_net:+d}" if mm_net is not None else "FLAT"
+    mmx2_net = mmx2_state.get("net_lots")
+    mmx2_pos = f"net={mmx2_net:+d}" if mmx2_net is not None else "FLAT"
     ms1_pos = str((ms1_state.get("MS1_WOBI_HONEST") or ms1_state.get("TF2B_WOBI5_HONEST") or ms1_state.get("TF2B_WOBI5") or {}).get("position") or "FLAT")
-    tf1a_pos = str((tf1a_state.get("TF1A_WOBI_HONEST") or {}).get("position") or "FLAT")
+    ms1x2_pos = str(
+        (
+            ms1x2_state.get("MS1X2_WOBI_HONEST")
+            or ms1x2_state.get("MS1_WOBI_HONEST")
+            or {}
+        ).get("position")
+        or "FLAT"
+    )
+    tf1a_pos = str(
+        (
+            tf1a_state.get("TF1A_WOBI_HONEST")
+            or tf1a_state.get("TF2B_WOBI5_HONEST")
+            or tf1a_state.get("TF2B_WOBI5")
+            or {}
+        ).get("position")
+        or "FLAT"
+    )
 
     return {
         "ts_jst": datetime.fromtimestamp(ts, JST).strftime("%Y-%m-%d %H:%M:%S JST"),
         "midnight_jst": datetime.fromtimestamp(midnight, JST).strftime("%Y-%m-%d 00:00 JST"),
+        "hour_label": hour_label,
+        "hour_start_ts": h0,
+        "hour_end_ts": h1,
         "wire": "NO",
         "fill": "HONEST_BOARD_IMITATION",
         "WOBIMM4_HONEST": {
             "position": mm_pos,
-            "stats_1h": window_stats(mm_rows, hour_ago),
+            "stats_1h": window_stats(mm_rows, h0, h1),
             "stats_since_midnight": window_stats(mm_rows, midnight),
+        },
+        "WOBIMM4X2_HONEST": {
+            "position": mmx2_pos,
+            "stats_1h": window_stats(mmx2_rows, h0, h1),
+            "stats_since_midnight": window_stats(mmx2_rows, midnight),
         },
         "MS1_WOBI_HONEST": {
             "position": ms1_pos,
-            "stats_1h": window_stats(ms1_rows, hour_ago),
+            "stats_1h": window_stats(ms1_rows, h0, h1),
             "stats_since_midnight": window_stats(ms1_rows, midnight),
+        },
+        "MS1X2_WOBI_HONEST": {
+            "position": ms1x2_pos,
+            "stats_1h": window_stats(ms1x2_rows, h0, h1),
+            "stats_since_midnight": window_stats(ms1x2_rows, midnight),
         },
         "TF1A_WOBI_HONEST": {
             "position": tf1a_pos,
-            "stats_1h": window_stats(tf1a_rows, hour_ago),
+            "stats_1h": window_stats(tf1a_rows, h0, h1),
             "stats_since_midnight": window_stats(tf1a_rows, midnight),
         },
     }
@@ -163,45 +253,57 @@ def collect_honest_hourly(now: Optional[float] = None) -> Dict[str, Any]:
 
 def build_honest_hourly_payload(rep: Dict[str, Any], kind: str = "hourly") -> Dict[str, Any]:
     mm = rep.get("WOBIMM4_HONEST") or {}
+    mmx2 = rep.get("WOBIMM4X2_HONEST") or {}
     ms1 = rep.get("MS1_WOBI_HONEST") or {}
+    ms1x2 = rep.get("MS1X2_WOBI_HONEST") or {}
     tf1a = rep.get("TF1A_WOBI_HONEST") or {}
 
     mm_1h = mm.get("stats_1h") or {}
+    mmx2_1h = mmx2.get("stats_1h") or {}
     ms1_1h = ms1.get("stats_1h") or {}
+    ms1x2_1h = ms1x2.get("stats_1h") or {}
     tf1a_1h = tf1a.get("stats_1h") or {}
 
     mm_mid = mm.get("stats_since_midnight") or {}
+    mmx2_mid = mmx2.get("stats_since_midnight") or {}
     ms1_mid = ms1.get("stats_since_midnight") or {}
+    ms1x2_mid = ms1x2.get("stats_since_midnight") or {}
     tf1a_mid = tf1a.get("stats_since_midnight") or {}
 
     day_bp = (
-        float(mm_mid.get("pnl_bp") or 0.0) +
-        float(ms1_mid.get("pnl_bp") or 0.0) +
-        float(tf1a_mid.get("pnl_bp") or 0.0)
+        float(mm_mid.get("pnl_bp") or 0.0)
+        + float(mmx2_mid.get("pnl_bp") or 0.0)
+        + float(ms1_mid.get("pnl_bp") or 0.0)
+        + float(ms1x2_mid.get("pnl_bp") or 0.0)
+        + float(tf1a_mid.get("pnl_bp") or 0.0)
     )
     color = 0x2ECC71 if day_bp >= 0 else 0xE67E22
     title = {
-        "start": "[START] HONEST 3戦略並走 1h + 0:00累積",
-        "hourly": f"[HOURLY] HONEST 3戦略並走 · {rep.get('ts_jst')}",
-        "final": "[FINAL] HONEST 3戦略並走",
+        "start": "[START] HONEST 5戦略並走 1h + 0:00累積",
+        "hourly": f"[HOURLY] HONEST 5戦略並走 · {rep.get('ts_jst')}",
+        "final": "[FINAL] HONEST 5戦略並走",
     }.get(kind, f"[HONEST] {kind}")
 
     return {
-        "username": "HONEST 3-Strategy Reporter",
+        "username": "HONEST 5-Strategy Reporter",
         "embeds": [
             {
                 "title": title,
                 "description": (
                     f"BOARD_IMITATION fill · WIRE=NO · 累積起点 `{rep.get('midnight_jst')}`\n"
-                    f"MM=`{mm.get('position')}` · MS1=`{ms1.get('position')}` · TF1A=`{tf1a.get('position')}`"
+                    f"MM=`{mm.get('position')}` · MMX2=`{mmx2.get('position')}` · "
+                    f"MS1=`{ms1.get('position')}` · MS1X2=`{ms1x2.get('position')}` · "
+                    f"TF1A=`{tf1a.get('position')}`"
                 ),
                 "color": color,
                 "fields": [
                     {
-                        "name": "直近 1時間 (1h)",
+                        "name": f"1時間 {rep.get('hour_label')}",
                         "value": (
                             f"{_fmt_block('WOBIMM4_HONEST (MM)', mm_1h)}\n"
+                            f"{_fmt_block('WOBIMM4X2_HONEST (MM add)', mmx2_1h)}\n"
                             f"{_fmt_block('MS1_WOBI_HONEST (Micro Scalp)', ms1_1h)}\n"
+                            f"{_fmt_block('MS1X2_WOBI_HONEST (MS1 add)', ms1x2_1h)}\n"
                             f"{_fmt_block('TF1A_WOBI_HONEST (Pure TF)', tf1a_1h)}"
                         ),
                         "inline": False,
@@ -210,9 +312,11 @@ def build_honest_hourly_payload(rep: Dict[str, Any], kind: str = "hourly") -> Di
                         "name": "0:00 JST からの累積 (Daily)",
                         "value": (
                             f"{_fmt_block('WOBIMM4_HONEST (MM)', mm_mid)}\n"
+                            f"{_fmt_block('WOBIMM4X2_HONEST (MM add)', mmx2_mid)}\n"
                             f"{_fmt_block('MS1_WOBI_HONEST (Micro Scalp)', ms1_mid)}\n"
+                            f"{_fmt_block('MS1X2_WOBI_HONEST (MS1 add)', ms1x2_mid)}\n"
                             f"{_fmt_block('TF1A_WOBI_HONEST (Pure TF)', tf1a_mid)}\n"
-                            f"• **3戦略合算**: **`{day_bp:+.2f} bp`**"
+                            f"• **5戦略合算**: **`{day_bp:+.2f} bp`**"
                         ),
                         "inline": False,
                     },

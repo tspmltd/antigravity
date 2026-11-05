@@ -611,6 +611,37 @@ GOV: WOBIMM4_HONEST=HARVEST · CROSS_ENTER=OFF · WIRE=NO · LIVE=untouched · W
 
 GOV: WOBIMM4_HONEST=HARVEST · BOARD_TRADE=SAME_TICK · CROSS_ENTER=OFF · WIRE=NO · LIVE=untouched · pins frozen
 
+**CSR-666（2026-11-04 10:30 JST）:** TF1A AdverseExcursion 計器接続 & 台帳配線。トレンドフォローの経路EV・+5bp到達 vs -4bp損切の判定計器接続。`AdverseExcursionTracker` を TF1A に接続（FILL で track_entry、毎tick on_tick、CLOSE で on_close）。台帳 `paired_ledger.jsonl` に `mfe_bp` / `mae_bp` / `ae_*` / `hit_order` / `regime` / `entry_*` を併記。30–35s以上経過レコードが `history_records` に移動した際にも検索できるよう `_find_ae_record` を修正。SEVA shadow（PID 914252）接続・観測開始。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-04 | CSR-666 | TF1A adverse excursion tracker wired & ledger AE paths | LOCK
+
+GOV: TF1A_HONEST=ADVERSE_TRACKED · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-667（2026-11-04 13:30 JST / CORRECTED 2026-11-05 10:14 JST）:** DuckDBOptimizerAgent 停止検知 & Discord通報網整備。運営停止トラブルの未検知・無通知を是正。DuckDBOptimizerAgent が日次レビュー完了後に心拍更新を停止し、かつ Watchdog 監視から外れていた障害を究明。`agents/duckdb_optimizer_agent.py` に30 tick生存心拍と非同期レビュー例外時のDiscord通知を追加。`run_trend_council_feeder.py` にクラッシュ時Discord即時通報を追加（council構築用 `_NoopNotifier` は残置・廃止せず）。`risk_guard/watchdog.py` の `services` に `trend_council_feeder` を追加し、新設 `_check_council_agents_health` でAgent結論スタールをDiscord警報（閾値: DuckDB 900s / Micro·Trend 180s / Adverse 300s。自動再起動は本関数内では行わず、feederプロセス死は `services` 経路）。`antigravity-watchdog.service` 稼働確認。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-04 | CSR-667 | DuckDBOptimizerAgent heartbeat & Watchdog Discord alert recovery | LOCK
+
+GOV: WATCHDOG=COUNCIL_HEALTH · DISCORD_ALERT=LIVE · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-668（2026-11-04 14:00 JST）:** TF1A ENTER v2 導入 & EXIT即Flatten改修。遅行モメンタム高値掴みの排除、および指値引きずりによる損切り拡大を防止。旧 cand_ab_v1（streak≥3）は観測EVマイナスにつき不採用を確定。`eval_tf1a_enter_v2`: `base` (trend_up ∧ (book_support ∨ breakout)) ∧ `fresh5` (ret60 < 5bp) ∧ `micro_ok` ∧ `agent_ok` (TrendFollow ≠ down) を導入。EXIT改修: +5bp到達時にストップを +3.0bp へ引き上げ（Breakeven Lock強化）。HARD_STOP EXIT を `HIT_BID` で即 Flatten（壁避け指値が -4bp を -6〜-14bp に拡大させる即死構造を遮断）。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-04 | CSR-668 | TF1A ENTER v2 (base+fresh5+micro+agent) & HARD_STOP HIT_BID | LOCK
+
+GOV: TF1A_ENTER=V2 · HARD_STOP=HIT_BID · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-669（2026-11-04 17:15 JST / CORRECTED 2026-11-05 10:14 JST）:** TF1A ゲート全量検証（Gate Validation）& ENTER v3 改善（SPREAD / fresh5 撤廃）。14:46以降のエントリー抑制原因の検証と、過剰フィルターによる機会損失を是正。10:48→17:08（約9k ticks）の全量前方EV検証（onset≥30s）を実施。SPREAD_MAX 2.0 は無効（ブロック帯>2.0bpの方がfwd60: +1.89bp / fwd300: +4.68bpに対し現行は+0.60bp / +1.42bp。CSR-661/662の指摘通り機会損失）につき撤廃（`TF1A_USE_SPREAD_GATE=False`）。fresh5（ret60<5bp）は全相場相関の誤読による大悪手（外すとfwd60: +2.94bp vs full +1.73bp、fwd300: +5.01bp vs full +3.63bp）につき撤廃（`TF1A_USE_FRESH5_GATE=False`）。agent_ok は ablation 上 `inconclusive_keep`（enter_v2_full fwd60 +1.73 vs drop_agent +1.55、Δ≈+0.19bp）のため KEEP（旧文の「EV -0.41bp防御」は validation JSON に根拠なし→削除）。改善: POST条件を `base ∧ micro_ok ∧ agent_ok`（ENTER v3）へ改修。台帳に `entry_spread_bp` を追加。TF1A 再起動（当時 PID 1081647）。再起動後、spread ゲート無しで利確（+6.14bp, entry_spread=1.57bp）を確認。詳細: `gate_validation_report.json` / 判定: `gate_validation_decision.json`。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-04 | CSR-669 | TF1A gate validation & ENTER v3 (drop spread/fresh5, ledger entry_spread) | LOCK
+
+GOV: TF1A_ENTER=V3 · SPREAD_GATE=OFF · FRESH5_GATE=OFF · LEDGER=ENTRY_SPREAD · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-670（2026-11-05 09:15 JST / CORRECTED 2026-11-05 10:14 JST）:** ENTER v3 運用監査・夜間帯トレード検証（spread>2帯の実績追跡）。監査時点の台帳総CLOSE≈430件を「entry_spread付き424件」と誤記していたため訂正: `entry_spread_bp` 付きは **92件**（v3配線後のみ）、うち spread>2.0bp は **39件**（EV≈+4.22bp, min -21.35 / max +82.4; exit内訳 hard_stop17 / trailing15 / breakeven_lock7）。成立例: 2.29bp→+3.09（breakeven_lock）、2.65bp→+1.36（breakeven_lock）、spread>2 トレイリング例 3.06bp→+82.4 / 3.33bp→+35.55（旧文の +12.41 は entry_spread 1.87/1.20 帯であり >2 帰属は誤り→削除）。ゲート撤廃後も大負けはゼロではない: 2026-11-05 00:09 spread 5.56→**-21.35**（hard_stop）等。当時ENTER v3 PID 1081647（監査後再起動で現行 **1206641**）。TF1A / MS1 / Feeder / Watchdog は安定稼働。紙のみ · LIVE / FROZEN 非触 · WIRE=NO · Economic_PASS=NO。
+
+2026-11-05 | CSR-670 | TF1A ENTER v3 overnight audit (entry_spread n=92, spread>2 n=39, slip≠0) | LOCK
+
+GOV: TF1A_V3=VERIFIED_SP92_GT2_N39 · FLEET=STABLE · WIRE=NO · LIVE=untouched · pins frozen
+
+
 
 
 

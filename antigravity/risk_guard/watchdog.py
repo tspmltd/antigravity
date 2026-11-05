@@ -310,6 +310,20 @@ class WatchdogSentinel:
                 "is_down": False,
                 "restart_attempts": 0,
             },
+            "trend_council_feeder": {
+                "name": "TrendFollow 4AGENT 合議制フィーダー (DuckDBOptimizer/Micro/Trend/Adverse)",
+                "keywords": ["run_trend_council_feeder"],
+                "exclude": ["watchdog"],
+                "log_file": os.path.join(self.base_dir, "logs", "trend_council_feeder.log"),
+                "check_heartbeat": True,
+                "start_cmd": [
+                    self.python_bin, "-u", "-m", "antigravity.quant_pipeline.run_trend_council_feeder",
+                    "--symbol", "FX_BTC_JPY", "--interval", "2.0",
+                ],
+                "last_down_alert_time": 0.0,
+                "is_down": False,
+                "restart_attempts": 0,
+            },
         }
 
         # LIVE slim: when GO2/LIVE_SLIM is set, do NOT auto-restart heavy non-exec workloads.
@@ -521,6 +535,66 @@ class WatchdogSentinel:
                                         self.restart_service(svc_id)
                     except Exception as ex:
                         print(f"[Watchdog] Heartbeat check error for {svc_id}: {ex}", flush=True)
+
+        # 3. Council 内 Agent の個別健全性・スタール監視 (DuckDBOptimizerAgent等)
+        self._check_council_agents_health(now)
+
+    def _check_council_agents_health(self, now: float) -> None:
+        """agents_council_state.json 内の各Agentの更新停止・スタールを検知しDiscord通知"""
+        state_path = os.path.join(self.base_dir, "configs", "agents_council_state.json")
+        if not os.path.exists(state_path):
+            return
+
+        last_alert_ts = getattr(self, "_last_council_agent_alert_time", 0.0)
+        # クールダウン: 10分
+        if now - last_alert_ts < 600.0:
+            return
+
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            conclusions = data.get("conclusions", {})
+            now_ms = now * 1000
+
+            # 各Agentの許容未更新時間(秒)
+            agent_timeouts = {
+                "DuckDBOptimizerAgent": 900.0,  # 15分 (定期更新)
+                "MicrostructureAgent": 180.0,   # 3分 (Tick更新)
+                "TrendFollowAgent": 180.0,      # 3分 (Tick更新)
+                "AdverseResearchAgent": 300.0,  # 5分
+            }
+
+            stalls = []
+            for agent_name, max_sec in agent_timeouts.items():
+                c = conclusions.get(agent_name)
+                if not c:
+                    stalls.append(f"• **{agent_name}**: ステート内に結論が存在しません")
+                    continue
+                ts_ms = c.get("timestamp", 0)
+                if ts_ms <= 0:
+                    stalls.append(f"• **{agent_name}**: タイムスタンプが無効です")
+                    continue
+                elapsed_sec = (now_ms - ts_ms) / 1000.0
+                if elapsed_sec > max_sec:
+                    elapsed_min = elapsed_sec / 60.0
+                    stalls.append(f"• **{agent_name}**: 最終更新から {elapsed_min:.1f} 分経過 (許容: {max_sec/60:.1f}分)")
+
+            if stalls:
+                print(f"[Watchdog] 🚨 Council Agent stall detected:\n" + "\n".join(stalls), flush=True)
+                self.notifier.send_embed(
+                    title="🚨 【合議制Agent停止警告】Council Agent Stall Detected",
+                    description=(
+                        "**Council内のエージェントが更新を停止（スタール）しています。**\n\n"
+                        + "\n".join(stalls)
+                        + "\n\n• **対象ステート**: `configs/agents_council_state.json`\n"
+                        + "• **対処**: `trend_council_feeder` の稼働状態を確認し、必要に応じて自動再起動します。"
+                    ),
+                    color=0xE74C3C,
+                    target="alert",
+                )
+                self._last_council_agent_alert_time = now
+        except Exception as ex:
+            print(f"[Watchdog] Council health check error: {ex}", flush=True)
 
     def _check_explicit_heartbeat(
         self,

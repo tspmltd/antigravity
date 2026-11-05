@@ -5,7 +5,11 @@ DuckDB Optimizer Agent → Research Librarian
 新: 全研究レーン結果の日次 usable 判定 + 次実験 ADVISE（Librarian）
 
 WIRE=NO / ENFORCE=0 / approved_weights 自動更新なし
+
+CSR-TF1A: review_day() は同期呼び出し禁止（council deliberate を固める）。
+バックグラウンドスレッドで走らせ、結論はキャッシュを返す。
 """
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
@@ -41,7 +45,13 @@ class DuckDBOptimizerAgent:
         self.latest_librarian_report: Optional[Dict[str, Any]] = None
         self.current_weights: Dict[str, Any] = {}
         self.librarian = DuckDBResearchLibrarian()
+        self._review_lock = threading.Lock()
+        self._review_inflight = False
         self._load_current_weights()
+
+        # Never block init/tick on review_day — publish pending then kick async.
+        self.analyze_and_conclude(allow_sync_review=False)
+        self.schedule_daily_review(force=False)
 
         self.bus.subscribe("orderbook_micro", self._on_tick_sample)
         self._sample_counter = 0
@@ -55,26 +65,88 @@ class DuckDBOptimizerAgent:
             except Exception as e:
                 print(f"[DuckDBOptimizerAgent] 重み読み込み例外: {e}")
 
+    def _pending_report(self, note: str) -> Dict[str, Any]:
+        return {
+            "date": datetime.now(JST).strftime("%Y-%m-%d"),
+            "portfolio_verdict": "NEED_MORE",
+            "usable_counts": {},
+            "next_experiments": [{"advise": note}],
+            "lanes": {},
+            "async_pending": True,
+        }
+
     def _on_tick_sample(self, snap):
         self._sample_counter += 1
+        # 生存心拍更新: 30 tick (約60s) ごとに結論タイムスタンプを更新しBusへ通知
+        if self._sample_counter % 30 == 0:
+            self.analyze_and_conclude(allow_sync_review=False)
+        # 日次レビュー再確認: 300 tick (約10分) ごと
         if self._sample_counter % 300 == 0:
-            self.analyze_and_conclude()
+            self.schedule_daily_review(force=False)
+
+    def schedule_daily_review(self, day: Optional[str] = None, force: bool = False) -> None:
+        """Kick review_day in a daemon thread. Safe to call from tick/deliberate."""
+        day = day or datetime.now(JST).strftime("%Y-%m-%d")
+        if not force and self.last_daily_review_day == day and self.latest_librarian_report:
+            if not self.latest_librarian_report.get("async_pending"):
+                return
+        with self._review_lock:
+            if self._review_inflight:
+                return
+            self._review_inflight = True
+
+        def _worker():
+            try:
+                report = self.librarian.review_day(day)
+                self.latest_librarian_report = report
+                self.last_daily_review_day = day
+                self.bus.publish("librarian_daily_report", report)
+                self.analyze_and_conclude(librarian_report=report, allow_sync_review=False)
+                print(
+                    f"[DuckDBOptimizerAgent] async review_day done day={day} "
+                    f"portfolio={report.get('portfolio_verdict')}",
+                    flush=True,
+                )
+            except Exception as e:
+                print(f"[DuckDBOptimizerAgent] async review_day error: {e}", flush=True)
+                try:
+                    from antigravity.risk_guard.notifier import DiscordNotifier
+                    DiscordNotifier().send_embed(
+                        title="🚨 【DuckDBOptimizerAgent エラー】日次分析処理例外",
+                        description=(
+                            f"**DuckDBOptimizerAgent の非同期日次レビューで例外が発生しました。**\n\n"
+                            f"• **エラー内容**: `{e}`\n"
+                            f"• **対象日**: `{day}`\n"
+                            f"• **状態**: pending レポートにフォールバックしました。"
+                        ),
+                        color=0xE74C3C,
+                        target="alert",
+                    )
+                except Exception as notify_err:
+                    print(f"[DuckDBOptimizerAgent] Discord通知例外: {notify_err}", flush=True)
+                self.analyze_and_conclude(
+                    librarian_report=self._pending_report(f"librarian error: {e}"),
+                    allow_sync_review=False,
+                )
+            finally:
+                with self._review_lock:
+                    self._review_inflight = False
+
+        threading.Thread(target=_worker, name="duckdb-librarian-review", daemon=True).start()
 
     def run_daily_librarian(self, day: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
         day = day or datetime.now(JST).strftime("%Y-%m-%d")
         if not force and self.last_daily_review_day == day and self.latest_librarian_report:
-            return self.latest_librarian_report
-        report = self.librarian.review_day(day)
-        self.latest_librarian_report = report
-        self.last_daily_review_day = day
-        self.bus.publish("librarian_daily_report", report)
-        self.analyze_and_conclude(librarian_report=report)
-        return report
+            if not self.latest_librarian_report.get("async_pending"):
+                return self.latest_librarian_report
+        self.schedule_daily_review(day=day, force=force)
+        return self.latest_librarian_report or self._pending_report("async review scheduled")
 
     def analyze_and_conclude(
         self,
         force_apply: Optional[bool] = None,
         librarian_report: Optional[Dict[str, Any]] = None,
+        allow_sync_review: bool = False,
     ) -> AgentConclusion:
         now_ms = int(time.time() * 1000)
         if force_apply:
@@ -82,26 +154,26 @@ class DuckDBOptimizerAgent:
 
         report = librarian_report or self.latest_librarian_report
         if report is None:
-            try:
-                report = self.librarian.review_day()
-                self.latest_librarian_report = report
-                self.last_daily_review_day = report.get("date", "")
-            except Exception as e:
-                report = {
-                    "portfolio_verdict": "NEED_MORE",
-                    "usable_counts": {},
-                    "next_experiments": [{"advise": f"librarian error: {e}"}],
-                    "lanes": {},
-                }
+            if allow_sync_review:
+                try:
+                    report = self.librarian.review_day()
+                    self.latest_librarian_report = report
+                    self.last_daily_review_day = report.get("date", "")
+                except Exception as e:
+                    report = self._pending_report(f"librarian error: {e}")
+            else:
+                report = self._pending_report("async review pending (non-blocking)")
+                self.schedule_daily_review(force=False)
 
         portfolio = report.get("portfolio_verdict", "NEED_MORE")
         counts = report.get("usable_counts") or {}
         experiments = report.get("next_experiments") or []
         top_adv = [e.get("advise") for e in experiments[:3] if e.get("advise")]
+        pending = bool(report.get("async_pending"))
 
         verdict = f"LIBRARIAN_{portfolio}"
         explanation = (
-            f"Librarian: portfolio={portfolio} "
+            f"Librarian{' [ASYNC_PENDING]' if pending else ''}: portfolio={portfolio} "
             f"USEFUL={counts.get('USEFUL', 0)} NEED_MORE={counts.get('NEED_MORE', 0)} "
             f"NOT_USEFUL={counts.get('NOT_USEFUL', 0)}. "
             f"次: {'; '.join(top_adv) if top_adv else '継続観測'}。重み自動適用=OFF。"
@@ -134,6 +206,7 @@ class DuckDBOptimizerAgent:
                 "wire": "NO",
                 "enforce": 0,
                 "auto_apply_weights": False,
+                "async_pending": pending,
             },
             parameters={
                 "W_PRESSURE": w_pressure,
@@ -153,7 +226,7 @@ class DuckDBOptimizerAgent:
 
     def get_latest_conclusion(self) -> AgentConclusion:
         if self.latest_conclusion is None:
-            return self.analyze_and_conclude()
+            return self.analyze_and_conclude(allow_sync_review=False)
         return self.latest_conclusion
 
     def get_latest_librarian_report(self) -> Optional[Dict[str, Any]]:
