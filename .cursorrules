@@ -1,0 +1,55 @@
+# Antigravity — Cursor agent rules (repo root)
+
+Canonical MM5 specification / operations: **`docs/MM5_SPEC_AND_OPERATIONS.md`**.
+When editing WOBIMM5 / MM5 paper or LIVE, treat that doc as the source of truth.
+Cross-cutting adverse layers: `docs/honest_adverse_layer_matrix.md`. Research locks: `FIX.me`.
+
+## Hard governance (never relax without operator + CSR)
+
+- Default: **WIRE=NO**, paper / DRY. Do **not** enable REAL venue posts casually.
+- Do **not** thrash LIVE or FROZEN lanes. Do not rewrite GO flags, secrets, or `.env`.
+- Do **not** set `ENABLE_REAL_TRADING=true` from scripts unless the operator already set it.
+- **Economic_PASS=NO** until a signed CF / EV study says otherwise. No invented win claims.
+- Prefer **new dryrun A/B lanes** over mutating baselines (MM4 harvest, MS1, TF1A stay baselines).
+
+## MM5 design locks (CSR-672 / CSR-673)
+
+- **Position-EV**, not `instant_harvest`. Harvest abandons EV; keep only as MM4 A/B baseline.
+- Flags: `INSTANT_HARVEST=False`, `REST_EXIT_ON_EV_HOLD=True`, `ADVERSE_HIT_TOUCH=True`.
+- While live WOBI∩OFI agrees with inventory → **rest opposite maker** (`ev_hold`).
+- When EV gone / adverse_cut / adverse_fast → flatten at **HIT_TOUCH** (paper may `HIT_TOUCH_FORCE`).
+- AE observe is mandatory on MM5: `HonestAdverseKit` + `profile=inventory_mm`
+  (`mae`/`mfe`/`ae_*`/`hit_order` on ledger). Early toxic: MAE≤−1.5 or ae_1s≤−1.0.
+- Paper fill: **HONEST + STRICT own-size** (no optimistic BOARD_TRADE same-tick fiction).
+- LIVE trading exits: **maker LIMIT only** — never auto-MARKET on `ev_gone` / adverse
+  (operator emergency flatten scripts are separate).
+
+## LIVE WOBIMM5 gates (see ops doc)
+
+REAL requires **all** of: `data/GO_WOBIMM5_LIVE.flag` with `status=ACTIVE`,
+`CONFIRM_GO=WOBIMM5_LIVE`, operator-set `ENABLE_REAL_TRADING=true`, runner
+`--real --confirm-go WOBIMM5`, size ≤ 0.001, no `WOBIMM5_LIVE_STOP.flag`.
+Start/stop: `scripts/start-wobimm5-live.sh` / `scripts/stop-wobimm5-live.sh`.
+Default start is **DRY_RUN=1**.
+
+## Fleet hygiene
+
+- Do **not** CROSS ENTER. One-sided maker.
+- Maker **spread widening ≠ loss gate** (CSR-661/662; `.cursor/rules/maker-spread-not-loss.mdc`).
+- Honest Discord reporter is 8-lane A/B; do not silently drop MS2 / MM5 / TF2A from payloads.
+- Adverse profiles differ: scalp (MS2) ≠ inventory_mm (MM5) ≠ trend lead (TF2A). Do not copy thresholds across profiles.
+- Commits: only when asked. Prefer small, CSR-linked messages. Never force-push main.
+
+## Code touch map (MM5)
+
+| Concern | Path |
+|--|--|
+| Paper MM5 | `antigravity/quant_pipeline/run_dryrun_wobimm5_honest.py` |
+| LIVE MM5 | `antigravity/quant_pipeline/run_wobimm5_live.py` |
+| Policy | `antigravity/quant_pipeline/wobimm4_policy.py` |
+| AE kit | `antigravity/quant_pipeline/honest_adverse_kit.py` |
+| Paper hooks | `antigravity/quant_pipeline/run_dryrun_wobimm4.py` (`_ae_path_override`, `_ae_close_path`, HIT_TOUCH) |
+| Start paper | `scripts/start-dryrun-wobimm5-honest.sh` |
+| Start LIVE | `scripts/start-wobimm5-live.sh` |
+
+If code and `docs/MM5_SPEC_AND_OPERATIONS.md` diverge, **fix the doc in the same change** (or stop and ask).
