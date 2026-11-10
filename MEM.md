@@ -3138,3 +3138,24 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 注意: WOBIMM/UMM の紙黒字は Fictive Fill 恩恵 · HONEST/LIVE_PARITY で目減り
 - PEG_v3 AgingGuard = RESEARCH_TERMINATED（摩擦死）
 
+## 181. CSR-685 — 現行世代 DRYRUN核戦略 一覧（2026-11-10）
+
+- 正本: `docs/ops/dryrun_core_strategy_comparison_current.md`
+- 対象: MS1 / MS2 / ABS1 / VR1 / TF1A / TF2A / PEG2-B Paper / 3strat
+- 洞察: MS1 Maker待機 vs MS2 Soft@bid = **+182bp差** · TF Lead cut は MFE窒息 · VR1 TIME_CUT 要 2.5〜3.0s
+- 改修中注記: MS2→MS1型 · ABS1 Soft混入修正 · TF HS即MARKET · TF2A Lead OFF（CSR-682/683）
+
+## 182. CSR-686 — MS1ログ再接続 & Disk整理（2026-11-10）
+
+- MS1 restart → PID `2588255` · log FD 正常
+- Disk `/` **80% → 64%**（free 26G→46G）
+- 圧縮: `quotes.jsonl` / `micro_veto_audit.jsonl`
+- GCS移管後削除: `market_feeder/raw` date&lt;2026-11-03（4 tar · size照合済）
+
+## 182. CSR-686 — MS1ログ再接続 & Disk整理（2026-11-10）
+
+- MS1 restart → PID `2588255` · log FD 正常
+- Disk `/` **80% → 64%**（free 26G→46G）
+- 圧縮: `quotes.jsonl` / `micro_veto_audit.jsonl`
+- GCS移管後削除: `market_feeder/raw` date&lt;2026-11-03（4 tar · size照合済）
+

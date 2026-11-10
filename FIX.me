@@ -739,4 +739,13 @@ GOV: TF_HS=MARKET_IMMEDIATE · TF2A_LEAD_PATH=OFF · WIRE=NO · Economic_PASS=NO
 
 **commit 承認（2026-11-10 · ユーザー再指示「fix.me/mem.me/git対応」· CSR-680..684）:** 上記スコープに `docs/ops/dryrun_core_strategy_comparison.md` を追加してコミット。pushなし。
 
+**CSR-685（2026-11-10 23:33 JST）:** 最新・現行世代 DRYRUN 核戦略一覧を `docs/ops/dryrun_core_strategy_comparison_current.md` に DIRECT 保存（MS1/MS2/ABS1/VR1/TF1A/TF2A/PEG2-B/3strat · 直近ログ実績 + MS1vsMS2/Lead窒息/VR時間スケール洞察）。WIRE=NO · Economic_PASS=NO。
+
+2026-11-10 | CSR-685 | current-gen DRYRUN strategy comparison | LOCK
+
+**CSR-686（2026-11-10 23:48 JST）:** 点検要対応を執行。(1) **MS1 ログ orphan 復旧** — stop/start → PID=2588255 · stdout 再接続 `logs/dryrun_ms1_wobi_honest.log`。(2) **Disk 80%→64%**: `quotes.jsonl` 6.4G→366M gz · `micro_veto_audit` 496M→16M gz · feeder raw `<2026-11-03` を GCS `gs://bf-hft-trading-logs/archives/market_feeder_raw/` へ size照合後削除（4バッチ OK）。keep=Nov3–9 · free≈46G。WIRE=NO。
+
+2026-11-10 | CSR-686 | MS1 log reconnect · disk archive 80→64% | LOCK
+
+**commit 承認（2026-11-11 · ユーザー指示「GIT処理実施」· CSR-685/686）:** 現行世代比較表 + MS1ログ再接続/Disk整理メモを正本化。スコープ=FIX·MEM·`docs/ops/dryrun_core_strategy_comparison_current.md`。無関係ダーティ·logs/data·pushなし。
 
