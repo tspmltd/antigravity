@@ -15,14 +15,35 @@ Cross-cutting adverse layers: `docs/honest_adverse_layer_matrix.md`. Research lo
 ## MM5 design locks (CSR-672 / CSR-673)
 
 - **Position-EV**, not `instant_harvest`. Harvest abandons EV; keep only as MM4 A/B baseline.
-- Flags: `INSTANT_HARVEST=False`, `REST_EXIT_ON_EV_HOLD=True`, `ADVERSE_HIT_TOUCH=True`.
-- While live WOBI∩OFI agrees with inventory → **rest opposite maker** (`ev_hold`).
-- When EV gone / adverse_cut / adverse_fast → flatten at **HIT_TOUCH** (paper may `HIT_TOUCH_FORCE`).
+- Flags: `INSTANT_HARVEST=False`, `REST_EXIT_ON_EV_HOLD=True`.
+- While live WOBI∩OFI agrees with inventory → **rest opposite maker** (`ev_hold` / HOLD).
+- Exit machine (irreversible): **HOLD → FLATTEN_SOFT → FLATTEN_HARD**.
+  - Soft (`ev_gone` / `adverse_fast`): passive opposite LIMIT (SELL@ask / BUY@bid; never cross).
+  - Soft `adverse_fast` dig-down guard: reprice ≥3 **or** unrealized ≤−1.5bp → escalate HARD.
+  - Hard (`adverse_cut` ≤−1.8bp / toxic ADOPT|fill / `hard_stop` / soft_escalate): **MARKET only** + 45s cool.
 - AE observe is mandatory on MM5: `HonestAdverseKit` + `profile=inventory_mm`
-  (`mae`/`mfe`/`ae_*`/`hit_order` on ledger). Early toxic: MAE≤−1.5 or ae_1s≤−1.0.
+  (`mae`/`mfe`/`ae_*`/`hit_order` on ledger). Early toxic: MAE≤−1.5 or ae_1s≤−1.0 → Soft.
 - Paper fill: **HONEST + STRICT own-size** (no optimistic BOARD_TRADE same-tick fiction).
-- LIVE trading exits: **maker LIMIT only** — never auto-MARKET on `ev_gone` / adverse
+- LIVE Soft exits: maker LIMIT only. Never auto-MARKET on `ev_gone` / `adverse_fast`
   (operator emergency flatten scripts are separate).
+- Spread Gate: ENTER only if best bid/ask **≥ MIN_ENTRY_SPREAD_BP (1.2bp)**; else
+  `SPREAD_TOO_NARROW` and wait (do not lean on mid trend for harvest).
+- ENTRY Passive Offset: post **behind** touch by **ENTRY_OFFSET_BP (0.5bp)** —
+  BUY `floor_tick(bid*(1-0.5/1e4))` / SELL `ceil_tick(ask*(1+0.5/1e4))`
+  (`entry_passive_px`; Post-Only). Improves odds that clamped TP sits near
+  opposite best instead of buried behind it.
+- **Final decision soak (Soak8)**: Gate+Offset on. **FAIL (2026-11-10)** —
+  no passive `ev_hold` ≥+1.0bp (closes −0.73/−2.35 HARD + −3.54 flatten).
+  **Stop** WOBIMM standalone LIVE MM; no soak9+ / no third live lever.
+- TP Maker: best opposite front **clamped to ≥ +MIN_HARVEST_BP (1.0bp)** vs entry
+  (`tp_harvest_exit_px`). After ENTRY, healthy Soft `ev_gone` deferred **TP_GRACE=8s**
+  (keep clamped `ev_hold`); never defer `adverse_fast` / HARD. Post-grace Soft uses
+  plain `soft_maker_exit_px` (no clamp).
+- Close-settle **15.0s** after EXIT flat (`LATE_CLOSE_ECHO` for same-side fill echoes).
+- Late-Fill ADOPT: cancelled/pulled OID in `recent_posts` that COMPLETED → adopt into SM
+  (toxic ≤−1.5bp → HARD; else HOLD/Soft). Never classify our cancel-race fills as ghost.
+- Unattributed flat≠venue: `GHOST_POSITION_BLOCKED` observe; after **3 hits / 3s** →
+  **Fail-Closed** (halt ENTER + `flatten()` to venue 0). No infinite ghost loop.
 
 ## LIVE WOBIMM5 gates (see ops doc)
 

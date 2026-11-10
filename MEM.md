@@ -3057,3 +3057,30 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - HONEST 紙だけ: 板が交差していない `BOARD_TRADE` は同ティックで載せる。ENTER の CROSS は拒否のまま。
 - 紙のみ。LIVE / FROZEN / CSR-635 / ピン非触。WIRE=NO。Economic_PASS=NO。
 
+## 173. CSR-677 — WOBIMM5 LIVE 単独MM 最終判定 FAIL（2026-11-10）
+
+### 結論
+- **Soak8 FAIL** → WOBIMM単独 LIVE MM 追求を終了。soak9+ / 第3レバーなし。Economic_PASS=NO。スケール禁止。
+- 受動 `ev_hold` TP ≥+1.0bp は Gate+Offset 後も **0件**。closes は HARD損切りと fill-cap flatten のみ。
+
+### Soak8 数値（REAL · 0.001 · 17:19–17:37 · max_fills:5）
+| CLOSE | src | 備考 |
+| :--- | :--- | :--- |
+| −0.73bp | HARD | soft_escalate_reprice |
+| −2.35bp | HARD | soft_escalate_slip |
+| −3.54bp | FLATTEN_VENUE | ev_hold 中に fill cap |
+- 防護: ghost / FailClosed / match=False = 0 · venue flat OK。
+
+### 入れたレバー（これで打ち止め）
+1. Spread Gate `MIN_ENTRY_SPREAD_BP=1.2`
+2. ENTRY Passive Offset `ENTRY_OFFSET_BP=0.5`（`entry_passive_px`）
+- 併存防護: TP_GRACE 8s · MIN_HARVEST 1.0 · Late-Fill ADOPT · Fail-Closed · CLOSE_SETTLE 15s · Soft→HARD escalate
+
+### なぜ紙で期待値が薄いのに短ソークを繰り返したか（振り返り）
+1. **前提の取り違え**: 紙/過去（MM4 HONEST 極低勝率・累積赤字、Economic_PASS=NO）は「受動MMの経済」否定に近かったのに、LIVE側を「venue truth / async が壊れていると経済は測れない」と切り分け、infra修繕を優先した。
+2. **判定軸のスライド**: soak前半は ghost / late-fill / desync（安全）を直し、後半は Soft→HARD・TP clamp・Gate・Offset と**機構ごとに再ソーク**した。各回の safety PASS が、経済FAIL後の「もう1レバー」許可に化けた。
+3. **最終判定ルールが遅かった**: 「Gate+Offset で白黒・それ以外は撤退」を Soak8 直前まで明文化しなかった。soak4–7 の Harvest FAIL 時点で止めるべきだった。
+4. **是正**: CSR-677 で standalone LIVE MM = CLOSED_FAIL。再検証はオフライン分析か他戦略のみ。
+
+正本: `FIX.me` CSR-677 · `docs/MM5_SPEC_AND_OPERATIONS.md` §7.1 · `.cursorrules`
+

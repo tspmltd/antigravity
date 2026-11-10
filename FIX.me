@@ -665,8 +665,25 @@ GOV: MS2=ADVERSE_KIT · MM5=POS_EV+AE · DISCORD=8LANE · WIRE=NO · LIVE=untouc
 
 GOV: X_POST=DISABLED · KILL_SWITCH=ON · DISCORD_NEWS=LIVE · WIRE=NO · LIVE=untouched · pins frozen
 
+**CSR-675（2026-11-08 09:45 JST）:** TF Adverse Lead 新設。`adverse_score≥55` は MS2 de-repair / TF ledger で非予測 → **不使用**。`tf_adverse_lead.py`: Entry=`vacuum≥0.5` veto · Path=`ae_1s≤−1 ∧ peak<+5 ∧ unreal≤0` → `LEAD_ADVERSE_CUT`（HARD_STOP −4 先回り）。**紙は TF2A のみ配線**（TF1A=Lead OFF baseline · A/B）。TF2A は LEAD も HIT_BID_FORCE。CF: TF1A path precision_hs≈0.98 Δ>+500bp proxy · vacuum Δ≈+91bp。`HonestAdverseKit` TREND は score55 veto 無効化。WIRE=NO · LIVE非触 · Economic_PASS=NO。
 
+2026-11-08 | CSR-675 | TF Adverse Lead on TF2A only (TF1A baseline; score55 unused) | LOCK
 
+GOV: TF2A_LEAD=ON · TF1A_LEAD=OFF · SCORE55=OFF · WIRE=NO · LIVE=untouched · pins frozen
+
+**CSR-676（2026-11-08 21:51 JST）:** MM5 LIVE 残DESYNC修繕。根因=exit_repriceが約定済SELLをcancel扱い→2本目EXITをPOSTし venue short。対策: `_pull`前にprivate adopt · EXITは net 整合時のみPOST · `recent_posts`でpull済OIDもadopt · adopt後venue再取得。単体13 PASS。WIRE=YESコードのみ · LIVE再起動は別GO · Economic_PASS=NO。
+
+2026-11-08 | CSR-676 | MM5 LIVE anti double-exit adopt-on-pull | LOCK
+
+GOV: MM5_FILL_FIX2=CODE · LIVE=stopped · WIRE=NO_RESTART · pins frozen
+
+**CSR-677（2026-11-10 19:15 JST）:** WOBIMM5 LIVE 短ソーク連打を**最終判定 FAIL でクローズ**。一次レバー Spread Gate(`MIN_ENTRY_SPREAD_BP=1.2`) + 二次レバー ENTRY Offset(`ENTRY_OFFSET_BP=0.5`) 実装後の **Soak8**（17:19–17:37 · `max_fills:5` · size=0.001）closes: −0.73 HARD reprice / −2.35 HARD slip / −3.54 FLATTEN_VENUE。受動 `ev_hold` ≥+1.0bp **0件**。防護（ghost/FailClosed/match=False）は PASS だが経済未達。紙時代から MM harvest は期待値弱い（例: WOBIMM4_HONEST 通算≈1%勝率・累積大幅赤字 · Economic_PASS=NO）のに、LIVEでは「infra/asyncを直してから経済判定」→「レバー1本ずつ再検証」と枠をずらして soak≈1–8 を継続した。**誤謬:** safety PASS を economic retry の許可と混同し、Harvest FAIL 後も第3レバー探索余地を残した。**ロック:** 第3レバー禁止 · soak9+禁止 · WOBIMM単独 LIVE MM 追求終了 · オフライン分析または他戦略のみ · Economic_PASS=NO · スケール禁止。正本 `docs/MM5_SPEC_AND_OPERATIONS.md` §7.1 · `.cursorrules`。
+
+2026-11-10 | CSR-677 | MM5 LIVE Soak8 FAIL · close standalone MM pursuit | LOCK
+
+GOV: MM5_LIVE_MM=CLOSED_FAIL · SOAK9+=NO · 3RD_LEVER=NO · Economic_PASS=NO · WIRE=NO_SCALE
+
+**commit 承認（2026-11-10 · ユーザー指示「fix.me/Mem.me記録して、Git対処」· CSR-677）:** Soak8最終FAIL・Gate/Offset・最終判定ルールを正本化。スコープ=FIX.me·MEM.md·MM5 spec·.cursorrules·LIVE runner/tests/soak scripts·必要依存。無関係ダーティツリー・logs/data/.env・pushなし。
 
 
 

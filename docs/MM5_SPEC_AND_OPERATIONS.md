@@ -18,7 +18,8 @@ MM5 is the inventory market-making lane that keeps **Position-EV**:
 
 - Hold inventory only while live **WOBI ∩ OFI** still agrees with the position.
 - While EV > 0, **rest opposite maker** (do not dump / do not `instant_harvest`).
-- When EV is gone or the adverse path is toxic, flatten at **HIT_TOUCH**.
+- When EV is gone / early toxic (`adverse_fast`): **FLATTEN_SOFT** — passive opposite maker LIMIT (SELL@ask / BUY@bid; never cross).
+- When `adverse_cut` (≤ −1.8bp) or toxic ADOPT/fill / hard_stop: **FLATTEN_HARD** — MARKET only.
 - Observe adverse path on every fill (`mae` / `mfe` / `ae_*` / `hit_order`).
 
 **MM4 harvest** remains the A/B baseline (`INSTANT_HARVEST=True`). Do not mutate MM4 into MM5 in place.
@@ -32,12 +33,14 @@ MM5 is the inventory market-making lane that keeps **Position-EV**:
 | Position-EV | ON | `instant_harvest` abandons EV (CSR-672) |
 | `INSTANT_HARVEST` | `False` | Harvest = baseline only |
 | `REST_EXIT_ON_EV_HOLD` | `True` | EV>0 → rest opposite EXIT quote |
-| `ADVERSE_HIT_TOUCH` | `True` | `adverse_cut` / `adverse_fast` / `ev_gone` / `hard_stop` at touch |
+| Exit machine | HOLD → FLATTEN_SOFT → FLATTEN_HARD | Irreversible; no Soft←Hard downgrade |
+| `FLATTEN_SOFT` | `ev_gone` / `adverse_fast` | Passive opposite maker LIMIT (no cross) |
+| `FLATTEN_HARD` | `adverse_cut` / toxic ADOPT|fill / `hard_stop` | MARKET only (+45s re-entry cool) |
 | AE kit profile | `inventory_mm` | Fast cut ON; see adverse matrix |
-| Fast toxic | MAE ≤ −1.5 **or** ae_1s ≤ −1.0 | Early path cut before latch decay |
-| Policy adverse_cut | −1.8 bp unrealized | From WOBI3 LIVE magnitudes |
+| Fast toxic | MAE ≤ −1.5 **or** ae_1s ≤ −1.0 | Early path → SOFT (not MARKET) |
+| Policy adverse_cut | −1.8 bp unrealized | HARD MARKET threshold |
 | Paper fill | `FILL_MODEL=HONEST` + `HONEST_STRICT_OWN_SIZE=True` | No BOARD_TRADE same-tick fiction |
-| LIVE trading exit | **maker LIMIT only** | Never auto-MARKET on `ev_gone` / adverse |
+| LIVE Soft exit | maker LIMIT @ opposite best | Never cross / never MARKET on Soft |
 | Size / max inv | 0.001 BTC | Venue min lot; do not raise casually |
 | Spread gate | **OFF** | CSR-661/662 — width ≠ loss |
 | CROSS ENTER | **Forbidden** | One-sided maker |
@@ -99,8 +102,16 @@ Paper exit force: same-tick board try, else `HIT_TOUCH_FORCE` when `_flatten_hit
 
 LIVE defaults to **DRY** (no venue POST). REAL is gated (section 5).
 
-LIVE toxic path: `_toxic_maker_exit` — LIMIT at touch, never auto-MARKET.  
-Adverse re-entry cooldown: **45s**. Entry stale cancel: **8s**. Toxic adopt threshold: **1.5 bp**.
+LIVE Soft path: passive opposite maker LIMIT (`soft_maker_exit_px`).  
+LIVE Hard path: MARKET (`_is_market_flat_exit`) for `adverse_cut` / toxic ADOPT|fill / `hard_stop`.  
+Adverse re-entry cooldown: **45s** (HARD). Entry stale cancel: **8s**. Toxic adopt threshold: **1.5 bp**.  
+Spread Gate: ENTER only if best bid/ask spread **≥ 1.2bp** (`MIN_ENTRY_SPREAD_BP`); else `SPREAD_TOO_NARROW` wait.  
+ENTRY Passive Offset: ENTER **0.5bp behind** touch (`ENTRY_OFFSET_BP` / `entry_passive_px`) — BUY `floor_tick(bid*(1−0.5/1e4))`, SELL `ceil_tick(ask*(1+0.5/1e4))`; Post-Only.  
+TP Maker: best opposite front **clamped ≥ +1.0bp vs entry** (`MIN_HARVEST_BP`). Healthy `ev_gone` deferred **8s** (`TP_GRACE`, keep clamped TP); post-grace Soft uses plain best ask/bid. `adverse_fast`/HARD never deferred.  
+Close-settle: **15.0s** after EXIT flat — late same-side FILL echoes blocked (`LATE_CLOSE_ECHO`).  
+Late-Fill ADOPT: cancel↔fill race on our OID (`recent_posts` COMPLETED) → adopt into SM (toxic ≤−1.5bp → HARD).  
+Unattributed flat≠venue: `GHOST_POSITION_BLOCKED` observe; **3 hits / 3s** → Fail-Closed halt + `flatten()` (no infinite loop).  
+Soft adverse_fast escalate → HARD: reprice ≥ **3** or unrealized ≤ **−1.5bp** → pull Soft LIMIT + MARKET (+45s cool).
 
 ---
 
@@ -110,17 +121,20 @@ Adverse re-entry cooldown: **45s**. Entry stale cancel: **8s**. Toxic adopt thre
 
 1. Latch signed signal (`CONFIRM_TICKS=3` paper; `LIVE_CONFIRM_TICKS=4` REAL).
 2. Live WOBI∩OFI must still agree (no stale latch ENTER).
-3. Honest / LIVE enter tightness when enabled (`HONEST_LONG_*` / `LIVE_ENTER_*`).
-4. Post **one-sided** maker at frontier / touch. No CROSS ENTER. No spread WAIT.
+3. **Spread Gate**: `spread_bp >= 1.2` else skip (`SPREAD_TOO_NARROW`).
+4. Honest / LIVE enter tightness when enabled (`HONEST_LONG_*` / `LIVE_ENTER_*`).
+5. Post **one-sided** maker **0.5bp behind** touch (`entry_passive_px` / `ENTRY_OFFSET_BP`). No CROSS ENTER.
 
 ### 4.2 In position
 
 Priority (high → low):
 
-1. **AE `path_toxic`** (inventory_mm) → `adverse_fast` → HIT_TOUCH  
-2. **Policy `adverse_cut`** (unrealized ≤ −1.8 bp) → HIT_TOUCH  
-3. Live agrees with position → **`ev_hold`** → rest opposite maker (`REST_EXIT_ON_EV_HOLD`)  
-4. Live disagrees / NO_EDGE → **`ev_gone`** → HIT_TOUCH  
+1. **Policy `adverse_cut`** (unrealized ≤ −1.8 bp) → **FLATTEN_HARD** (MARKET)  
+2. **toxic ADOPT/fill / hard_stop** → **FLATTEN_HARD** (MARKET)  
+3. **AE `path_toxic`** (inventory_mm) → `adverse_fast` → **FLATTEN_SOFT** (passive LIMIT)  
+4. Live agrees with position → **`ev_hold`** / HOLD → rest opposite maker at best ask/bid  
+5. Live disagrees / NO_EDGE → **`ev_gone`** → **FLATTEN_SOFT** (passive LIMIT);  
+   within **TP_GRACE (8s)** after ENTRY and no adverse → defer Soft, keep `ev_hold` TP
 
 Working quote while flat/entering: EDGE_PULL on invert / soft edge loss (LIVE `edge_soft_pull`).
 
@@ -212,6 +226,22 @@ Reporter: `antigravity/quant_pipeline/honest_discord.py` · Δ line `MM4→MM5`.
 
 Promotion rule: **paper CF first**. LIVE soak reports do not alone set Economic_PASS.
 
+### 7.1 Final LIVE harvest decision (Soak8+)
+
+After primary lever **Spread Gate (1.2bp)** and secondary lever **ENTRY Offset (0.5bp)** are both live, further short soaks are **not** iterated for tuning. One **final decision soak** (Soak8 class: REAL · size=0.001 · ~1200s / max_fills=5) closes the WOBIMM standalone-MM question:
+
+| Outcome | Verdict |
+|--|--|
+| ≥1 gated round closes via **passive `ev_hold` TP at ≥ +1.0bp** (MIN_HARVEST clamp working as intended) | **PASS** — stop short soaks; advance to longer REAL stage / ops |
+| No such harvest (no fill, or only Soft→HARD / adverse closes) | **FAIL** — **end** WOBIMM standalone MM pursuit; offline analysis or other strategy only |
+
+Do **not** add a third live lever or run soak9+ seeking Harvest. Safety / infra failures remain separate (investigate; not a “retune” pass).
+
+**Soak8 verdict (2026-11-10 17:19–17:37 JST, `max_fills:5`)**: **FAIL**.  
+Closes: −0.73bp HARD (`soft_escalate_reprice`), −2.35bp HARD (`soft_escalate_slip`), −3.54bp `FLATTEN_VENUE` (open `ev_hold` cut by fill cap).  
+Passive `ev_hold` ≥+1.0bp harvests: **0**. Safety/infra OK (ghost/desync/match=False=0).  
+→ **WOBIMM standalone LIVE MM pursuit closed**; no soak9+ / no third lever. Offline analysis or other strategy only.
+
 ---
 
 ## 8. Tests (smoke)
@@ -242,7 +272,8 @@ Policy test covers `rest_exit_on_ev_hold`. LIVE fill tests cover predict vs comm
 ## 10. Explicit non-goals
 
 - Reintroducing `instant_harvest` on MM5  
-- Auto-MARKET trading exits on adverse / ev_gone  
+- Auto-MARKET on Soft exits (`ev_gone` / `adverse_fast`) — Soft is passive LIMIT only  
+- Cross-priced Soft exits (SELL@bid / BUY@ask) — that was the friction-death bug  
 - Copying MS2 scalp `path_toxic=OFF` or TF Lead vacuum gates into MM5  
 - Raising size above 0.001 without a separate GO  
 - Mutating MM4 baseline into Position-EV in place  
