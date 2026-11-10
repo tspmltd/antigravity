@@ -3093,4 +3093,48 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - **起動:** `scripts/start-dryrun-abs1-wobi-honest.sh` · 台帳 `data/mm_research/abs1_wobi_honest_dryrun/`
 - **修繕:** 初回 `_eval_wobi3_dynamic_exit` 引数不一致を修正し 19:43 再起動（tick error=0）
 - **初期観測（~4.5m）:** thin_blocks≈82 · trades=0 · FLAT（薄板で不在=設計どおり）。Economic_PASS=NO
+- **Discord（CSR-678b）:** HONEST 艦隊に ABS1 追加（9戦略）。毎時 reporter + ランナー start/hourly（TF2B webhook · username=ABS1）。即時送信確認 HTTP 204
+
+## 175. CSR-679 — VR1_WOBI_HONEST（Vacuum Reversal / 真空リバウンド）（2026-11-10）
+
+- **名前:** `VR1_WOBI_HONEST`
+- **設計:** 常時不在 → 大口SELL急増+spread≥3bp → 減速後 bid−2tick Maker → +2bp TP / 1s Time Cut
+- **起動:** `scripts/start-dryrun-vr1-wobi-honest.sh` · 台帳 `data/mm_research/vr1_wobi_honest_dryrun/`
+- **Discord:** HONEST 10戦略並走 + ランナー start/hourly + 専用カード（即時 HTTP 204）
+- Economic_PASS=NO（イベント待ち観測中）
+
+## 176. CSR-680 — DRYRUN を LIVE並み難易度へ（ABS1/VR1 LIVE_PARITY）（2026-11-10）
+
+- **禁:** 即約定 BOARD_TRADE · HIT_BID_FORCE · fee無しPnL · 「trades=0=設計どおり=OK」
+- **fill:** size-through≥lot のみ commit · Soft→MARKET_SIM（taker+slip）
+- **verdict (Soak8級):** ≥20m · n≥5 · harvest net≥1.0bp≥1 → OBSERVE / それ以外 INSUFFICIENT|FAIL · Economic_PASS=NO
+- **正本:** `antigravity/quant_pipeline/live_parity_dryrun.py` · Discord verdict 行
+- soft期 ABS1/VR1 ledger 退避後クリーン観測開始
+
+## 177. CSR-681 — HONEST 艦隊すべて LIVE_PARITY（2026-11-10）
+
+- 対象: MM4 / MM4X2 / MM5 / MS1 / MS1X2 / MS2 / ABS1 / VR1 / TF1A / TF2A
+- 同一難易度: size-through or HONEST STRICT · no HIT_BID_FORCE · Soft→MARKET_SIM · fee · Soak8 verdict
+- Discord: `FLEET_LIVE_PARITY` · 10レーン verdict
+- soft期 ledger 全退避 `paired_ledger_pre_csr681_*`
+
+## 178. CSR-682 / 682b — ABS1 MS1-EXIT / VR1 TIME_CUT+chase（2026-11-10）
+
+- **ABS1:** `_FORCE_EXIT_TAGS` から EV_GONE 除外 → MS1と同一壁アンカー Maker 待機（垂れ流し止血）
+- DYN_STOP / ABSENT_DWELL のみ Soft 可
+- **VR1:** TIME_CUT 1.0→2.5s · chase sell>0.12BTC/0.5s は入口拒否
+- 正本: `run_dryrun_abs1_wobi_honest.py` · `run_dryrun_vr1_wobi_honest.py`
+
+## 179. CSR-683 — TF HARD_STOP即MARKET / Lead path OFF（2026-11-10）
+
+- HARD_STOP: Soft@bid廃止 → 即 `MARKET_SIM`（overrun封じ）
+- TF2A: `LEAD_PATH_CUT_ENABLED=False`（LEAD_ADVERSE_CUT 止血）· entry vacuum veto は維持
+- 勝ちエンジン（BREAKEVEN_LOCK / TRAILING）は非触 · Parity下で純増反転を観測
+
+## 180. CSR-684 — DRYRUN核戦略 一覧比較表（2026-11-10）
+
+- 正本: `docs/ops/dryrun_core_strategy_comparison.md`（ユーザー原文 DIRECT 保存）
+- アルファ源泉: WOBI3 / WOBITAIL / TF2BP Baseline（トレイリング・ラチェット）
+- 注意: WOBIMM/UMM の紙黒字は Fictive Fill 恩恵 · HONEST/LIVE_PARITY で目減り
+- PEG_v3 AgingGuard = RESEARCH_TERMINATED（摩擦死）
 

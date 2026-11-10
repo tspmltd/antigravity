@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """MS1_WOBI_HONEST — Micro Scalping (旧TF2B_WOBI5_HONEST) (WIRE=NO).
 
-タイトゲート + 壁アンカー + BOARD_IMITATION 約定。
+タイトゲート + 壁アンカー + LIVE_PARITY fill (CSR-681)。
 板優位・フロー優位時の高回転マイクロ・スキャルピング。
-LIVE と同じ public_maker_fill。
+Optimistic alone は commit しない · fee haircut · Soak8 verdict。
 """
 from __future__ import annotations
 
@@ -20,13 +20,18 @@ from typing import Any, Dict, List, Optional
 AG = Path(os.environ.get("ANTIGRAVITY_ROOT", "/home/azureuser/antigravity"))
 sys.path.insert(0, str(AG))
 
+from antigravity.quant_pipeline.live_parity_dryrun import (  # noqa: E402
+    LiveParityScalpMixin,
+    net_pnl_bp,
+)
+from antigravity.quant_pipeline.ms_queue_observe import MsQueueObserve  # noqa: E402
 from antigravity.quant_pipeline.run_dryrun_tf2b_wobi3 import (  # noqa: E402
-    calculate_optimal_order_price,
+    _append,
     _iso,
     _log,
+    calculate_optimal_order_price,
 )
 from antigravity.quant_pipeline.run_dryrun_tf2b_wobi5 import TF2BWobi5DryRun  # noqa: E402
-from antigravity.quant_pipeline.run_wobimm_live import public_maker_fill  # noqa: E402
 from antigravity.quant_pipeline.wobimm3_policy import (  # noqa: E402
     FAVORABLE_WOBI,
     PULL,
@@ -41,7 +46,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 FEEDER_EXECS = AG / "data" / "market_feeder" / "executions.jsonl"
 
 
-class MS1WobiHonestDryRun(TF2BWobi5DryRun):
+class MS1WobiHonestDryRun(LiveParityScalpMixin, TF2BWobi5DryRun):
     ENTRY_POLICY = "ms1_wobi"
     LANE_NAME = "MS1_WOBI_HONEST"
     STATE_FILE = AG / "data" / "dryrun_ms1_wobi_honest_state.json"
@@ -49,6 +54,7 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
     LEDGER_FILE = OUT_DIR / "paired_ledger.jsonl"
     AUDIT_FILE = OUT_DIR / "audit_events.jsonl"
     REPORT_MINUTE = 12
+    HS_FORCE_FILL = False
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -67,7 +73,18 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
         self.prefill_pulls = 0
         self.board_fills = 0
         self._last_hb = 0.0
+        self._last_m: Dict[str, Any] = {}
+        self._pending_queue_fields: Dict[str, Any] = {}
+        self.queue_obs = MsQueueObserve(
+            lane=str(self.LANE_NAME),
+            append_fn=_append,
+            shadow_path=Path(self.LEDGER_FILE).parent / "shadow_pull.jsonl",
+            audit_path=Path(self.AUDIT_FILE),
+            iso_fn=_iso,
+            log_fn=_log,
+        )
         self._init_exec_stream()
+        self._parity_init()
 
     def _init_exec_stream(self) -> None:
         if FEEDER_EXECS.exists():
@@ -107,11 +124,20 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
         self.working_id = f"SIM-{side.upper()}-{int(time.time() * 1000)}"
         self.honest_posts += 1
         _log(f"[MS1_WOBI_HONEST] POST {side.upper()} @ {px:,.0f} ({why})")
+        if side == "buy":
+            self.queue_obs.on_post_buy(
+                now=time.time(),
+                px=float(px),
+                working_id=self.working_id,
+                m=dict(self._last_m or {}),
+            )
 
     def _cancel_quote(self, why: str) -> None:
         if not self.quote_side:
             return
         _log(f"[MS1_WOBI_HONEST] CANCEL {self.quote_side.upper()} ({why})")
+        if self.quote_side == "buy":
+            self.queue_obs.on_cancel_clear(why=why)
         self.honest_cancels += 1
         self.quote_side = None
         self.quote_px = 0.0
@@ -132,12 +158,17 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
     ) -> None:
         self.honest_fills += 1
         self.board_fills += 1
+        was_buy_quote = side == "buy"
         self.quote_side = None
         self.quote_px = 0.0
         self.working_id = ""
         _log(f"[MS1_WOBI_HONEST] FILL {side.upper()} @ {px:,.0f} src={src}")
         if side == "buy" and not self.wobi3.position_side:
-            self.apply_wobi3_entry_state("buy", px, now, depth_asks, mid_price=float(getattr(snap, "mid_price", px) or px))
+            if was_buy_quote:
+                self._pending_queue_fields = self.queue_obs.on_fill_buy(now=now, m=m)
+            self.apply_wobi3_entry_state(
+                "buy", px, now, depth_asks, mid_price=float(getattr(snap, "mid_price", px) or px)
+            )
             return
         if side == "sell" and self.wobi3.position_side:
             entry = float(self.wobi3.entry_price or px)
@@ -148,6 +179,48 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
             self.pending_exit_tag = ""
             self.pending_exit_reason = ""
             self._execute_exit_wobi3(px, pnl_bp, pnl_j, reason, tag, now)
+
+    def _execute_exit_wobi3(
+        self, fill_price: float, pnl_bp: float, pnl_jpy: float, reason: str, exit_tag: str, now: float
+    ) -> None:
+        src_hint = "MARKET_SIM" if "MARKET_SIM" in str(reason) else str(reason)
+        if "HIT_BID_FORCE" in str(reason):
+            src_hint = "HIT_BID_FORCE"
+        net, fee = net_pnl_bp(float(pnl_bp), src_hint)
+        net_j = self.wobi3._yen(net)
+        self.apply_wobi3_exit_state(fill_price, net_j, exit_tag)
+        qf = dict(self._pending_queue_fields or {})
+        if not qf:
+            qf = self.queue_obs.consume_filled_ledger_fields()
+        self._pending_queue_fields = {}
+        row = {
+            "ts": now,
+            "lane": self.lane_name,
+            "side": "buy",
+            "exit_side": exit_tag.lower(),
+            "fill_price": fill_price,
+            "pnl_bp": round(net, 2),
+            "pnl_bp_gross": round(float(pnl_bp), 2),
+            "pnl_bp_net": round(net, 2),
+            "fee_bp": round(fee, 2),
+            "pnl_jpy": round(net_j, 1),
+            "is_win": (net > 0),
+            "exit_reason": f"{exit_tag} ({reason}) [fee={fee:.2f}bp]",
+            "live_parity": True,
+            "fill_model": str(getattr(self, "FILL_MODEL", "LIVE_PARITY")),
+            **qf,
+        }
+        _append(self.ledger_path, row)
+        self.hist_wobi3.append(row)
+        _append(self.audit_path, {"event": "EXIT", "ts": _iso(), "data": row})
+        self.exit_posted_ts = 0.0
+        icon = "💰" if net > 0 else "⚡"
+        _log(
+            f"[MS1_WOBI_HONEST] {icon} EXIT [{exit_tag}] pnl={net:+.2f}bp "
+            f"(gross={float(pnl_bp):+.2f} fee={fee:.2f}) ({net_j:+.1f}円) "
+            f"post_ofi={qf.get('post_ofi')} fill_ofi={qf.get('fill_ofi')} "
+            f"shadow={qf.get('shadow_pulled')} ({reason})"
+        )
 
     def _live_long_ev(self, m: Dict[str, Any]) -> bool:
         """Book still bid, prints not against. ofi=0 is silent, not opposite."""
@@ -185,13 +258,19 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
             recent_ofi=float(m.get("recent_ofi") or 0.0),
             ask_depletion_vel=float(m.get("ask_depletion_vel") or 0.0),
         )
-        ok, reason = entry_gate(mkt)
+        # CSR-662 / fleet re-check: maker spread width ≠ loss; observe wide books, do not hard-block.
+        ok, reason = entry_gate(mkt, skip_spread_gate=True)
+        spread_bp = float(mkt.spread_bp or 0.0)
+        if spread_bp > 2.0 and ok:
+            reason = f"{reason} [spread_obs={spread_bp:.1f}bp]"
         self._last_wobi3_verdict = {
             "allowed": ok,
             "reason": reason,
             "metrics": {k: v for k, v in m.items() if not isinstance(v, list)},
             "side": "buy",
             "ts": _iso(),
+            "spread_bp": spread_bp,
+            "spread_gate": "observe_only",
         }
         return ok, reason
 
@@ -204,32 +283,6 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
             "side": "buy",
             "ts": _iso(),
         }
-
-    def _maybe_fill_board(
-        self,
-        execs: List[Dict[str, Any]],
-        bid: float,
-        ask: float,
-        snap: Any,
-        now: float,
-        m: Dict[str, Any],
-        depth_bids: List,
-        depth_asks: List,
-    ) -> None:
-        if not self.quote_side or self.quote_px <= 0:
-            return
-        hit = public_maker_fill(
-            side=self.quote_side.upper(),
-            price=self.quote_px,
-            acceptance_id=self.working_id,
-            public_execs=execs,
-            best_bid=bid,
-            best_ask=ask,
-        )
-        if not hit:
-            return
-        src, _sz = hit
-        self._on_honest_fill(self.quote_side, self.quote_px, src, snap, now, m, depth_bids, depth_asks)
 
     def _post_bid(
         self,
@@ -279,14 +332,17 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
             v = self._last_wobi3_verdict or {}
             q = self.quote_side or "FLAT"
             px = f"{self.quote_px:,.0f}" if self.quote_px else "-"
+            sh = int(getattr(self.queue_obs, "shadow_events", 0) or 0)
             _log(
                 f"[MS1_WOBI_HONEST] hb quote={q} @{px} "
                 f"gate={v.get('reason')} posts={self.honest_posts} "
-                f"fills={self.honest_fills} pulls={self.gate_pulls}"
+                f"fills={self.honest_fills} pulls={self.gate_pulls} "
+                f"shadow_pull={sh}"
             )
 
     def _tick_pair_inner(self, snap: Any, now: float) -> None:
         m = self._extract_metrics(snap, now)
+        self._last_m = m
         mid = float(getattr(snap, "mid_price", 0.0) or m.get("mid_price") or 0.0)
         bid = float(getattr(snap, "best_bid", 0.0) or 0.0)
         ask = float(getattr(snap, "best_ask", 0.0) or 0.0)
@@ -294,6 +350,9 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
         common = self._tf2bp_common(snap, m, now)
         execs = self._poll_execs()
         self._maybe_fill_board(execs, bid, ask, snap, now, m, depth_bids, depth_asks)
+        # Observe-only: resting BUY ofi flip → Shadow Pull log (does not cancel).
+        if self.quote_side == "buy" and not self.wobi3.position_side:
+            self.queue_obs.on_resting_tick(now=now, m=m, quote_side="buy")
 
         pre = self.plan_wobi3_pre_tick(snap, now, m, depth_bids, depth_asks)
         if self.wobi3.position_side:
@@ -339,7 +398,7 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
     def metrics(self) -> Dict[str, Any]:
         m = super().metrics()
         m["model"] = "MS1_WOBI_HONEST"
-        m["fill"] = "BOARD_IMITATION"
+        m["fill"] = "LIVE_PARITY_SIZE_THROUGH"
         w5 = m.get("MS1_WOBI_HONEST") or m.get("TF2B_WOBI5_HONEST") or m.get("TF2B_WOBI5")
         if w5 is not None:
             m["MS1_WOBI_HONEST"] = w5
@@ -349,10 +408,12 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
             "fills": self.honest_fills,
             "gate_pulls": self.gate_pulls,
             "board_fills": self.board_fills,
+            **self.queue_obs.snapshot_stats(),
         }
+        m["parity"] = self.parity_metrics()
         m["stack"] = (
-            "MS1_WOBI_HONEST tight gate + ev_hold while live bid edge + "
-            "sit ENTER + BOARD_IMITATION public_maker_fill"
+            "MS1_WOBI_HONEST LIVE_PARITY · tight gate + ev_hold + "
+            "size-through fill + fee haircut · Soft→MARKET_SIM"
         )
         m["comment"] = self._generate_quant_comment(m)
         return m
@@ -360,11 +421,14 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
     def _generate_quant_comment(self, m: Dict[str, Any]) -> str:
         w5 = m.get("MS1_WOBI_HONEST") or m.get("TF2B_WOBI5_HONEST") or m.get("TF2B_WOBI5") or {}
         hf = m.get("honest_fill") or {}
+        pm = m.get("parity") or {}
+        vd = pm.get("verdict") or {}
         s1 = w5.get("stats_1h") or {}
         return (
             f"直近1h: MS1_WOBI_HONEST {s1.get('pnl_bp', 0):+.2f} bp "
-            f"({s1.get('total_trades', 0)}件)。fill=BOARD_IMITATION。 "
-            f"posts={hf.get('posts', 0)} fills={hf.get('fills', 0)}。"
+            f"({s1.get('total_trades', 0)}件)。fill=LIVE_PARITY。 "
+            f"posts={hf.get('posts', 0)} fills={hf.get('fills', 0)} "
+            f"verdict={vd.get('verdict')}."
         )
 
     def discord_payload(self, kind: str = "hourly") -> Dict[str, Any]:
@@ -373,14 +437,16 @@ class MS1WobiHonestDryRun(TF2BWobi5DryRun):
         if payload.get("embeds"):
             emb = payload["embeds"][0]
             emb["title"] = str(emb.get("title") or "").replace("TF2B_WOBI5", "MS1_WOBI_HONEST").replace("TF2B_WOBI5_HONEST", "MS1_WOBI_HONEST")
+            pm = self.parity_metrics()
+            vd = pm.get("verdict") or {}
             emb["description"] = (
-                "**MS1_WOBI_HONEST** · Micro Scalp · WIRE=NO\n"
-                "タイトゲート ＋ 壁アンカー ＋ BOARD_IMITATION fill。"
-                "高回転マイクロスキャルピング。"
+                "**MS1_WOBI_HONEST** · Micro Scalp · LIVE_PARITY · WIRE=NO\n"
+                f"size-through fill · fee haircut · Soft→MARKET_SIM · "
+                f"verdict=`{vd.get('verdict')}` · Economic_PASS=`{vd.get('economic_pass')}`"
             )
             m = self.metrics()
             if emb.get("footer"):
-                emb["footer"]["text"] = f"Antigravity Quants · MS1_WOBI_HONEST · {m.get('ts_jst')}"
+                emb["footer"]["text"] = f"Antigravity Quants · MS1 LIVE_PARITY · {m.get('ts_jst')}"
         return payload
 
 

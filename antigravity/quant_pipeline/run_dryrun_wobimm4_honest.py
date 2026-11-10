@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WOBIMM4_HONEST — UKI one-sided + board-imitation fills (WIRE=NO).
+"""WOBIMM4_HONEST — inventory MM + LIVE_PARITY fills (WIRE=NO).
 
-Two-sided. Same public_maker_fill as LIVE (PUBLIC_OID → BOOK_CROSS → BOARD_TRADE).
-BOARD_TRADE books on the print tick (the print is consumed; next snap is MISS).
-ENTER BOOK_CROSS is still refused. PREDICT_MISS pulls a stale CROSS wait.
-Not LIVE.
+CSR-681: same difficulty as ABS1/VR1/MS/TF LIVE_PARITY.
+  - FILL_MODEL=HONEST + STRICT own-size (no BOARD_TRADE same-tick fiction)
+  - ADVERSE Soft rest then MARKET_SIM (no free HIT_TOUCH_FORCE)
+  - Fee haircut on close (taker+slip on MARKET_SIM)
+  - INSTANT_HARVEST unchanged (baseline A/B vs MM5).
+
+Not LIVE. Economic_PASS=NO.
 """
 from __future__ import annotations
 
@@ -13,23 +16,29 @@ import argparse
 import os
 import signal
 import sys
+import time
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 os.environ["ENABLE_REAL_TRADING"] = "false"
 
 AG = Path(os.environ.get("ANTIGRAVITY_ROOT", "/home/azureuser/antigravity"))
 sys.path.insert(0, str(AG))
 
+from antigravity.quant_pipeline.honest_adverse_kit import (  # noqa: E402
+    HonestAdverseKit,
+    StrategyProfile,
+)
+from antigravity.quant_pipeline.live_parity_dryrun import (  # noqa: E402
+    EXIT_REST_MAX_SEC,
+    count_harvests,
+    lane_verdict,
+    net_pnl_bp,
+)
 from antigravity.quant_pipeline.run_dryrun_wobimm4 import (  # noqa: E402
     WOBIMM4DryRun,
     _log,
-    board_predicts_fill,
     build_wobimm4_discord_payload,
-)
-from antigravity.quant_pipeline.wobimm4_policy import (  # noqa: E402
-    BUY,
-    SELL,
-    signed_signal,
 )
 
 OUT_DIR = AG / "data" / "mm_research" / "wobimm4_honest_dryrun"
@@ -38,10 +47,15 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 class WOBIMM4HonestDryRun(WOBIMM4DryRun):
     LANE_NAME = "WOBIMM4_HONEST"
-    FILL_MODEL = "BOARD_IMITATION"
+    FILL_MODEL = "HONEST"
+    HONEST_STRICT_OWN_SIZE = True
     LONG_TIGHT = False
     BUY_ONLY = False
     INSTANT_HARVEST = True
+    # CSR-681: Soft rest adverse; escalate MARKET_SIM (no free HIT_TOUCH).
+    ADVERSE_HIT_TOUCH = True
+    LIVE_PARITY = True
+    EXIT_REST_MAX_SEC = EXIT_REST_MAX_SEC
     STATE_FILE = AG / "data" / "dryrun_wobimm4_honest_state.json"
     PID_FILE = AG / "data" / "dryrun_wobimm4_honest.pid"
     LEDGER_FILE = OUT_DIR / "paired_ledger.jsonl"
@@ -51,99 +65,230 @@ class WOBIMM4HonestDryRun(WOBIMM4DryRun):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._last_hb = 0.0
+        self.ae = HonestAdverseKit(
+            lane=self.LANE_NAME,
+            save_dir=str(AG / "data"),
+            hard_stop_bp=-4.0,
+            target_mfe_bp=3.0,
+            profile=StrategyProfile.INVENTORY_MM,
+            log_fn=_log,
+        )
+        self.adverse_fast_cuts = 0
+        self.adverse_hard_stops = 0
+        self.exit_posted_ts = 0.0
+        self.parity_market_sim = 0
+        self._lane_started_ts = time.time()
+
+    def _ae_track_from_fill(self, side: str, px: float) -> None:
+        tape = getattr(self, "_tape", None) or {}
+        mid = 0.0
+        try:
+            bid = float(tape.get("best_bid") or 0.0)
+            ask = float(tape.get("best_ask") or 0.0)
+            if bid > 0 and ask > 0:
+                mid = 0.5 * (bid + ask)
+        except Exception:
+            mid = float(px)
+        spread_bp = float(tape.get("spread_bp") or 0.0)
+        self.ae.track_entry(
+            px=float(px),
+            now=__import__("time").time(),
+            side=side.lower(),
+            mid=mid if mid > 0 else float(px),
+            spread_bp=spread_bp,
+            meta={
+                "lane": self.LANE_NAME,
+                "wire": "NO",
+                "wobi": float(tape.get("wobi") or 0.0),
+                "ofi": float(tape.get("recent_ofi") or 0.0),
+                "spread_bp": spread_bp,
+                "research": "mm4_phase2_hit_touch+inventory_mm",
+                "adverse_profile": StrategyProfile.INVENTORY_MM.value,
+            },
+        )
+
+    def _apply_fill(self, side: str, px: float, src: str) -> None:
+        pre_net = int(self.net)
+        super()._apply_fill(side, px, src)
+        if pre_net == 0 and self.net != 0:
+            self._ae_track_from_fill(side, px)
+
+    def _ae_path_override(
+        self, *, snap, now: float, bid: float, ask: float, mid: float
+    ) -> Optional[Tuple[str, Optional[str], str]]:
+        """HARD_STOP then path_toxic before policy harvest/adverse_cut."""
+        del snap
+        if self.net == 0 or self.entry_px <= 0:
+            return None
+        side = "buy" if self.net > 0 else "sell"
+        self.ae.on_tick(mid=mid, now=now, bid=bid, ask=ask, side=side)
+
+        if self.net > 0 and bid > 0:
+            unrealized_bp = ((bid / self.entry_px) - 1.0) * 1e4
+        elif self.net < 0 and ask > 0:
+            unrealized_bp = ((self.entry_px / ask) - 1.0) * 1e4
+        elif mid > 0:
+            if self.net > 0:
+                unrealized_bp = ((mid / self.entry_px) - 1.0) * 1e4
+            else:
+                unrealized_bp = ((self.entry_px / mid) - 1.0) * 1e4
+        else:
+            return None
+
+        flatten = "SELL" if self.net > 0 else "BUY"
+
+        hs, hs_why = self.ae.is_hard_stop(unrealized_bp)
+        if hs:
+            self.adverse_hard_stops += 1
+            self._adverse_trigger_bp = float(unrealized_bp)
+            self._adverse_trigger_ts = float(now)
+            return EXIT, flatten, f"hard_stop ({hs_why})"
+
+        toxic, tw = self.ae.path_toxic()
+        if toxic:
+            self.adverse_fast_cuts += 1
+            self._adverse_trigger_bp = float(unrealized_bp)
+            self._adverse_trigger_ts = float(now)
+            return EXIT, flatten, f"adverse_fast ({tw})"
+        return None
+
+    def _ae_close_path(self, *, exit_px: float, pnl_bp: float, why: str) -> Dict[str, Any]:
+        return self.ae.close(exit_px=exit_px, pnl_bp=pnl_bp, reason=why)
 
     def _maybe_fill(self, execs, bid: float, ask: float) -> None:
-        """BOARD_TRADE is the print in hand. Waiting a snap deletes it.
+        """LIVE_PARITY: strict HONEST queue (no BOARD_TRADE same-tick fiction)."""
+        WOBIMM4DryRun._maybe_fill(self, execs, bid, ask)
 
-        2.9h after CSR-664: PREDICT BOARD_TRADE 51/51 MISS, CROSS skipped,
-        closes 0. Book the uncrossed print now. CROSS ENTER still waits
-        then confirm_book_cross. EXIT CROSS still confirms.
-        """
-        if self._confirm_predicted_fill(execs, bid, ask):
-            return
-        if not self.working_side or self._pending_fill:
-            return
-        src = board_predicts_fill(self.working_side, self.working_px, bid, ask, execs)
-        if not src:
-            return
-        if src == "BOARD_TRADE":
-            if self.net == 0:
-                tape = getattr(self, "_tape", None) or {}
-                live, live_why = signed_signal(
-                    float(tape.get("wobi") or 0.0),
-                    float(tape.get("recent_ofi") or 0.0),
-                )
-                want = BUY if str(self.working_side).upper() == "BUY" else SELL
-                if live != 0 and live != want:
-                    _log(
-                        f"[{self.lane_name}] CONFIRM_SKIP {self.working_side} @ "
-                        f"{self.working_px:,.0f} ev_gone {live_why}"
-                    )
-                    self._pull("confirm_ev_gone")
-                    return
-            _log(
-                f"[{self.lane_name}] CONFIRM {self.working_side} @ "
-                f"{self.working_px:,.0f} src=BOARD_TRADE same-tick"
-            )
-            self._apply_fill(self.working_side, self.working_px, src)
-            return
-        self._predict_fill(src)
+    def _hit_touch_force_src(self, why: str) -> str:
+        """CSR-681: force path is MARKET_SIM (fee+slip), not free HIT_TOUCH."""
+        del why
+        return "MARKET_SIM"
 
-    def _confirm_predicted_fill(self, execs, bid: float, ask: float) -> bool:
-        """Venue miss → drop stale px. ENTER confirm needs live EV.
+    def _close_ledger(self, exit_px: float, src: str, why: str) -> None:
+        if self.entry_px <= 0 or self.net == 0:
+            return
+        if self.net > 0:
+            gross = ((exit_px / self.entry_px) - 1.0) * 1e4
+        else:
+            gross = ((self.entry_px / exit_px) - 1.0) * 1e4
+        net, fee = net_pnl_bp(float(gross), str(src))
+        # Temporarily book via parent math by patching after — call parent with
+        # adjusted entry so parent computes net? Simpler: inline close with fee.
+        from antigravity.quant_pipeline.run_dryrun_wobimm4 import SIZE_BTC, _append
 
-        Booking a crossed ENTER when the confirm tape is already ev_gone
-        was the −3bp round-trip. EXIT still fills — flatten must complete.
-        No new bp gate.
-        """
-        pend = self._pending_fill
-        if pend and self.net == 0:
-            src = board_predicts_fill(str(pend["side"]), float(pend["px"]), bid, ask, execs)
-            if src:
-                tape = getattr(self, "_tape", None) or {}
-                live, live_why = signed_signal(
-                    float(tape.get("wobi") or 0.0),
-                    float(tape.get("recent_ofi") or 0.0),
-                )
-                want = BUY if str(pend["side"]).upper() == "BUY" else SELL
-                # ofi=0 / NO_EDGE is silent, not opposite. Only skip invert.
-                # Skipping NO_EDGE ate 68/74 confirms overnight (3 closes / 9.7h).
-                if live != 0 and live != want:
-                    _log(
-                        f"[{self.lane_name}] CONFIRM_SKIP {pend['side']} @ "
-                        f"{float(pend['px']):,.0f} ev_gone {live_why}"
-                    )
-                    self._pending_fill = None
-                    self._pull("confirm_ev_gone")
-                    return False
-                pred_src = str(pend.get("src") or "")
-                if src == "BOOK_CROSS" or pred_src == "BOOK_CROSS":
-                    _log(
-                        f"[{self.lane_name}] CONFIRM_SKIP {pend['side']} @ "
-                        f"{float(pend['px']):,.0f} book_cross pred={pred_src} src={src}"
-                    )
-                    self._pending_fill = None
-                    self._pull("confirm_book_cross")
-                    return False
-        if super()._confirm_predicted_fill(execs, bid, ask):
-            return True
-        if (
-            pend
-            and self.working_side == pend.get("side")
-            and abs(self.working_px - float(pend.get("px") or 0.0)) <= 1e-9
+        pnl_j = net * SIZE_BTC * self.entry_px / 1e4
+        self.pnl_bp += net
+        self.pnl_jpy += pnl_j
+        self.trades += 1
+        if net > 0:
+            self.wins += 1
+        row: Dict[str, Any] = {
+            "ts": time.time(),
+            "lane": self.lane_name,
+            "action": "CLOSE_LONG" if self.net > 0 else "COVER_SHORT",
+            "price": exit_px,
+            "size": SIZE_BTC,
+            "pnl_bp": round(net, 2),
+            "pnl_bp_gross": round(float(gross), 2),
+            "pnl_bp_net": round(net, 2),
+            "fee_bp": round(fee, 2),
+            "pnl_jpy": round(pnl_j, 1),
+            "is_win": net > 0,
+            "source": src,
+            "exit_reason": why,
+            "entry_src": self.entry_src or "",
+            "hold_s": round(time.time() - self.entry_ts, 1) if self.entry_ts else None,
+            "live_parity": True,
+            "fill_model": str(self.FILL_MODEL),
+        }
+        trig = getattr(self, "_adverse_trigger_bp", None)
+        t_ts = float(getattr(self, "_adverse_trigger_ts", 0.0) or 0.0)
+        if trig is not None and (
+            str(why).startswith("adverse_cut")
+            or str(why).startswith("adverse_fast")
+            or str(why).startswith("hard_stop")
         ):
-            self._pull("predict_miss")
-        return False
+            row["adverse_trigger_bp"] = round(float(trig), 3)
+            row["adverse_fill_bp"] = round(net, 3)
+            row["adverse_overrun_bp"] = round(net - float(trig), 3)
+            if t_ts > 0:
+                row["adverse_lag_s"] = round(time.time() - t_ts, 3)
+        ae_path = getattr(self, "_ae_close_path", None)
+        if callable(ae_path):
+            try:
+                row.update(ae_path(exit_px=exit_px, pnl_bp=net, why=why) or {})
+            except Exception:
+                pass
+        _append(self.ledger_path, row)
+        _log(
+            f"[{self.lane_name}] CLOSE pnl={net:+.2f}bp "
+            f"(gross={gross:+.2f} fee={fee:.2f}) src={src} ({why})"
+        )
+        if why.startswith("adverse_cut"):
+            self.adverse_cuts += 1
+        self.history.append(
+            {
+                "ts": time.time(),
+                "pnl_bp": round(net, 2),
+                "pnl_jpy": round(pnl_j, 1),
+                "is_win": net > 0,
+            }
+        )
+        self.net = 0
+        self.entry_px = 0.0
+        self.entry_src = ""
+        self.entry_ts = 0.0
+        self._cover_waiting = False
+        self._flatten_waiting = False
+        self._adverse_trigger_bp = None
+        self._adverse_trigger_ts = 0.0
+        self.exit_posted_ts = 0.0
+
+    def metrics(self):
+        m = super().metrics()
+        m["model"] = self.LANE_NAME
+        m["adverse_hit_touch"] = bool(self.ADVERSE_HIT_TOUCH)
+        m["adverse_profile"] = self.ae.profile.value
+        m["adverse_fast_cuts"] = int(getattr(self, "adverse_fast_cuts", 0))
+        m["adverse_hard_stops"] = int(getattr(self, "adverse_hard_stops", 0))
+        m["fill_model"] = str(self.FILL_MODEL)
+        m["honest_strict_own_size"] = bool(
+            getattr(self, "HONEST_STRICT_OWN_SIZE", False)
+        )
+        rows = list(getattr(self, "history", []) or [])
+        started = float(getattr(self, "_lane_started_ts", time.time()) or time.time())
+        verd = lane_verdict(
+            n=len(rows),
+            harvest_ge_min=count_harvests(rows),
+            window_sec=max(0.0, time.time() - started),
+            net_pnl_bp_sum=sum(float(r.get("pnl_bp") or 0.0) for r in rows),
+        )
+        m["parity"] = {
+            "live_parity": True,
+            "fill_model": str(self.FILL_MODEL),
+            "force_src": "MARKET_SIM",
+            "verdict": verd,
+        }
+        m["note"] = (
+            "MM4 LIVE_PARITY · HONEST STRICT · Soft→MARKET_SIM + fee · WIRE=NO"
+        )
+        return m
 
     def _tick(self, snap, now: float) -> None:
         super()._tick(snap, now)
         if now - self._last_hb < 60.0:
             return
         self._last_hb = now
+        pm = (self.metrics().get("parity") or {})
+        vd = pm.get("verdict") or {}
         _log(
             f"[{self.LANE_NAME}] hb net={self.net} working={self.working_side or 'FLAT'} "
             f"sig={self.sig_confirmed} posts={self.posts} fills={self.fills} "
-            f"cancels={self.cancels} flatten_waits={self.flatten_waits}"
+            f"cancels={self.cancels} flatten_waits={self.flatten_waits} "
+            f"ae_fast={getattr(self, 'adverse_fast_cuts', 0)} "
+            f"hard_stop={getattr(self, 'adverse_hard_stops', 0)} "
+            f"fill={self.FILL_MODEL} strict={bool(getattr(self, 'HONEST_STRICT_OWN_SIZE', False))} "
+            f"verdict={vd.get('verdict')} profile={self.ae.profile.value}"
         )
 
     def send_discord_report(self, kind: str = "hourly") -> None:
@@ -159,12 +304,13 @@ class WOBIMM4HonestDryRun(WOBIMM4DryRun):
             payload["embeds"][0]["title"] = str(payload["embeds"][0]["title"]).replace(
                 "WOBIMM4", "WOBIMM4_HONEST"
             )
+            vd = ((m.get("parity") or {}).get("verdict") or {})
             payload["embeds"][0]["description"] = (
-                "MM HONEST · same-tick BOARD_TRADE · no CROSS ENTER · harvest ask-1 · "
-                "WIRE=NO. Not LIVE. Not CSR-635."
+                "MM4 LIVE_PARITY · HONEST STRICT · Soft→MARKET_SIM + fee · WIRE=NO\n"
+                f"verdict=`{vd.get('verdict')}` · Economic_PASS=`{vd.get('economic_pass')}`"
             )
             payload["embeds"][0]["footer"] = {
-                "text": f"Antigravity Quants · WOBIMM4_HONEST · {m.get('ts_jst', '')}"
+                "text": f"Antigravity Quants · WOBIMM4 LIVE_PARITY · {m.get('ts_jst', '')}"
             }
         try:
             req = urllib.request.Request(
@@ -179,7 +325,9 @@ class WOBIMM4HonestDryRun(WOBIMM4DryRun):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="WOBIMM4_HONEST paper (WIRE=NO · two-sided · board-imitation)")
+    parser = argparse.ArgumentParser(
+        description="WOBIMM4_HONEST paper (WIRE=NO · Phase2 HIT_TOUCH adverse)"
+    )
     parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--source", type=str, default="shared_feeder")
     parser.add_argument("--report-interval", type=float, default=3600.0)

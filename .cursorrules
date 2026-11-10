@@ -57,8 +57,11 @@ Default start is **DRY_RUN=1**.
 
 - Do **not** CROSS ENTER. One-sided maker.
 - Maker **spread widening ≠ loss gate** (CSR-661/662; `.cursor/rules/maker-spread-not-loss.mdc`).
-- Honest Discord reporter is 8-lane A/B; do not silently drop MS2 / MM5 / TF2A from payloads.
+- Honest Discord reporter is 10-lane A/B; do not silently drop MS2 / MM5 / TF2A / ABS1 / VR1 from payloads.
 - Adverse profiles differ: scalp (MS2) ≠ inventory_mm (MM5) ≠ trend lead (TF2A). Do not copy thresholds across profiles.
+- **DRYRUN LIVE-parity (CSR-680/681):** Entire HONEST fleet (MM4/4X2/5 · MS1/1X2/2 ·
+  ABS1 · VR1 · TF1A/2A) bans HIT_BID_FORCE / optimistic-alone fills; fee haircut;
+  Soft→MARKET_SIM; Soak8-hard verdict (`n=0` after window = FAIL); Economic_PASS=NO.
 - Commits: only when asked. Prefer small, CSR-linked messages. Never force-push main.
 
 ## Code touch map (MM5)

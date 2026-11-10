@@ -6,10 +6,13 @@ Post CSR-677 design (thin passive +1bp MM = no EV):
   - Refuse ENTER when book is thin (MIN_ENTRY_SPREAD_BP) — absent from
     the regime where WOBIMM5 tried to farm harvest.
   - Hard MAX_HOLD_SEC even under EV_HOLD — leave the board (ABSENT_DWELL).
-  - Stricter never-green DYN_STOP; EV_GONE / dwell → HIT_BID_FORCE.
+  - EXIT (CSR-682b): EV_GONE は _FORCE_EXIT_TAGS から除外し、MS1 と完全同一の
+    calculate_optimal_order_price（壁アンカー Maker 待機）。Soft@bid 禁止。
+  - DYN_STOP / ABSENT_DWELL のみ Soft→MARKET_SIM 可（不在カット用）。
+  - LIVE-parity fill (CSR-680): optimistic alone does not commit; fee haircut.
   - No Position-EV opposite-maker harvest rest. No LIVE. Economic_PASS=NO.
 
-A/B vs MS2_WOBI_HONEST (same HONEST fill stack).
+A/B vs MS2_WOBI_HONEST (MS2 may Soft EV_GONE; ABS1 EV_GONE = MS1 maker).
 """
 from __future__ import annotations
 
@@ -41,11 +44,12 @@ from antigravity.quant_pipeline.run_dryrun_tf2b_wobi3 import (  # noqa: E402
 OUT_DIR = AG / "data" / "mm_research" / "abs1_wobi_honest_dryrun"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-_FORCE_EXIT_TAGS = frozenset({"EV_GONE", "DYN_STOP", "ABSENT_DWELL"})
+# CSR-682b: EV_GONE を即除外。MS1 maker 待機へ一本化。
+_FORCE_EXIT_TAGS = frozenset({"DYN_STOP", "ABSENT_DWELL"})
 
 
 class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
-    """Absent Scalp: thin-book refuse + hard dwell cut."""
+    """Absent Scalp: thin-book refuse + hard dwell cut · LIVE-parity eval."""
 
     LANE_NAME = "ABS1_WOBI_HONEST"
     STATE_FILE = AG / "data" / "dryrun_abs1_wobi_honest_state.json"
@@ -64,7 +68,9 @@ class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
     # Keep MS2 de-repair: no score veto / no path HS exec.
     ENTRY_VETO_ENABLED = False
     HARD_STOP_ENABLED = False
-    HS_FORCE_FILL = True
+    # CSR-682: MS1-compatible EXIT — never Soft@bid / MARKET_SIM escalate.
+    HS_FORCE_FILL = False
+    MS1_MAKER_EXIT = True
     POST_CUT_COOLDOWN_SEC = 20.0
 
     def __init__(self, **kwargs: Any) -> None:
@@ -84,6 +90,7 @@ class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
         self.spread_gate_blocks = 0
         self.absent_dwell_cuts = 0
         self.entry_cooldown_until = 0.0
+        self._parity_init()
 
     def _record_gate(self, m: Dict[str, Any]) -> Tuple[bool, str]:
         ok, reason = super()._record_gate(m)
@@ -162,6 +169,8 @@ class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
             v = self._last_wobi3_verdict or {}
             q = self.quote_side or "FLAT"
             px = f"{self.quote_px:,.0f}" if self.quote_px else "-"
+            pm = self.parity_metrics()
+            vd = pm.get("verdict") or {}
             _log(
                 f"[ABS1_WOBI_HONEST] hb quote={q} @{px} "
                 f"gate={v.get('reason')} posts={self.honest_posts} "
@@ -169,13 +178,16 @@ class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
                 f"thin_blocks={int(self.spread_gate_blocks)} "
                 f"dwell_cuts={int(self.absent_dwell_cuts)} "
                 f"dyn_stop={int(getattr(self, 'dyn_stop_cuts', 0))} "
+                f"parked={pm.get('parity_parked')} commits={pm.get('parity_commits')} "
+                f"mkt_sim={pm.get('parity_market_sim')} "
+                f"verdict={vd.get('verdict')} "
                 f"min_spread={float(self.MIN_ENTRY_SPREAD_BP):.1f} "
                 f"max_hold={float(self.MAX_HOLD_SEC):.0f}s "
-                f"profile={self.ae.profile.value}"
+                f"profile={self.ae.profile.value} fill={pm.get('fill_model')}"
             )
 
     def _tick_pair_inner(self, snap: Any, now: float) -> None:
-        # Same as MS2 but force-exit tags include ABSENT_DWELL.
+        # MS2 enter path + ABSENT_DWELL; EV_GONE EXIT = MS1 identical.
         m = self._extract_metrics(snap, now)
         self._last_m = m
         mid = float(getattr(snap, "mid_price", 0.0) or m.get("mid_price") or 0.0)
@@ -199,38 +211,66 @@ class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
             if pre.get("intent") == "EXIT":
                 tag = str(pre.get("tag") or "EXIT")
                 reason = str(pre.get("reason") or "")
-                force = tag in _FORCE_EXIT_TAGS and bid > 0
-                if force:
-                    px, desc = float(bid), "HIT_BID"
-                else:
-                    px, desc = calculate_optimal_order_price(
-                        depth_bids, depth_asks, "sell", 5, 0.05, 1.0, mid
+                # EV_GONE ∉ _FORCE_EXIT_TAGS → MS1 と完全同一の Maker 待機。
+                soft = tag in _FORCE_EXIT_TAGS and bid > 0
+                if soft:
+                    px, desc = float(bid), "SOFT_BID"
+                    self.pending_exit_tag = tag
+                    self.pending_exit_reason = f"{reason} [{desc}]"
+                    self._post_quote(
+                        "sell",
+                        px,
+                        f"EXIT {self.pending_exit_tag} {self.pending_exit_reason}",
                     )
-                self.pending_exit_tag = tag
-                self.pending_exit_reason = f"{reason} [{desc}]"
-                self._post_quote(
-                    "sell", px, f"EXIT {self.pending_exit_tag} {self.pending_exit_reason}"
-                )
-                if force:
+                    self._parity_mark_exit_posted(now)
                     self._maybe_fill_board(
                         execs, bid, ask, snap, now, m, depth_bids, depth_asks
                     )
-                    if self.wobi3.position_side and bool(
-                        getattr(self, "HS_FORCE_FILL", True)
-                    ):
-                        self.pending_exit_reason = f"{reason} [HIT_BID_FORCE]"
-                        self._on_honest_fill(
-                            "sell",
-                            float(bid),
-                            "HIT_BID_FORCE",
-                            snap,
-                            now,
-                            m,
-                            depth_bids,
-                            depth_asks,
+                    if self.wobi3.position_side:
+                        self._parity_maybe_hard_exit(
+                            bid=bid,
+                            snap=snap,
+                            now=now,
+                            m=m,
+                            depth_bids=depth_bids,
+                            depth_asks=depth_asks,
+                            tag=tag,
+                            reason=reason,
                         )
+                else:
+                    # === MS1 identical EXIT block (wall-anchor maker wait) ===
+                    px, desc = calculate_optimal_order_price(
+                        depth_bids, depth_asks, "sell", 5, 0.05, 1.0, mid
+                    )
+                    self.pending_exit_tag = tag
+                    self.pending_exit_reason = str(reason or desc)
+                    self._post_quote(
+                        "sell",
+                        px,
+                        f"EXIT {self.pending_exit_tag} {self.pending_exit_reason}",
+                    )
+                    self.exit_posted_ts = 0.0
             elif self.quote_side == "sell":
-                self._cancel_quote("ev_hold")
+                tag = str(getattr(self, "pending_exit_tag", "") or "")
+                if tag in _FORCE_EXIT_TAGS:
+                    reason = str(
+                        getattr(self, "pending_exit_reason", "") or "soft_rest"
+                    )
+                    self._parity_maybe_hard_exit(
+                        bid=bid,
+                        snap=snap,
+                        now=now,
+                        m=m,
+                        depth_bids=depth_bids,
+                        depth_asks=depth_asks,
+                        tag=tag,
+                        reason=reason,
+                    )
+                    if not self.wobi3.position_side:
+                        return
+                else:
+                    # MS1: EV returned while resting maker exit → pull.
+                    self._cancel_quote("ev_hold")
             elif self.quote_side == "buy":
                 self._cancel_quote("now_long")
             return
@@ -281,25 +321,43 @@ class ABS1WobiHonestDryRun(MS2WobiHonestDryRun):
             "dyn_stop_check_s": float(self.DYN_STOP_CHECK_S),
             "dyn_stop_mfe_touch_bp": float(self.DYN_STOP_MFE_TOUCH_BP),
         }
+        m["parity"] = self.parity_metrics()
+        m["ms1_maker_exit"] = True
         m["stack"] = (
-            "ABS1 Absent Scalp · thin-book refuse "
+            "ABS1 Absent Scalp · LIVE_PARITY · thin-book refuse "
             f">={self.MIN_ENTRY_SPREAD_BP:.1f}bp · max_hold={self.MAX_HOLD_SEC:.0f}s · "
-            "no +1bp harvest rest · WIRE=NO"
+            "EXIT=MS1 maker-wait (no Soft@bid) · WIRE=NO"
         )
         return m
 
     def discord_payload(self, kind: str = "hourly") -> Dict[str, Any]:
         payload = super().discord_payload(kind)
         payload["username"] = "ABS1_WOBI_HONEST"
+        m = self.metrics()
+        abs_m = m.get("absent") or {}
+        pm = m.get("parity") or {}
+        vd = pm.get("verdict") or {}
         if payload.get("embeds"):
-            title = str(payload["embeds"][0].get("title") or "")
-            payload["embeds"][0]["title"] = title.replace("MS2", "ABS1").replace(
-                "MS1", "ABS1"
+            emb = payload["embeds"][0]
+            title = str(emb.get("title") or "")
+            emb["title"] = (
+                title.replace("MS2", "ABS1")
+                .replace("MS1", "ABS1")
+                .replace("TF2B_WOBI5", "ABS1_WOBI_HONEST")
             )
-            payload["embeds"][0]["description"] = (
-                "ABS1 Absent Scalp · thin-book refuse · hard dwell cut · "
-                "no passive +1bp MM · WIRE=NO · A/B vs MS2"
+            emb["description"] = (
+                "**ABS1_WOBI_HONEST** · Absent Scalp · LIVE_PARITY · WIRE=NO\n"
+                f"thin refuse ≥`{float(self.MIN_ENTRY_SPREAD_BP):.1f}bp` · "
+                f"max_hold=`{float(self.MAX_HOLD_SEC):.0f}s` · EXIT=MS1 maker-wait\n"
+                f"thin_blocks=`{int(abs_m.get('thin_book_blocks') or 0)}` · "
+                f"dwell_cuts=`{int(abs_m.get('absent_dwell_cuts') or 0)}` · "
+                f"parked=`{int(pm.get('parity_parked') or 0)}` · "
+                f"verdict=`{vd.get('verdict')}` · Economic_PASS=`{vd.get('economic_pass')}`"
             )
+            if emb.get("footer"):
+                emb["footer"]["text"] = (
+                    f"Antigravity Quants · ABS1 LIVE_PARITY · {m.get('ts_jst')}"
+                )
         return payload
 
 

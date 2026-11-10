@@ -12,11 +12,12 @@
   ∧ agent_ok (TrendFollow: not down; prefer up/trend)
   fresh5 / SPREAD_MAX=2.0 は検証で非有効 → 観測のみ（POSTしない条件から外す）。
   ab_v1 (streak≥3) は失策 → 不採用。cand_ab_v1 は観測のみ。
-- トレイリングストップ:
+  - トレイリングストップ:
     * 含み益 < +5.0 bp: ハードストップ -4.0 bp または上位トレンド崩壊までホールド（微小ノイズでの途中撤退を排除）
     * 含み益 >= +5.0 bp: ストップを +3.0 bp へ引き上げ（+5 到達を +0.5 まで戻さない）
     * 含み益 >= +8.0 bp: ピークから -2.5 bp の動的トレイリングで利益最大化
     * HARD_STOP の EXIT は bid に当てて即 Flatten（壁避け指値が -4 を -6〜-14 にするのを止める）
+  - ADVERSE Lead は紙TF1Aには載せない（A/B baseline）。実装は TF2A のみ。
 - 約定: BOARD_IMITATION (public_maker_fill)
 """
 from __future__ import annotations
@@ -45,8 +46,14 @@ from antigravity.quant_pipeline.adverse_excursion import (  # noqa: E402
 from antigravity.quant_pipeline.position_flow_strength import (  # noqa: E402
     PositionFlowStrength,
 )
+from antigravity.quant_pipeline.tf_adverse_lead import (  # noqa: E402
+    TfAdverseLead,
+)
+from antigravity.quant_pipeline.live_parity_dryrun import (  # noqa: E402
+    LiveParityScalpMixin,
+    net_pnl_bp,
+)
 from antigravity.quant_pipeline.run_dryrun_tf2b_wobi5 import TF2BWobi5DryRun  # noqa: E402
-from antigravity.quant_pipeline.run_wobimm_live import public_maker_fill  # noqa: E402
 from antigravity.quant_pipeline.wobimm3_policy import (  # noqa: E402
     Wobi3Market,
     entry_gate,
@@ -109,7 +116,7 @@ def eval_tf1a_enter_v2(
     return ok, flags
 
 
-class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
+class TF1AWobiHonestDryRun(LiveParityScalpMixin, TF2BWobi5DryRun):
     ENTRY_POLICY = "tf1a_wobi"
     LANE_NAME = "TF1A_WOBI_HONEST"
     STATE_FILE = AG / "data" / "dryrun_tf1a_wobi_honest_state.json"
@@ -117,6 +124,7 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
     LEDGER_FILE = OUT_DIR / "paired_ledger.jsonl"
     AUDIT_FILE = OUT_DIR / "audit_events.jsonl"
     REPORT_MINUTE = 12
+    HS_FORCE_FILL = False
 
     # TF パラメータ
     TARGET_MIN_PROFIT_BP = 5.0     # 最低目標利益: +5bp
@@ -124,6 +132,9 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
     TRAILING_STEP_BP = 2.5         # トレイリング許容後退幅: 2.5bp
     HARD_STOP_BP = -4.0            # ノイズを耐えるハードストップ: -4.0bp
     PROFIT_LOCK_BP = 3.0           # +5bp到達後は +3bp を割ったら切る（旧 +0.5 は目標を吐き出す）
+    # Lead adverse: OFF on TF1A (baseline). TF2A turns these on.
+    LEAD_ENTRY_VETO_ENABLED = False
+    LEAD_PATH_CUT_ENABLED = False
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -139,6 +150,10 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
         self.entry_ts = 0.0
         self.entry_spread_bp = 0.0
         self.breakeven_locked = False
+        self._adverse_trigger_bp: Optional[float] = None
+        self._adverse_trigger_ts = 0.0
+        self._last_lead_entry: Dict[str, Any] = {}
+        self._lead_entry_blocking = False
 
         # カウンター
         self.honest_posts = 0
@@ -158,10 +173,15 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
         self.current_trade_id: Optional[str] = None
         # Same-direction flow strength → MFE research (observation only; no EXIT wire).
         self.flow_strength = PositionFlowStrength()
+        self.lead = TfAdverseLead(
+            entry_enabled=bool(self.LEAD_ENTRY_VETO_ENABLED),
+            path_enabled=bool(self.LEAD_PATH_CUT_ENABLED),
+        )
         self._last_flat_feat: Dict[str, Any] = {}
         self._council_cache: Dict[str, Any] = {}
         self._council_cache_ts = 0.0
         self._init_exec_stream()
+        self._parity_init()
 
     def _local_agent_trend(self, mid: float, now: float) -> Dict[str, Any]:
         """TrendFollowAgent-compatible local estimate from mid history."""
@@ -316,7 +336,8 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
                     "cand_fresh2": feat.get("cand_fresh2"),
                     "cand_persist3": feat.get("cand_persist3"),
                     "cand_legacy_trend_up": feat.get("cand_legacy_trend_up"),
-                    "research": "adverse_excursion+tf2b10_regime_proxy+ab_v1_enter",
+                    "research": "adverse_excursion+tf_adverse_lead+tf2b10_regime_proxy",
+                    "lead_entry": dict(getattr(self, "_last_lead_entry", {}) or {}),
                 },
             )
         except Exception as exc:
@@ -409,6 +430,12 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             "entry_wobi_streak": (rec.meta or {}).get("wobi_streak"),
             "entry_adverse_score": (rec.meta or {}).get("adverse_score"),
             "entry_vacuum_score": (rec.meta or {}).get("vacuum_score"),
+            "adverse_trigger_bp": (
+                None
+                if getattr(self, "_adverse_trigger_bp", None) is None
+                else round(float(self._adverse_trigger_bp), 3)
+            ),
+            **dict(((rec.meta or {}).get("lead_entry") or {})),
         }
 
     def _ae_close(self, exit_px: float, pnl_bp: float, reason: str) -> Dict[str, Any]:
@@ -565,6 +592,10 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             "vacuum_score": (self._last_flat_feat or {}).get("vacuum_score"),
             "regime": (self._last_flat_feat or {}).get("regime")
             or self._regime_tag(spread_bp, ret60_bp),
+            "lead_entry_veto": (self._last_flat_feat or {}).get("lead_entry_veto"),
+            "lead_entry_reason": (self._last_flat_feat or {}).get("lead_entry_reason"),
+            "lead_weak_streak_obs": (self._last_flat_feat or {}).get("lead_weak_streak_obs"),
+            "lead_score55_obs": (self._last_flat_feat or {}).get("lead_score55_obs"),
         }
         try:
             _append(self.gate_log_path, row)
@@ -618,6 +649,9 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             self.entry_ts = now
             self.peak_pnl_bp = 0.0
             self.breakeven_locked = False
+            self._adverse_trigger_bp = None
+            self._adverse_trigger_ts = 0.0
+            self._lead_entry_blocking = False
             self.entry_spread_bp = float(
                 (self._last_flat_feat or {}).get("spread_bp")
                 or m.get("spread_bp")
@@ -650,30 +684,78 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
     def _execute_exit_wobi3(
         self, fill_price: float, pnl_bp: float, pnl_jpy: float, reason: str, exit_tag: str, now: float
     ) -> None:
-        """Parent ledger + Adverse path fields (MFE/MAE/AE). Entry rules unchanged."""
-        path = self._ae_close(fill_price, pnl_bp, f"{exit_tag} ({reason})")
-        self.apply_wobi3_exit_state(fill_price, pnl_jpy, exit_tag)
+        """Parent ledger + Adverse path fields (MFE/MAE/AE). LIVE_PARITY fee."""
+        src_hint = "MARKET_SIM" if "MARKET_SIM" in str(reason) else str(reason)
+        if "HIT_BID_FORCE" in str(reason):
+            src_hint = "HIT_BID_FORCE"
+        net, fee = net_pnl_bp(float(pnl_bp), src_hint)
+        net_j = self.wobi3._yen(net)
+        path = self._ae_close(fill_price, net, f"{exit_tag} ({reason})")
+        self.apply_wobi3_exit_state(fill_price, net_j, exit_tag)
         row = {
             "ts": now,
             "lane": self.lane_name,
             "side": "buy",
             "exit_side": exit_tag.lower(),
             "fill_price": fill_price,
-            "pnl_bp": round(pnl_bp, 2),
-            "pnl_jpy": round(pnl_jpy, 1),
-            "is_win": (pnl_bp > 0),
-            "exit_reason": f"{exit_tag} ({reason})",
+            "pnl_bp": round(net, 2),
+            "pnl_bp_gross": round(float(pnl_bp), 2),
+            "pnl_bp_net": round(net, 2),
+            "fee_bp": round(fee, 2),
+            "pnl_jpy": round(net_j, 1),
+            "is_win": (net > 0),
+            "exit_reason": f"{exit_tag} ({reason}) [fee={fee:.2f}bp]",
             "hold_s": round(now - self.entry_ts, 1) if self.entry_ts else None,
             "entry_spread_bp": round(float(self.entry_spread_bp or 0.0), 3),
+            "live_parity": True,
+            "fill_model": str(getattr(self, "FILL_MODEL", "LIVE_PARITY")),
             **path,
         }
         _append(self.ledger_path, row)
         self.hist_wobi3.append(row)
         _append(self.audit_path, {"event": "EXIT", "ts": _iso(), "data": row})
+        self.exit_posted_ts = 0.0
         _log(
-            f"[TF1A_WOBI_HONEST] EXIT [{exit_tag}] pnl={pnl_bp:+.2f}bp "
+            f"[TF1A_WOBI_HONEST] EXIT [{exit_tag}] pnl={net:+.2f}bp "
+            f"(gross={float(pnl_bp):+.2f} fee={fee:.2f}) "
             f"mfe={path.get('mfe_bp')} mae={path.get('mae_bp')} "
             f"hit_order={path.get('hit_order')} ({reason})"
+        )
+
+    def _hard_stop_immediate_market(
+        self,
+        *,
+        bid: float,
+        snap: Any,
+        now: float,
+        m: Dict[str, Any],
+        depth_bids: List,
+        depth_asks: List,
+        reason: str,
+        unreal: Optional[float] = None,
+    ) -> None:
+        """CSR-683: HARD_STOP → immediate MARKET_SIM (no Soft@bid delay/overrun)."""
+        if bid <= 0 or not self.wobi3.position_side:
+            return
+        if hasattr(self, "_hs_trigger_bp"):
+            self._hs_trigger_bp = (
+                float(unreal) if unreal is not None else float(self.HARD_STOP_BP)
+            )
+            self._hs_trigger_ts = float(now)
+        self.pending_exit_tag = "HARD_STOP"
+        self.pending_exit_reason = f"{reason} [MARKET_SIM immediate]"
+        self.parity_market_sim = int(getattr(self, "parity_market_sim", 0)) + 1
+        self.exit_posted_ts = 0.0
+        self._post_quote("sell", float(bid), f"EXIT HARD_STOP {self.pending_exit_reason}")
+        self._on_honest_fill(
+            "sell",
+            float(bid),
+            "MARKET_SIM",
+            snap,
+            now,
+            m,
+            depth_bids,
+            depth_asks,
         )
 
     def _eval_tf_exit(self, current_mid: float, m: Dict[str, Any], now: float) -> tuple[bool, str, float, str]:
@@ -690,9 +772,31 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
         if unrealized_bp > self.peak_pnl_bp:
             self.peak_pnl_bp = unrealized_bp
 
-        # 1. ハードストップロス (-4.0bp)
+        # 1. ハードストップロス (-4.0bp) — CSR-683: 執行は即 MARKET
         if unrealized_bp <= self.HARD_STOP_BP:
             return True, "HARD_STOP", current_mid, f"stop_loss ({unrealized_bp:+.2f}bp <= {self.HARD_STOP_BP}bp)"
+
+        # 1b. Lead path cut — ae_1s toxic before −4 (score≥55 unused).
+        lead = getattr(self, "lead", None)
+        if lead is not None:
+            ae1 = m.get("ae_1s")
+            if ae1 is None:
+                rec = self._active_ae_record() if hasattr(self, "_active_ae_record") else None
+                if rec is not None:
+                    ae1 = rec.excursions.get("ae_1s")
+            path_dec = lead.evaluate_path(
+                ae_1s=None if ae1 is None else float(ae1),
+                unrealized_bp=float(unrealized_bp),
+                peak_pnl_bp=float(self.peak_pnl_bp),
+                hard_stop_bp=float(self.HARD_STOP_BP),
+            )
+            if path_dec.cut:
+                # Count once per open trade (trigger stamp is cleared on fill).
+                if getattr(self, "_adverse_trigger_bp", None) is None:
+                    lead.note_path_cut(good=True, reason="ae1s_path")
+                self._adverse_trigger_bp = float(unrealized_bp)
+                self._adverse_trigger_ts = float(now)
+                return True, "LEAD_ADVERSE_CUT", current_mid, path_dec.reason
 
         # 2. +5bp 突破後は +3bp を残す。+0.5 まで戻すと目標を吐き出す。
         if self.peak_pnl_bp >= self.TARGET_MIN_PROFIT_BP:
@@ -720,32 +824,6 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
 
         return False, "HOLD", 0.0, f"holding_trend (unrealized={unrealized_bp:+.2f}bp peak={self.peak_pnl_bp:+.2f}bp hold={hold_time:.0f}s)"
 
-    def _maybe_fill_board(
-        self,
-        execs: List[Dict[str, Any]],
-        bid: float,
-        ask: float,
-        snap: Any,
-        now: float,
-        m: Dict[str, Any],
-        depth_bids: List,
-        depth_asks: List,
-    ) -> None:
-        if not self.quote_side or self.quote_px <= 0:
-            return
-        hit = public_maker_fill(
-            side=self.quote_side.upper(),
-            price=self.quote_px,
-            acceptance_id=self.working_id,
-            public_execs=execs,
-            best_bid=bid,
-            best_ask=ask,
-        )
-        if not hit:
-            return
-        src, _sz = hit
-        self._on_honest_fill(self.quote_side, self.quote_px, src, snap, now, m, depth_bids, depth_asks)
-
     def _post_bid(
         self,
         depth_bids: List,
@@ -770,9 +848,12 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             pos = "LONG" if self.wobi3.position_side else "FLAT"
             q = self.quote_side or "FLAT"
             px = f"{self.quote_px:,.0f}" if self.quote_px else "-"
+            lead_m = self.lead.metrics() if getattr(self, "lead", None) else {}
             _log(
                 f"[TF1A_WOBI_HONEST] hb pos={pos} quote={q} @{px} "
-                f"posts={self.honest_posts} fills={self.honest_fills}"
+                f"posts={self.honest_posts} fills={self.honest_fills} "
+                f"lead_veto={lead_m.get('lead_entry_vetoes', 0)} "
+                f"lead_cut={lead_m.get('lead_path_cuts', 0)}"
             )
 
     def _extract_metrics(self, snap: Any, now: float) -> Dict[str, Any]:
@@ -835,21 +916,36 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
                 _log(f"[TF1A_WOBI_HONEST] flow_strength update err: {exc}")
             should_exit, exit_tag, exit_px, exit_reason = self._eval_tf_exit(mid, m, now)
             if should_exit:
+                # CSR-683: HARD_STOP = immediate MARKET only (no Soft@bid wait).
                 if exit_tag == "HARD_STOP" and bid > 0:
-                    px, desc = float(bid), "HIT_BID"
+                    self._hard_stop_immediate_market(
+                        bid=bid,
+                        snap=snap,
+                        now=now,
+                        m=m,
+                        depth_bids=depth_bids,
+                        depth_asks=depth_asks,
+                        reason=exit_reason,
+                        unreal=unreal,
+                    )
                 else:
                     px, desc = calculate_optimal_order_price(
                         depth_bids, depth_asks, "sell", 5, 0.05, 1.0, mid
                     )
-                self.pending_exit_tag = exit_tag
-                self.pending_exit_reason = f"{exit_reason} [{desc}]"
-                self._post_quote("sell", px, f"EXIT {self.pending_exit_tag} {self.pending_exit_reason}")
-                if exit_tag == "HARD_STOP":
+                    self.pending_exit_tag = exit_tag
+                    self.pending_exit_reason = f"{exit_reason} [{desc}]"
+                    self._post_quote(
+                        "sell",
+                        px,
+                        f"EXIT {self.pending_exit_tag} {self.pending_exit_reason}",
+                    )
+                    self.exit_posted_ts = 0.0
                     self._maybe_fill_board(
                         execs, bid, ask, snap, now, m, depth_bids, depth_asks
                     )
             elif self.quote_side == "sell":
-                self._cancel_quote("cancel_exit_hold")
+                # Maker exit resting (trail/lock) — no Soft→HARD escalate.
+                pass
             elif self.quote_side == "buy":
                 self._cancel_quote("cancel_buy_now_long")
             return
@@ -897,10 +993,26 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
         )
         old_ok = enter_ok
 
+        lead_dec = self.lead.evaluate_entry(
+            vacuum_score=m.get("vacuum_score"),
+            ofi_streak=int(self._ofi_streak),
+            wobi_streak=int(self._wobi_streak),
+            adverse_score=m.get("adverse_score"),
+        )
+        self._last_lead_entry = lead_dec.fields()
+        lead_block = bool(lead_dec.veto)
+
         if spread_block:
             if self.quote_side == "buy":
                 self._cancel_quote(f"SPREAD_TOO_WIDE ({spread_bp:.1f}bp)")
+        elif enter_ok and lead_block:
+            if not self._lead_entry_blocking:
+                self.lead.note_entry_veto()
+            self._lead_entry_blocking = True
+            if self.quote_side == "buy":
+                self._cancel_quote(lead_dec.reason or "LEAD_ENTRY_VETO")
         elif enter_ok:
+            self._lead_entry_blocking = False
             why = (
                 f"TF_TREND_V3_ENTRY (ret60={ret60_bp:+.1f} fresh5={eflags['fresh5']} "
                 f"spread={spread_bp:.2f} wide_obs={spread_wide} "
@@ -911,6 +1023,7 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             )
             self._post_bid(depth_bids, depth_asks, mid, why)
         else:
+            self._lead_entry_blocking = False
             if self.quote_side == "buy":
                 if (
                     ret15_bp < -0.5
@@ -921,7 +1034,7 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
                     self._cancel_quote("trend_v3_vanished")
 
         working_buy = self.quote_side == "buy"
-        posted = bool(enter_ok and not spread_block and working_buy)
+        posted = bool(enter_ok and not spread_block and not lead_block and working_buy)
         self._last_flat_feat = {
             "spread_bp": spread_bp,
             "spread_wide_obs": spread_wide,
@@ -957,6 +1070,7 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             "adverse_score": m.get("adverse_score"),
             "vacuum_score": m.get("vacuum_score"),
             "regime": self._regime_tag(spread_bp, ret60_bp),
+            **dict(self._last_lead_entry or {}),
         }
         self._log_gate_tick(
             now=now,
@@ -979,7 +1093,7 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
     def metrics(self) -> Dict[str, Any]:
         m = super().metrics()
         m["model"] = "TF1A_WOBI_HONEST"
-        m["fill"] = "BOARD_IMITATION"
+        m["fill"] = "LIVE_PARITY_SIZE_THROUGH"
         tf_stats = m.get("TF1A_WOBI_HONEST") or m.get("TF2B_WOBI5") or {}
         m["TF1A_WOBI_HONEST"] = tf_stats
         m["honest_fill"] = {
@@ -988,11 +1102,15 @@ class TF1AWobiHonestDryRun(TF2BWobi5DryRun):
             "fills": self.honest_fills,
             "board_fills": self.board_fills,
         }
+        m["parity"] = self.parity_metrics()
+        m["hard_stop_exec"] = "MARKET_IMMEDIATE"
         m["stack"] = (
-            "TF1A_WOBI_HONEST ENTER_v3 (base+micro+agent; fresh5/spread observe-only) + "
-            "Target>=5bp + ProfitLock+3 + Trailing + HIT_BID HARD_STOP + "
-            "AdverseExcursion path + position_flow_strength→MFE observe + BOARD_IMITATION"
+            "TF1A_WOBI_HONEST LIVE_PARITY · ENTER_v3 + Target>=5bp + "
+            "HARD_STOP=MARKET immediate · fee haircut "
+            "(LeadAdverse OFF — baseline vs TF2A)"
         )
+        if getattr(self, "lead", None) is not None:
+            m["tf_adverse_lead"] = self.lead.metrics()
         return m
 
 

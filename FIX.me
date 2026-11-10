@@ -691,8 +691,52 @@ GOV: MM5_LIVE_MM=CLOSED_FAIL · SOAK9+=NO · 3RD_LEVER=NO · Economic_PASS=NO ·
 
 GOV: ABS1=DRYRUN · WIRE=NO · LIVE=untouched · Economic_PASS=NO · A/B=MS2
 
-**commit 承認（2026-11-10 · ユーザー指示「fix.me/mem.me/git対応」· CSR-678）:** ABS1 ランナー/起動停止/単体/FIX·MEM を正本化。無関係ダーティツリー・logs/data/.env・pushなし。
+**commit 承認（2026-11-10 · ユーザー指示「fix.me/mem.me/git対応」· CSR-678）:** ABS1 ランナー/起動停止/単体/FIX·MEM を正本化。無関係ダーティツリー·logs/data/.env・pushなし。
 
+**CSR-678b（2026-11-10 19:52 JST）:** ABS1 を HONEST Discord 艦隊に配線（9戦略並走）。`honest_discord.py` に ABS1 1h/日次・MS2→ABS1 Δ。ランナー start/hourly は TF2B webhook（username=ABS1）。専用 ABS1 カード + fleet hourly を即時送信確認（HTTP 204）。WIRE=NO · LIVE非触。
 
+2026-11-10 | CSR-678b | ABS1 Discord wired into HONEST fleet | LOCK
+
+**CSR-679（2026-11-10 19:56 JST）:** 新戦略 **VR1_WOBI_HONEST**（Vacuum Reversal / 真空リバウンド）紙レーン新設。通常完全不在 · SELL taker≥0.5BTC/1s ∧ spread≥3.0bp で ARMED · 減速後 bid−2tick Post-Only · TP +2.0bp / TIME_CUT 1.0s HIT_BID。HONEST Discord 10戦略に配線 · ランナー start Discord HTTP 204 · 専用カード送信。単体3 PASS · DRYRUN起動。WIRE=NO · LIVE非触 · Economic_PASS=NO。
+
+2026-11-10 | CSR-679 | VR1 Vacuum Reversal dryrun + Discord | LOCK
+
+GOV: VR1=DRYRUN · WIRE=NO · LIVE=untouched · Economic_PASS=NO
+
+**CSR-680（2026-11-10 20:05 JST）:** オペレータ「DRYRUN評価甘いのはやめよう、LIVE並みの難易度に」。**ABS1/VR1** を LIVE-parity 化（MS1/MS2 baseline は soft 対照として残置）。(1) fill: `BOOK_CROSS`/`BOARD_TRADE` は対向 size-through≥0.001 のみ commit · `HIT_BID_FORCE` 禁止 · Soft rest→`MARKET_SIM`(+taker 0.75bp + slip 0.50bp)。(2) ledger fee haircut · `pnl_bp`=`net`。(3) Soak8-hard verdict: window≥1200s · n≥5 · ≥1 close net≥1.0bp でようやく OBSERVE · **n=0=FAIL（不在≠PASS）** · Economic_PASS常時NO。(4) Discord 艦隊に ABS1/VR1 verdict 行 · n=0 Δ は INSUFFICIENT · FAIL時色赤。(5) soft期 ledger は `paired_ledger_pre_csr680_*.jsonl` へ退避。正本 `live_parity_dryrun.py` · tests 17 PASS · 再起動 ABS1=2540042 · VR1=2540063。WIRE=NO · LIVE非触。
+
+2026-11-10 | CSR-680 | DRYRUN LIVE-parity eval ABS1/VR1 | LOCK
+
+GOV: ABS1/VR1=LIVE_PARITY_DRYRUN · MS baselines soft · WIRE=NO · Economic_PASS=NO
+
+**CSR-681（2026-11-10 20:12 JST）:** オペレータ「DRYRUN対象は全部同じような難易度に」。HONEST 艦隊10戦略すべてを LIVE_PARITY 化。(1) MS1基点 mixin → MS1/MS1X2/MS2/ABS1/VR1: size-through commit · HS_FORCE_FILL=False · Soft→MARKET_SIM · fee。(2) TF1A/TF2A 同。(3) MM4/4X2/5: FILL_MODEL=HONEST+STRICT · force src=MARKET_SIM · fee close。(4) Discord fill=`FLEET_LIVE_PARITY` · 10レーン Soak8 verdict · FAIL赤。(5) soft期 ledger 全退避 `paired_ledger_pre_csr681_*.jsonl`。tests 18 PASS。WIRE=NO · LIVE非触 · Economic_PASS=NO。
+
+2026-11-10 | CSR-681 | Fleet-wide DRYRUN LIVE_PARITY | LOCK
+
+GOV: HONEST_FLEET=LIVE_PARITY · WIRE=NO · Economic_PASS=NO
+
+**CSR-682（2026-11-10 23:25 JST）:** オペレータ優先パッチ。(1) **ABS1 EXIT=MS1互換**: EV_GONE/DYN_STOP/ABSENT_DWELL すべて `calculate_optimal_order_price` maker 待機 · Soft@bid / MARKET_SIM escalate 撤廃 · EV復帰時は `ev_hold` cancel。(2) **VR1**: TIME_CUT 1.0s→**2.5s** · 成行追随ゲート `CHASE_WINDOW=0.5s` / `CHASE_SELL_MAX=0.12BTC` で POST前拒否。tests 9 PASS · ABS1/VR1 再起動。WIRE=NO · LIVE非触 · Economic_PASS=NO。
+
+2026-11-10 | CSR-682 | ABS1 MS1-exit · VR1 time-cut+chase | LOCK
+
+GOV: ABS1=MS1_MAKER_EXIT · VR1=TIME_CUT_2.5+CHASE · WIRE=NO · Economic_PASS=NO
+
+**CSR-682b（2026-11-10 23:26 JST）:** 処方箋どおり ABS1 `_FORCE_EXIT_TAGS` から **EV_GONE 即除外**（残=DYN_STOP/ABSENT_DWELL）。EV_GONE 発火時は MS1 と同一 `calculate_optimal_order_price(..., sell, 5, 0.05, 1.0, mid)` 壁アンカー Maker 待機 · Soft@bid/MARKET_SIM なし · pending_reason も MS1 形。tests PASS · 再起動。
+
+2026-11-10 | CSR-682b | ABS1 EV_GONE out of force · MS1 maker identical | LOCK
+
+**CSR-683（2026-11-10 23:28 JST）:** TF止血。(1) **HARD_STOP 即 MARKET 一択** — Soft@bid 待機全廃 · `_hard_stop_immediate_market` で即 `MARKET_SIM`（hs_overrun 封じ · 設計−4bp+fee範囲）。(2) **TF2A LEAD_ADVERSE_CUT=OFF** — `LEAD_PATH_CUT_ENABLED=False`（entry vacuum veto は残置）。TF1A/TF2A 再起動。WIRE=NO · Economic_PASS=NO。
+
+2026-11-10 | CSR-683 | TF HS MARKET immediate · Lead path OFF | LOCK
+
+GOV: TF_HS=MARKET_IMMEDIATE · TF2A_LEAD_PATH=OFF · WIRE=NO · Economic_PASS=NO
+
+**commit 承認（2026-11-10 · ユーザー指示「fix.me/mem.me/GIT対応」· CSR-680..683）:** LIVE_PARITY艦隊化・ABS1 MS1-EXIT・VR1 chase/time-cut・TF HS即MARKET / Lead path OFF を正本化。スコープ=FIX·MEM·.cursorrules·live_parity_dryrun·ABS1/VR1/MS1/MS2/TF1A/TF2A/MM4 honest·honest_discord·関連tests/scripts。無関係ダーティツリー·logs/data/.env·pushなし。
+
+**CSR-684（2026-11-10 23:31 JST）:** DRYRUN核戦略 一覧比較表を `docs/ops/dryrun_core_strategy_comparison.md` に DIRECT 保存（WOBI3/WOBITAIL/TF2BP/WOBIMM/アリーナMM/UMM/PEG_v3）。HONEST fictive-fill 注意・AgingGuard TERMINATED を併記。WIRE=NO · Economic_PASS=NO。
+
+2026-11-10 | CSR-684 | DRYRUN core strategy comparison table | LOCK
+
+**commit 承認（2026-11-10 · ユーザー再指示「fix.me/mem.me/git対応」· CSR-680..684）:** 上記スコープに `docs/ops/dryrun_core_strategy_comparison.md` を追加してコミット。pushなし。
 
 
