@@ -3084,3 +3084,13 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 
 正本: `FIX.me` CSR-677 · `docs/MM5_SPEC_AND_OPERATIONS.md` §7.1 · `.cursorrules`
 
+## 174. CSR-678 — ABS1_WOBI_HONEST（Absent Scalp / 居ないスキャル）（2026-11-10）
+
+- **名前:** `ABS1_WOBI_HONEST`
+- **設計の一答:** 薄利受動MMは捨てる → 薄板では**居ない**、載っても**すぐ居なくなる**
+- **ルール:** ENTER `spread≥2.5bp` · `MAX_HOLD=6s` → `ABSENT_DWELL` HIT_BID_FORCE · DYN_STOP 4s/mfe<1.0 · 切後20sクール · +1bp harvest rest なし
+- **基盤:** MS2 HONEST fill · profile=scalp · WIRE=NO · LIVE非触
+- **起動:** `scripts/start-dryrun-abs1-wobi-honest.sh` · 台帳 `data/mm_research/abs1_wobi_honest_dryrun/`
+- **修繕:** 初回 `_eval_wobi3_dynamic_exit` 引数不一致を修正し 19:43 再起動（tick error=0）
+- **初期観測（~4.5m）:** thin_blocks≈82 · trades=0 · FLAT（薄板で不在=設計どおり）。Economic_PASS=NO
+

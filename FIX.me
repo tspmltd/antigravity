@@ -685,6 +685,14 @@ GOV: MM5_LIVE_MM=CLOSED_FAIL · SOAK9+=NO · 3RD_LEVER=NO · Economic_PASS=NO ·
 
 **commit 承認（2026-11-10 · ユーザー指示「fix.me/Mem.me記録して、Git対処」· CSR-677）:** Soak8最終FAIL・Gate/Offset・最終判定ルールを正本化。スコープ=FIX.me·MEM.md·MM5 spec·.cursorrules·LIVE runner/tests/soak scripts·必要依存。無関係ダーティツリー・logs/data/.env・pushなし。
 
+**CSR-678（2026-11-10 19:35 JST / fix 19:43 JST）:** 新戦略 **ABS1_WOBI_HONEST**（Absent Scalp / 居ないスキャル）紙レーン新設。CSR-677 の一答（薄利受動MMはEV無し）から設計: ENTER は `spread≥2.5bp` のみ · `MAX_HOLD=6s` で EV_HOLD でも `ABSENT_DWELL` HIT_BID_FORCE · DYN_STOP 4s/mfe<1.0 · 切後20sクール · +1bp harvest rest なし。MS2 HONEST スタック継承 · WIRE=NO · LIVE非触 · Economic_PASS=NO。初回起動で `_eval_wobi3_dynamic_exit` シグネチャ不一致→決済不能を即修繕・再起動（tick error=0）。単体4 PASS。DRYRUN観測（再起動後~4.5m）: thin_blocks≈82 · trades=0（薄板で不在=設計どおり）· FLAT。
+
+2026-11-10 | CSR-678 | ABS1 Absent Scalp dryrun lane | LOCK
+
+GOV: ABS1=DRYRUN · WIRE=NO · LIVE=untouched · Economic_PASS=NO · A/B=MS2
+
+**commit 承認（2026-11-10 · ユーザー指示「fix.me/mem.me/git対応」· CSR-678）:** ABS1 ランナー/起動停止/単体/FIX·MEM を正本化。無関係ダーティツリー・logs/data/.env・pushなし。
+
 
 
 
