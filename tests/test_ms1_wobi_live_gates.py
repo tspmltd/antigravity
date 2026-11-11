@@ -79,6 +79,13 @@ class TestMS1LiveEv(unittest.TestCase):
         self.assertFalse(r._live_long_ev(0.25, -0.01))
         self.assertFalse(r._live_long_ev(0.10, 0.05))
 
+    def test_ev_hold_hysteresis(self):
+        r = _bare_runner()
+        # Soft EV true at ofi=0, but not strong enough to yank EXIT
+        self.assertTrue(r._live_long_ev(0.25, 0.0))
+        self.assertFalse(r._live_long_ev_hold(0.25, 0.0))
+        self.assertTrue(r._live_long_ev_hold(0.25, 0.05))
+
 
 class TestMS1SingleOrderInvariant(unittest.TestCase):
     def test_inventory_ok_requires_flat(self):
@@ -128,6 +135,45 @@ class TestMS1SingleOrderInvariant(unittest.TestCase):
         r._post("SELL", 100.0, "EXIT", now=1.0)
         self.assertEqual(r.posts, 0)
         self.assertGreater(r.blocked_posts, 0)
+
+    def test_reprice_deadband_keeps_same_tick(self):
+        r = _bare_runner(real=False)
+        r._post("BUY", 10_000_000.0, "ENTER a", now=100.0)
+        oid = r.working_id
+        r.client.send_order.reset_mock()
+        # 1bp of 10M = 1000 yen — 200 yen hop must KEEP
+        r._post("BUY", 10_000_200.0, "ENTER b", now=110.0)
+        r.client.send_order.assert_not_called()
+        self.assertEqual(r.working_id, oid)
+        self.assertEqual(r.posts, 1)
+
+
+class TestMS1RestingBuyParity(unittest.TestCase):
+    """CSR-694d: entry_gate ADVERSE_FLOW must not yank resting BUY."""
+
+    def test_ofi_flicker_keeps_resting_buy(self):
+        r = _bare_runner()
+        why = r._resting_buy_pull_why(
+            {"wobi": 0.10, "recent_ofi": -0.02},
+            "ADVERSE_FLOW (ofi=-0.02<=0)",
+        )
+        self.assertIsNone(why)
+
+    def test_mild_wobi_drop_keeps_resting_buy(self):
+        r = _bare_runner()
+        why = r._resting_buy_pull_why(
+            {"wobi": 0.05, "recent_ofi": 0.01},
+            "ADVERSE_FLOW (wobi=+0.05 < +0.20)",
+        )
+        self.assertIsNone(why)
+
+    def test_confirmed_invert_pulls(self):
+        r = _bare_runner()
+        why = r._resting_buy_pull_why(
+            {"wobi": -0.50, "recent_ofi": -0.20},
+            "ADVERSE_FLOW",
+        )
+        self.assertEqual(why, "edge_invert")
 
 
 if __name__ == "__main__":

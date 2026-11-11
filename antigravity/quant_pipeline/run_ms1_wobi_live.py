@@ -13,6 +13,10 @@ Policy (MS1):
   - LIMIT only · lot ≤ 0.001 · confirmed net gates
   - CSR-694b: **one live child order max** — same-side reprice = cancel then
     wait (never stack). Venue net hard-capped at MAX_INV_BTC.
+  - CSR-694d: resting BUY is NOT cancelled on entry_gate flicker (paper parity).
+    Pull only on confirmed invert (`decide` edge_invert). Reprice deadband ≥0.5bp.
+  - CSR-694d2: resting EXIT SELL sticks until fill or *strong* EV_HOLD
+    (ofi flicker must not yank). No wall-chase reprice while EXIT works.
 
 Default DRY (no venue POST). REAL requires GO ACTIVE + CONFIRM_GO=MS1_LIVE +
 operator-set ENABLE_REAL_TRADING=true + --real --confirm-go MS1.
@@ -58,7 +62,10 @@ from antigravity.quant_pipeline.run_wobimm_live import (  # noqa: E402
 )
 from antigravity.quant_pipeline.wobimm3_policy import (  # noqa: E402
     FAVORABLE_WOBI,
+    PULL,
     Wobi3Market,
+    Wobi3Quote,
+    decide,
     entry_gate,
 )
 
@@ -66,6 +73,9 @@ JST = timezone(timedelta(hours=9))
 PRODUCT = "FX_BTC_JPY"
 SIZE_BTC = 0.001
 MAX_INV_BTC = 0.001  # hard cap — never accumulate past 1 lot (CSR-694b)
+REPRICE_TICK_JPY = 1.0  # floor
+REPRICE_BP = 1.0  # KEEP unless ≥1bp move (CSR-694d)
+EV_HOLD_OFI = 0.05  # strong hold to cancel resting EXIT (CSR-694d2)
 EXACT_FLAT_EPS = 1e-7
 CONFIRM_TOKEN = "MS1"
 CONFIRM_ENV = "MS1_LIVE"
@@ -304,7 +314,12 @@ class MS1WobiLive:
         return abs(self.confirmed_net) <= EXACT_FLAT_EPS
 
     def _live_long_ev(self, wobi: float, ofi: float) -> bool:
+        """Soft EV — used to *start* EXIT when false (paper MS1)."""
         return float(wobi) >= FAVORABLE_WOBI and float(ofi) >= 0.0
+
+    def _live_long_ev_hold(self, wobi: float, ofi: float) -> bool:
+        """Hard EV — cancel resting EXIT only on confirmed hold (CSR-694d2)."""
+        return float(wobi) >= FAVORABLE_WOBI and float(ofi) >= EV_HOLD_OFI
 
     def _entry_ok(self, m: Dict[str, Any]) -> Tuple[bool, str]:
         ok, reason = entry_gate(
@@ -323,6 +338,23 @@ class MS1WobiLive:
         if spread_bp > 2.0 and ok:
             reason = f"{reason} [spread_obs={spread_bp:.1f}bp]"
         return ok, reason
+
+    def _resting_buy_pull_why(self, m: Dict[str, Any], gate_why: str) -> Optional[str]:
+        """Paper parity (CSR-694d): flicker ADVERSE_FLOW → KEEP; invert → pull."""
+        action, pull_why = decide(
+            Wobi3Quote(
+                working_side="BUY",
+                is_long=False,
+                plan_intent="HOLD",
+                plan_reason=gate_why,
+                drift_bp=0.0,
+                wobi=float(m.get("wobi") or 0.0),
+                recent_ofi=float(m.get("recent_ofi") or 0.0),
+            )
+        )
+        if action == PULL and pull_why == "edge_invert":
+            return pull_why
+        return None
 
     def _can_api(self, now: float) -> bool:
         return (now - self.last_api_ts) >= MIN_API_INTERVAL_SEC
@@ -396,13 +428,15 @@ class MS1WobiLive:
             self.blocked_posts += 1
             return
 
-        # Same quote already working — keep it.
-        if (
-            self.working_id
-            and self.working_side == side_u
-            and abs(self.working_px - float(px)) <= 1e-9
-        ):
-            return
+        # Same quote already working — keep within deadband (CSR-694d).
+        # 1-yen alone is too tight: wall-anchor hops every tick → replace_wait thrash.
+        if self.working_id and self.working_side == side_u:
+            band = max(
+                REPRICE_TICK_JPY,
+                abs(float(self.working_px) or float(px)) * REPRICE_BP * 1e-4,
+            )
+            if abs(self.working_px - float(px)) < band - 1e-12:
+                return
 
         # ANY existing working order: cancel first, never POST beside it.
         if self.working_id:
@@ -740,7 +774,7 @@ class MS1WobiLive:
             "oversize_halts": int(getattr(self, "oversize_halts", 0)),
             "max_inv": MAX_INV_BTC,
             "economic_pass": False,
-            "csr": "CSR-694b",
+            "csr": "CSR-694d",
         }
 
     def save_state(self) -> None:
@@ -823,11 +857,14 @@ class MS1WobiLive:
             return
 
         if self._is_long():
-            if self._live_long_ev(m["wobi"], m["recent_ofi"]):
-                if self.working_side == "SELL":
+            # Resting EXIT: stick until fill or *strong* EV_HOLD — no wall chase.
+            if self.working_side == "SELL":
+                if self._live_long_ev_hold(m["wobi"], m["recent_ofi"]):
                     self._cancel("ev_hold", now)
                 return
-            # EV_GONE → wall-anchor Maker SELL (replace = cancel-wait, not stack)
+            if self._live_long_ev(m["wobi"], m["recent_ofi"]):
+                return
+            # EV_GONE → wall-anchor Maker SELL (one post; keep until fill/hold)
             px, desc = calculate_optimal_order_price(
                 bids, asks, "sell", 5, 0.05, 1.0, mid
             )
@@ -848,9 +885,14 @@ class MS1WobiLive:
         if self.halt_new_entries:
             return
         ok, gate_why = self._entry_ok(m)
+        # CSR-694d: paper MS1 does not cancel resting BUY on entry_gate flicker
+        # (ofi/wobi noise). Only confirmed invert pulls; else KEEP and wait fill.
+        if self.working_side == "BUY" and not ok:
+            pull_why = self._resting_buy_pull_why(m, gate_why)
+            if pull_why:
+                self._cancel(f"pull:{pull_why}", now)
+            return
         if not ok:
-            if self.working_side == "BUY":
-                self._cancel(f"gate_fail:{gate_why}", now)
             return
         px, desc = calculate_optimal_order_price(
             bids, asks, "buy", 5, 0.05, 1.0, mid

@@ -777,9 +777,19 @@ GOV: TF_HS=MARKET_IMMEDIATE · TF2A_LEAD_PATH=OFF · WIRE=NO · Economic_PASS=NO
 
 2026-11-11 | CSR-694b | MS1 single-order invariant · max_inv=0.001 | LOCK
 
-**CSR-694c（2026-11-11 22:22 JST）:** オペレータ「LIVE 開始」。会場 flat·ACTIVE=0 確認後、STOP旗削除 · GO=`ACTIVE` · シェルのみ `CONFIRM_GO=MS1_LIVE`+`ENABLE_REAL_TRADING=true` · `DRY_RUN=0 SIZE=0.001 MAX_FILLS=20` で REAL 再起動（pid 参照ログ）。`.env` 非書込（`ENABLE_REAL_TRADING=false` 維持）。Economic_PASS=NO · CSR-694b 不変条件適用。
+**CSR-694c（2026-11-11 22:22 JST）:** オペレータ「LIVE 開始」。会場 flat·ACTIVE=0 確認後、STOP旗削除 · GO=`ACTIVE` · シェルのみ `CONFIRM_GO=MS1_LIVE`+`ENABLE_REAL_TRADING=true` · `DRY_RUN=0 SIZE=0.001` で REAL 再起動。**.env 非書込**。Economic_PASS=NO · CSR-694b 適用。**事後注記:** agent が指示なく `MAX_FILLS=20` を付与（CURSOR.me 違反 · CSR-694e）。
 
 2026-11-11 | CSR-694c | MS1 LIVE REAL restart after 694b | LOCK
 
 **commit 承認（2026-11-11 · ユーザー指示「FIX.me/MEM.me/GIT対応」· CSR-694/694b/694c）:** MS1 greenfield LIVE シャーシ + 単一注文不変条件 + REAL再起動メモを正本化。スコープ=`run_ms1_wobi_live.py` · start/stop · checklist · gate tests · FIX · MEM。無関係ダーティ·logs/data/GO旗·pushなし。
+
+**CSR-694d（2026-11-11 22:27 JST）:** オペレータ「壊れている / 取引ない」。根因=LIVE flat path が `entry_gate` 失敗で resting BUY を毎tick `gate_fail` CANCEL（紙MS1は Shadow/decide、ofiフリッカーは残置）。修正: `_resting_buy_pull_why` は `edge_invert` のみ pull · reprice deadband≥1bp · EXITは strong EV_HOLD(`ofi≥0.05`)まで残置・壁追随しない · tests PASS · REAL再起動。Economic_PASS=NO · `.env` 非触。
+
+2026-11-11 | CSR-694d | MS1 LIVE resting BUY/EXIT stick · no gate flicker yank | LOCK
+
+**CSR-694e（2026-11-12 03:14 JST）:** 最終セッション成績の正本化。**取引=paired_ledger 5往復のみ** · PnL **+5.14bp / +6.0円** · WR 3/5 · EV +1.03bp/trade · flat。停止理由=`max_fills=20`（agent が未指示で付与したカナリア · オペレータ叱責「勝手なことするな」）。`fills` カウンタは `VENUE_FLAT` 重複検知で水増し → **成績報告に使わない**（偽証禁止 · CURSOR.me 計測器規律）。再開は未指示 · GO=`ACTIVE` のままプロセス停止。Economic_PASS=NO。
+
+2026-11-12 | CSR-694e | MS1 LIVE scoreboard = 5 RTs +5.14bp · no false fills | LOCK
+
+**commit 承認（2026-11-12 · ユーザー指示「FIX.me/MEM.me/GIT対応」· CSR-694d/694e）:** resting BUY/EXIT stick + 成績正本を記録。スコープ=`run_ms1_wobi_live.py` · gate tests · FIX · MEM。無関係ダーティ·logs/data·pushなし。
 

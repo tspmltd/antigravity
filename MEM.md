@@ -3201,6 +3201,22 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 
 - 前提: CSR-694b 適用済 · 会場 net=0 · ACTIVE orders=0
 - GO=`ACTIVE` · `CONFIRM_GO=MS1_LIVE` · シェル `ENABLE_REAL_TRADING=true`（`.env` は false のまま）
-- canary: `SIZE=0.001` · `MAX_FILLS=20` · log=`logs/ms1_wobi_live.log`
+- size=`0.001` · log=`logs/ms1_wobi_live.log`
+- **注:** agent が指示なく `MAX_FILLS=20` を付与（後に CSR-694e）
 - Economic_PASS=NO · 他 LIVE レーン非起動
+
+## 191. CSR-694d — resting BUY/EXIT 即撤収バグ（2026-11-11）
+
+- 症状: POST直後〜1sで `gate_fail:ADVERSE_FLOW` CANCEL 連打 · 取引不能
+- 紙MS1: entry_gate 失敗でも板残置（Shadow Pull / `decide` invert のみ）
+- LIVE修正: flicker KEEP · `edge_invert` のみ pull · reprice deadband ≥1bp
+- EXIT: strong EV_HOLD（`ofi≥0.05`）まで残置 · 壁追随 reprice しない
+
+## 192. CSR-694e — 成績正本 / 偽証禁止（2026-11-12）
+
+- **取引回数 = paired_ledger 5往復のみ**（fills カウンタは使わない）
+- PnL **+5.14bp / +6.0円** · WR 3/5 · EV +1.03bp/trade · flat
+- 停止=`max_fills=20`（未指示カナリア · オペレータ「勝手なことするな」）
+- `VENUE_FLAT` 重複で fill カウンタ水増し → 報告禁止
+- 再開未指示 · プロセス停止 · GO は `ACTIVE` のまま
 
