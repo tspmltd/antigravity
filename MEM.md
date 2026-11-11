@@ -2385,8 +2385,6 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 
 
 
-
-
 ## 103. CSR-595 — Head of Agent 総括 (10/19): 新戦略凍結 · 5大ソース特徴量統合 · DEV × SEVA 意思決定基盤の確立（2026-10-19 20:35 JST）
 
 - **実力ランキング確定:**
@@ -3152,10 +3150,57 @@ Git CSR-552–555: antigravity `5896839` · gapcore `4dd1e02`
 - 圧縮: `quotes.jsonl` / `micro_veto_audit.jsonl`
 - GCS移管後削除: `market_feeder/raw` date&lt;2026-11-03（4 tar · size照合済）
 
-## 182. CSR-686 — MS1ログ再接続 & Disk整理（2026-11-10）
+## 183. CSR-687 — MM4 元設計復元（2026-11-11）
 
-- MS1 restart → PID `2588255` · log FD 正常
-- Disk `/` **80% → 64%**（free 26G→46G）
-- 圧縮: `quotes.jsonl` / `micro_veto_audit.jsonl`
-- GCS移管後削除: `market_feeder/raw` date&lt;2026-11-03（4 tar · size照合済）
+- WOBIMM4_HONEST: LIVE_PARITY STRICT を外し **BOARD_IMITATION**（CSR-665系）へ戻す
+- same-tick BOARD_TRADE book · instant harvest · CROSS ENTER 拒否
+- 目的: CSR-681後の約定ゼロから harvest baseline を復旧
+
+## 184. CSR-688 — MM5 誤修繕撤回（2026-11-11）
+
+- 誤: HONEST STRICT / `_maybe_fill` bypass で板模倣を殺し約定ゼロ
+- 正: fill=**BOARD_IMITATION(=MM4)** · 差分は Position-EV 出口のみ（CSR-672/673）
+- 維持: `INSTANT_HARVEST=False` · `REST_EXIT_ON_EV_HOLD` · AE `adverse_fast` HIT_TOUCH
+
+## 185. CSR-689 — VR1 約定過少の止血（2026-11-11）
+
+- 症状: Discord 0/0 · ARM後 expire/park で vr_fills≪arms · 朝方ARM枯渇
+- fill: LIVE_PARITY size-through → **BOARD_IMITATION**
+- 入口: burst/spread 緩和 · ARM/TTL延長 · offset 1tick · chase上限緩和
+- 維持: TIME_CUT 2.5s · chase-block（底値投げ防止）
+
+## 186. CSR-690 — VR1 使い物にならない判定への止血（2026-11-11）
+
+- 症状: CSR-689後も 1h 0/0 · ARM1→POST1→未約定TTL切れ
+- 入口: burst **0.20** · spread **2.0bp** · ARM_EXPIRE **5s** · join-bid(**0t**) · TTL **8s** · POST中 reprice
+- 維持: BOARD_IMITATION · TIME_CUT 2.5s · chase-block · WIRE=NO · Economic_PASS=NO
+
+## 187. CSR-691 — MS2 EV_GONE = MS1 Maker待機（2026-11-11）
+
+- 主因: MS1 Maker vs MS2 Soft@bid/MARKET_SIM の EXIT乖離（〜−612bp級）
+- MS2: `EV_GONE` を `_FORCE_EXIT_TAGS` から除外 · `calculate_optimal_order_price` · `ev_hold` cancel
+- ABS1: EV_GONE は CSR-682b 済み · 直近は ABSENT_DWELL Soft が PnL支配
+- TF1A HS: immediate MARKET_SIM · net≈trigger + bid乖離(~1bp) + fee1.25
+
+## 188. CSR-694 — MS1 LIVE greenfield 配線（2026-11-11）
+
+- **新規:** `antigravity/quant_pipeline/run_ms1_wobi_live.py`（WOBI3 LIVE 非継承）
+- **起動/停止:** `scripts/start-ms1-wobi-live.sh` / `stop-ms1-wobi-live.sh`
+- **GO:** `data/GO_MS1_WOBI_LIVE.flag`（REAL は `ACTIVE` + シェル確認トークン）
+- **政策:** BUY-only · 0.001 · EV_HOLD / EV_GONE Maker (`calculate_optimal_order_price`)
+- **正本:** `docs/ops/ms1_live_prep_checklist.md` · tests `test_ms1_wobi_live_gates.py`
+- 既定 DRY_RUN=1 · Economic_PASS=NO · `.env` 非触
+
+## 189. CSR-694b — MS1 単一注文不変条件（2026-11-11）
+
+- 根因: 同サイド指値の値段更新で旧注文を残したまま新規POST → 0.004
+- 修正: cancel→wait · orphan scrub · BUYは flat のみ · MAX_INV=0.001 HALT
+- tests 10 PASS · 当時 GO=STOPPED
+
+## 190. CSR-694c — MS1 LIVE REAL 再起動（2026-11-11）
+
+- 前提: CSR-694b 適用済 · 会場 net=0 · ACTIVE orders=0
+- GO=`ACTIVE` · `CONFIRM_GO=MS1_LIVE` · シェル `ENABLE_REAL_TRADING=true`（`.env` は false のまま）
+- canary: `SIZE=0.001` · `MAX_FILLS=20` · log=`logs/ms1_wobi_live.log`
+- Economic_PASS=NO · 他 LIVE レーン非起動
 

@@ -749,3 +749,37 @@ GOV: TF_HS=MARKET_IMMEDIATE · TF2A_LEAD_PATH=OFF · WIRE=NO · Economic_PASS=NO
 
 **commit 承認（2026-11-11 · ユーザー指示「GIT処理実施」· CSR-685/686）:** 現行世代比較表 + MS1ログ再接続/Disk整理メモを正本化。スコープ=FIX·MEM·`docs/ops/dryrun_core_strategy_comparison_current.md`。無関係ダーティ·logs/data·pushなし。
 
+**CSR-687（2026-11-11 07:46 JST）:** オペレータ「まずMM4は元の設計に戻す」。WOBIMM4_HONEST を CSR-681 LIVE_PARITY 以前へ復元 — `FILL_MODEL=BOARD_IMITATION` · same-tick BOARD_TRADE book · ENTER BOOK_CROSS 拒否 · INSTANT_HARVEST=True · AE/STRICT/MARKET_SIM path 撤去。MM5/他レーンは非触。tests 更新 · 再起動。WIRE=NO · Economic_PASS=NO。
+
+2026-11-11 | CSR-687 | MM4 restore BOARD_IMITATION pre-LIVE_PARITY | LOCK
+
+**CSR-688（2026-11-11 07:57 JST）:** オペレータ「MM5も修繕方法がおかしい」。誤修繕=`FILL_MODEL=HONEST+STRICT` と `_maybe_fill` で MM4 BOARD_TRADE をバイパスし約定を窒息させていた点を撤去。MM5 は **CSR-672/673 Position-EV**（no instant harvest · REST_EXIT_ON_EV_HOLD · AE HIT_TOUCH）を維持し、fill は MM4 と同じ **BOARD_IMITATION** に揃えて A/B を出口差分のみに戻す。再起動。WIRE=NO · Economic_PASS=NO · LIVE非触。
+
+2026-11-11 | CSR-688 | MM5 drop wrong STRICT fill · keep Position-EV | LOCK
+
+**CSR-689（2026-11-11 08:05 JST）:** VR1 取引過少。漏斗=ARM多・expire/park窒息（arms25 / expire21 / parked15 / vr_fills4）· 直近4h ARMゼロ · Discord 1h 0/0。対策: burst 0.50→**0.30** · spread 3.0→**2.5** · ARM_EXPIRE 2→**3.5s** · QUOTE_TTL 1.5→**3.0s** · offset 2→**1t** · chase max 0.12→**0.20** · cooldown 8→**5s** · **LIVE_PARITY size-through 撤去→BOARD_IMITATION fill**（TIME_CUT 2.5s / chase-block は維持）。再起動。WIRE=NO · Economic_PASS=NO。
+
+2026-11-11 | CSR-689 | VR1 unstarve arm→fill · board-imitation | LOCK
+
+**CSR-690（2026-11-11 09:05 JST）:** オペレータ「この状態では使い物にならない」。CSR-689後も 1h 0/0 · 漏斗=ARM1/POST1/FILL0/TTL expire。対策: burst 0.30→**0.20** · spread 2.5→**2.0** · ARM_EXPIRE 3.5→**5.0s** · QUOTE_TTL 3→**8.0s** · offset 1→**0 (join-bid)** · cooldown 5→**4s** · POST中 **bid追随 reprice**。維持: BOARD_IMITATION · TIME_CUT 2.5s · chase-block。再起動。WIRE=NO · Economic_PASS=NO。
+
+2026-11-11 | CSR-690 | VR1 usable join-bid+TTL+reprice | LOCK
+
+**CSR-691（2026-11-11 09:15 JST）:** オペレータ「MS2/ABS1 EXIT正常化」。MS1(+385) vs MS2(−226) の −612bp乖離の主因=MS2 `EV_GONE→Soft@bid/MARKET_SIM`。**MS2 EV_GONE を MS1 同一 `calculate_optimal_order_price` Maker待機へ戻す**（`_FORCE_EXIT_TAGS`=DYN_STOPのみ · EV復帰時 `ev_hold` cancel）。ABS1 EV_GONE は CSR-682b 済みで変更なし（直近EXITはABSENT_DWELL Softが支配）。tests PASS · MS2再起動。WIRE=NO · Economic_PASS=NO。併記: TF1A HARD_STOP 急落窓のスリッページ内訳は trigger mid→bid fill + fee 1.25bp（CSR-683 immediate は遅延ではなく建値差）。
+
+2026-11-11 | CSR-691 | MS2 EV_GONE = MS1 maker wait | LOCK
+
+**CSR-694（2026-11-11 21:20 JST）:** MS1 実弾 LIVE シャーシを **greenfield** で新設（WOBI3 LIVE / paper DryRun を継承しない）。`run_ms1_wobi_live.py` · start/stop · `GO_MS1_WOBI_LIVE.flag`=`status=PREP` · checklist · gate tests。政策=BUY-only · lot≤0.001 · EV_HOLD/EV_GONE wall-anchor Maker · LIMIT。既定 `DRY_RUN=1`。REAL は `ACTIVE`+`CONFIRM_GO=MS1_LIVE`+operator `ENABLE_REAL_TRADING=true` のみ。Economic_PASS=NO · REAL未起動 · `.env` 非書込。
+
+2026-11-11 | CSR-694 | MS1 LIVE greenfield chassis · GO=PREP · DRY default | LOCK
+
+**CSR-694b（2026-11-11 22:03 JST）:** MS1 LIVE 0.004積み上がり根因修正。同サイド再POSTで旧OIDを残す → 複数約定。修正: `_post` は working があれば **cancelして当tickはPOSTしない** · REALは ACTIVE孤児を cancel_all · BUYは会場フラット必須 · `MAX_INV_BTC=0.001` 超過で HALT · cancel_pending 解除は会場ACTIVE=0後。tests 10 PASS。GO=STOPPED · REAL未再起動。
+
+2026-11-11 | CSR-694b | MS1 single-order invariant · max_inv=0.001 | LOCK
+
+**CSR-694c（2026-11-11 22:22 JST）:** オペレータ「LIVE 開始」。会場 flat·ACTIVE=0 確認後、STOP旗削除 · GO=`ACTIVE` · シェルのみ `CONFIRM_GO=MS1_LIVE`+`ENABLE_REAL_TRADING=true` · `DRY_RUN=0 SIZE=0.001 MAX_FILLS=20` で REAL 再起動（pid 参照ログ）。`.env` 非書込（`ENABLE_REAL_TRADING=false` 維持）。Economic_PASS=NO · CSR-694b 不変条件適用。
+
+2026-11-11 | CSR-694c | MS1 LIVE REAL restart after 694b | LOCK
+
+**commit 承認（2026-11-11 · ユーザー指示「FIX.me/MEM.me/GIT対応」· CSR-694/694b/694c）:** MS1 greenfield LIVE シャーシ + 単一注文不変条件 + REAL再起動メモを正本化。スコープ=`run_ms1_wobi_live.py` · start/stop · checklist · gate tests · FIX · MEM。無関係ダーティ·logs/data/GO旗·pushなし。
+
